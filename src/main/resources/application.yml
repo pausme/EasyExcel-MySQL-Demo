@@ -1,0 +1,27 @@
+server:
+  port: 8080
+
+spring:
+  datasource:
+    url: jdbc:mysql://106.14.81.111:13306/demo?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&rewriteBatchedStatements=true&createDatabaseIfNotExist=true
+    username: root
+    password: ${MYSQL_PASSWORD}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  servlet:
+    multipart:
+      max-file-size: 100MB
+      max-request-size: 100MB
+
+mybatis:
+  mapper-locations: classpath:mapper/*.xml
+  type-aliases-package: com.huang.demo.excel.model
+  configuration:
+    map-underscore-to-camel-case: true
+
+app:
+  excel:
+    export-page-size: 500
+    sheet-row-limit: 5000
+    import-batch-size: 2000
+    insert-batch-size: 2000
+    demo-seed-count: 12000

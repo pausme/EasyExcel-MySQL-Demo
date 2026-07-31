@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.huang.demo.excel.repository.StudentMapper">
+
+    <resultMap id="StudentExcelRowMap" type="com.huang.demo.excel.model.StudentExcelRow">
+        <result property="studentNo" column="student_no"/>
+        <result property="name" column="name"/>
+        <result property="age" column="age"/>
+        <result property="gender" column="gender"/>
+        <result property="className" column="class_name"/>
+        <result property="email" column="email"/>
+        <result property="birthday" column="birthday"/>
+    </resultMap>
+
+    <update id="createTableIfAbsent">
+        CREATE TABLE IF NOT EXISTS student_record (
+            id BIGINT AUTO_INCREMENT PRIMARY KEY,
+            student_no VARCHAR(32) NOT NULL,
+            name VARCHAR(64) NOT NULL,
+            age INT,
+            gender VARCHAR(16),
+            class_name VARCHAR(64),
+            email VARCHAR(128),
+            birthday VARCHAR(32)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    </update>
+
+    <select id="count" resultType="int">
+        SELECT COUNT(*) FROM student_record
+    </select>
+
+    <select id="listPage" resultMap="StudentExcelRowMap">
+        SELECT student_no, name, age, gender, class_name, email, birthday
+        FROM student_record
+        ORDER BY id
+        LIMIT #{limit} OFFSET #{offset}
+    </select>
+
+    <insert id="saveBatch">
+        INSERT INTO student_record (student_no, name, age, gender, class_name, email, birthday)
+        VALUES
+        <foreach collection="rows" item="row" separator=",">
+            (#{row.studentNo}, #{row.name}, #{row.age}, #{row.gender}, #{row.className}, #{row.email}, #{row.birthday})
+        </foreach>
+    </insert>
+</mapper>
