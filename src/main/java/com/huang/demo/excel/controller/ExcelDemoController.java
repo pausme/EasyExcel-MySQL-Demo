@@ -67,11 +67,7 @@ public class ExcelDemoController {
     @GetMapping("/export")
     public void export(HttpServletResponse response) throws IOException {
         long start = System.currentTimeMillis();
-        response.setContentType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-        response.setCharacterEncoding(StandardCharsets.UTF_8.name());
-
-        String fileName = URLEncoder.encode("student-demo", StandardCharsets.UTF_8.name()).replace("+", "%20");
-        response.setHeader("Content-disposition", "attachment;filename*=UTF-8''" + fileName + ".xlsx");
+        setExcelDownloadHeaders(response, "student-demo");
 
         int total = studentService.count();
         int sheetRowLimit = properties.getSheetRowLimit();
@@ -101,6 +97,15 @@ public class ExcelDemoController {
                 total, exported, sheetCount, System.currentTimeMillis() - start);
     }
 
+    @ApiOperation("下载学生导入模板")
+    @GetMapping("/template")
+    public void downloadImportTemplate(HttpServletResponse response) throws IOException {
+        long start = System.currentTimeMillis();
+        setExcelDownloadHeaders(response, "student-import-template");
+        studentService.writeImportTemplate(response.getOutputStream());
+        log.info("download import template finished, elapsedMs={}", System.currentTimeMillis() - start);
+    }
+
     @ApiOperation("导入学生数据 Excel")
     @PostMapping(value = "/import", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public Map<String, Object> importExcel(@RequestParam("file") MultipartFile file) throws IOException {
@@ -117,5 +122,12 @@ public class ExcelDemoController {
         log.info("import api finished, fileName={}, imported={}, batchCount={}, elapsedMs={}",
                 file.getOriginalFilename(), listener.getImportedCount(), listener.getBatchCount(), elapsed);
         return result;
+    }
+
+    private void setExcelDownloadHeaders(HttpServletResponse response, String fileName) throws IOException {
+        response.setContentType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+        response.setCharacterEncoding(StandardCharsets.UTF_8.name());
+        String encodedFileName = URLEncoder.encode(fileName, StandardCharsets.UTF_8.name()).replace("+", "%20");
+        response.setHeader("Content-disposition", "attachment;filename*=UTF-8''" + encodedFileName + ".xlsx");
     }
 }
