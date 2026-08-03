@@ -12,6 +12,12 @@ public interface StudentMapper {
 
     void createTableIfAbsent();
 
+    int countStudentNoUniqueIndex();
+
+    int countDuplicateStudentNo();
+
+    void createStudentNoUniqueIndex();
+
     int count();
 
     List<StudentExcelRow> listPage(@Param("offset") int offset, @Param("limit") int limit);

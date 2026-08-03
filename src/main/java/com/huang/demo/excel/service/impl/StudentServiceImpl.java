@@ -37,6 +37,13 @@ public class StudentServiceImpl implements StudentService {
     public void init() {
         long start = System.currentTimeMillis();
         studentMapper.createTableIfAbsent();
+        if (studentMapper.countStudentNoUniqueIndex() == 0) {
+            int duplicateCount = studentMapper.countDuplicateStudentNo();
+            if (duplicateCount > 0) {
+                throw new IllegalStateException("student_no 存在重复数据，请先清理后再创建唯一索引");
+            }
+            studentMapper.createStudentNoUniqueIndex();
+        }
         if (count() == 0) {
             seedDemoData(properties.getDemoSeedCount());
         }

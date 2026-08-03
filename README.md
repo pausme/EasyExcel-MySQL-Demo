@@ -72,6 +72,11 @@ POST /api/excel/import                  multipart file 字段名: file
 POST /api/excel/seed/{count}
 ```
 
-导出任务会在后台使用 `id` 游标分页，导出开始时记录 `MAX(id)` 作为边界，
-每个 Sheet 最多写入 50000 条数据，文件生成到 `app.excel.export-temp-dir` 配置的本地目录。
+导出任务会在后台使用 `id` 游标分页，导出开始时记录 `MAX(id)` 作为边界。
+为了保证导出的 Excel 可以直接作为导入文件，导出只生成单个 Sheet；
+单 Sheet 最多写入 1048575 条数据，超过时导出任务会失败并提示改用 CSV 或缩小导出范围。
+文件生成到 `app.excel.export-temp-dir` 配置的本地目录。
 任务状态 Redis key 前缀为 `excel:student:export:`，过期时间与 `app.excel.export-file-retention-hours` 一致。
+
+导入使用 `student_no` 作为唯一业务键，重复导入同一个学生时会更新已有数据。
+如果旧表中已经存在重复 `student_no`，需要先清理重复数据后再启动应用创建唯一索引。

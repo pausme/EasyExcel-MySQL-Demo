@@ -39,7 +39,9 @@ import java.util.concurrent.Executor;
 public class ExportTaskServiceImpl implements ExportTaskService {
 
     private static final Logger log = LoggerFactory.getLogger(ExportTaskServiceImpl.class);
-    private static final int MAX_SHEET_DATA_ROWS = 50000;
+    private static final int MIN_EXPORT_PAGE_SIZE = 1000;
+    private static final int MAX_EXPORT_PAGE_SIZE = 10000;
+    private static final int MAX_SHEET_DATA_ROWS = 1048575;
     private static final String EXPORT_TASK_KEY_PREFIX = "excel:student:export:";
 
     private final StudentMapper studentMapper;
@@ -85,7 +87,7 @@ public class ExportTaskServiceImpl implements ExportTaskService {
                 .filePath(filePath.toString())
                 .createdAt(LocalDateTime.now())
                 .build();
-        saveTask(task);
+        saveTaskRequired(task);
 
         try {
             exportTaskExecutor.execute(() -> executeExport(task));
@@ -93,7 +95,7 @@ public class ExportTaskServiceImpl implements ExportTaskService {
             task.setStatus(ExportTaskStatus.FAILED);
             task.setErrorMessage("导出任务提交失败");
             task.setFinishedAt(LocalDateTime.now());
-            saveTask(task);
+            saveTaskQuietly(task);
             log.error("submit export task failed, taskId={}", taskId, ex);
         }
         return task;
@@ -131,42 +133,42 @@ public class ExportTaskServiceImpl implements ExportTaskService {
     private void executeExport(ExportTask task) {
         long start = System.currentTimeMillis();
         task.setStatus(ExportTaskStatus.RUNNING);
-        saveTask(task);
+        saveTaskQuietly(task);
         try {
             Path filePath = Paths.get(task.getFilePath());
             Path temporaryFilePath = filePath.resolveSibling(filePath.getFileName() + ".part");
             Long maxId = task.getSnapshotMaxId();
             task.setTotal(maxId == null ? 0 : studentMapper.countByMaxId(maxId));
-            saveTask(task);
+            if (task.getTotal() > getSheetRowLimit()) {
+                throw new IllegalStateException("导出数据超过 Excel 单 Sheet 最大行数，请缩小导出范围或改用 CSV");
+            }
+            saveTaskQuietly(task);
             Files.createDirectories(filePath.getParent());
             Files.deleteIfExists(temporaryFilePath);
             writeExcel(task, temporaryFilePath);
             Files.move(temporaryFilePath, filePath, StandardCopyOption.REPLACE_EXISTING);
             task.setStatus(ExportTaskStatus.SUCCESS);
             task.setFinishedAt(LocalDateTime.now());
-            saveTask(task);
+            saveTaskQuietly(task);
             log.info("export task finished, taskId={}, total={}, exported={}, sheetCount={}, elapsedMs={}",
                     task.getTaskId(), task.getTotal(), task.getExported(), task.getSheetCount(),
                     System.currentTimeMillis() - start);
         } catch (Exception ex) {
             task.setStatus(ExportTaskStatus.FAILED);
-            task.setErrorMessage("导出失败，请查看服务端日志");
+            task.setErrorMessage(ex.getMessage() == null ? "导出失败，请查看服务端日志" : ex.getMessage());
             task.setFinishedAt(LocalDateTime.now());
             deletePartialFile(task);
-            saveTask(task);
+            saveTaskQuietly(task);
             log.error("export task failed, taskId={}, elapsedMs={}",
                     task.getTaskId(), System.currentTimeMillis() - start, ex);
         }
     }
 
     private void writeExcel(ExportTask task, Path filePath) {
-        int pageSize = Math.max(1, properties.getExportPageSize());
-        int sheetRowLimit = getSheetRowLimit();
+        int pageSize = getExportPageSize();
         Long maxId = task.getSnapshotMaxId();
         long lastId = 0L;
-        int sheetRows = 0;
-        int sheetIndex = 0;
-        WriteSheet writeSheet = null;
+        WriteSheet writeSheet = EasyExcel.writerSheet(0, "学生数据").build();
 
         try (ExcelWriter writer = EasyExcel.write(filePath.toFile(), StudentExcelRow.class).build()) {
             if (maxId != null) {
@@ -177,25 +179,11 @@ public class ExportTaskServiceImpl implements ExportTaskService {
                         break;
                     }
 
-                    int recordIndex = 0;
-                    while (recordIndex < records.size()) {
-                        if (writeSheet == null || sheetRows >= sheetRowLimit) {
-                            sheetIndex++;
-                            sheetRows = 0;
-                            writeSheet = EasyExcel.writerSheet(sheetIndex - 1, "学生数据-" + sheetIndex).build();
-                            task.setSheetCount(sheetIndex);
-                            saveTask(task);
-                        }
-
-                        int capacity = sheetRowLimit - sheetRows;
-                        int endIndex = Math.min(records.size(), recordIndex + capacity);
-                        List<StudentExcelRow> rows = toExcelRows(records.subList(recordIndex, endIndex));
-                        writer.write(rows, writeSheet);
-                        sheetRows += rows.size();
-                        task.setExported(task.getExported() + rows.size());
-                        saveTask(task);
-                        recordIndex = endIndex;
-                    }
+                    List<StudentExcelRow> rows = toExcelRows(records);
+                    writer.write(rows, writeSheet);
+                    task.setSheetCount(1);
+                    task.setExported(task.getExported() + rows.size());
+                    saveTaskQuietly(task);
 
                     lastId = records.get(records.size() - 1).getId();
                     log.debug("export cursor page finished, taskId={}, lastId={}, pageRows={}, exported={}",
@@ -203,23 +191,37 @@ public class ExportTaskServiceImpl implements ExportTaskService {
                 }
             }
 
-            if (sheetIndex == 0) {
-                WriteSheet emptySheet = EasyExcel.writerSheet(0, "学生数据-1").build();
-                writer.write(Collections.emptyList(), emptySheet);
+            if (task.getExported() == 0) {
+                writer.write(Collections.emptyList(), writeSheet);
                 task.setSheetCount(1);
-                saveTask(task);
+                saveTaskQuietly(task);
             }
         }
     }
 
-    private void saveTask(ExportTask task) {
+    private void saveTaskRequired(ExportTask task) {
+        if (!saveTask(task)) {
+            throw new IllegalStateException("导出任务状态写入 Redis 失败");
+        }
+    }
+
+    private void saveTaskQuietly(ExportTask task) {
+        saveTask(task);
+    }
+
+    private boolean saveTask(ExportTask task) {
         try {
             stringRedisTemplate.opsForValue().set(
                     buildTaskKey(task.getTaskId()),
                     objectMapper.writeValueAsString(task),
                     Duration.ofHours(Math.max(1, properties.getExportFileRetentionHours())));
+            return true;
         } catch (JsonProcessingException ex) {
-            throw new IllegalStateException("导出任务序列化失败", ex);
+            log.warn("serialize export task failed, taskId={}", task.getTaskId(), ex);
+            return false;
+        } catch (RuntimeException ex) {
+            log.warn("save export task to redis failed, taskId={}", task.getTaskId(), ex);
+            return false;
         }
     }
 
@@ -245,6 +247,14 @@ public class ExportTaskServiceImpl implements ExportTaskService {
 
     private int getSheetRowLimit() {
         return Math.min(MAX_SHEET_DATA_ROWS, Math.max(1, properties.getSheetRowLimit()));
+    }
+
+    private int getExportPageSize() {
+        int pageSize = properties.getExportPageSize();
+        if (pageSize < MIN_EXPORT_PAGE_SIZE) {
+            return MIN_EXPORT_PAGE_SIZE;
+        }
+        return Math.min(pageSize, MAX_EXPORT_PAGE_SIZE);
     }
 
     private Path getExportDirectory() {

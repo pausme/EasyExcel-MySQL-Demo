@@ -128,7 +128,7 @@ public class ExcelDemoController {
     public Map<String, Object> importExcel(@RequestParam("file") MultipartFile file) throws IOException {
         long start = System.currentTimeMillis();
         StudentImportListener listener = new StudentImportListener(studentService, properties.getImportBatchSize());
-        EasyExcel.read(file.getInputStream(), StudentExcelRow.class, listener).sheet().doRead();
+        EasyExcel.read(file.getInputStream(), StudentExcelRow.class, listener).doReadAll();
         long elapsed = System.currentTimeMillis() - start;
 
         Map<String, Object> result = new LinkedHashMap<String, Object>();

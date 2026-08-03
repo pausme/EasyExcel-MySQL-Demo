@@ -25,7 +25,7 @@ mybatis:
 app:
   excel:
     export-page-size: 5000
-    sheet-row-limit: 50000
+    sheet-row-limit: 1048575
     import-batch-size: 2000
     insert-batch-size: 2000
     demo-seed-count: 12000
