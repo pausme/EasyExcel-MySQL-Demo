@@ -24,4 +24,5 @@ public class ExcelDemoProperties {
     private String exportTempDir;
 
     private int exportFileRetentionHours = 24;
+
 }

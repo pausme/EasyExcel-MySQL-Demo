@@ -38,7 +38,17 @@ export REDIS_HOST='your_redis_host'
 export REDIS_PORT='your_redis_port'
 ```
 
-如果 Redis 设置了密码，可在 `application.yml` 的 `spring.redis` 下补充 `password` 配置。
+导出文件上传到 MinIO，启动前还需要设置：
+
+```bash
+export MINIO_ENDPOINT='http://106.14.81.111:7000'
+export MINIO_ACCESS_KEY='your_minio_access_key'
+export MINIO_SECRET_KEY='your_minio_secret_key'
+export MINIO_BUCKET_NAME='public'
+```
+
+下载接口会重定向到有效期为 30 分钟的 MinIO 签名地址。即使当前 Bucket 名称为 `public`，
+也建议在生产环境中将 Bucket 设为私有。
 
 ## 数据库脚本
 
@@ -75,7 +85,9 @@ POST /api/excel/seed/{count}
 导出任务会在后台使用 `id` 游标分页，导出开始时记录 `MAX(id)` 作为边界。
 为了保证导出的 Excel 可以直接作为导入文件，导出只生成单个 Sheet；
 单 Sheet 最多写入 1048575 条数据，超过时导出任务会失败并提示改用 CSV 或缩小导出范围。
-文件生成到 `app.excel.export-temp-dir` 配置的本地目录。
+文件会先生成到 `app.excel.export-temp-dir` 配置的本地临时目录，再上传到 MinIO。
+上传成功后会删除本地临时文件，对象路径前缀由 `MINIO_EXPORT_OBJECT_PREFIX` 配置。
+请在 MinIO 为该前缀配置生命周期规则，自动清理超过保留期的导出文件。
 任务状态 Redis key 前缀为 `excel:student:export:`，过期时间与 `app.excel.export-file-retention-hours` 一致。
 
 导入使用 `student_no` 作为唯一业务键，重复导入同一个学生时会更新已有数据。

@@ -6,12 +6,14 @@ import com.alibaba.excel.write.metadata.WriteSheet;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huang.demo.excel.config.ExcelDemoProperties;
+import com.huang.demo.excel.config.MinioProperties;
 import com.huang.demo.excel.domain.model.ExportTask;
 import com.huang.demo.excel.domain.model.ExportTaskStatus;
 import com.huang.demo.excel.domain.model.StudentExportRecord;
 import com.huang.demo.excel.model.StudentExcelRow;
 import com.huang.demo.excel.repository.StudentMapper;
 import com.huang.demo.excel.service.ExportTaskService;
+import com.huang.demo.excel.service.MinioObjectStorageService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -25,7 +27,6 @@ import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.nio.file.StandardCopyOption;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -49,17 +50,23 @@ public class ExportTaskServiceImpl implements ExportTaskService {
     private final Executor exportTaskExecutor;
     private final StringRedisTemplate stringRedisTemplate;
     private final ObjectMapper objectMapper;
+    private final MinioObjectStorageService minioObjectStorageService;
+    private final MinioProperties minioProperties;
 
     public ExportTaskServiceImpl(StudentMapper studentMapper,
                                  ExcelDemoProperties properties,
                                  @Qualifier("exportTaskExecutor") Executor exportTaskExecutor,
                                  StringRedisTemplate stringRedisTemplate,
-                                 ObjectMapper objectMapper) {
+                                 ObjectMapper objectMapper,
+                                 MinioObjectStorageService minioObjectStorageService,
+                                 MinioProperties minioProperties) {
         this.studentMapper = studentMapper;
         this.properties = properties;
         this.exportTaskExecutor = exportTaskExecutor;
         this.stringRedisTemplate = stringRedisTemplate;
         this.objectMapper = objectMapper;
+        this.minioObjectStorageService = minioObjectStorageService;
+        this.minioProperties = minioProperties;
     }
 
     @PostConstruct
@@ -77,14 +84,12 @@ public class ExportTaskServiceImpl implements ExportTaskService {
         String taskId = UUID.randomUUID().toString().replace("-", "");
         Long maxId = studentMapper.maxId();
         String fileName = "student-demo-" + taskId + ".xlsx";
-        Path filePath = getExportDirectory().resolve(fileName);
 
         ExportTask task = ExportTask.builder()
                 .taskId(taskId)
                 .status(ExportTaskStatus.QUEUED)
                 .snapshotMaxId(maxId)
                 .fileName(fileName)
-                .filePath(filePath.toString())
                 .createdAt(LocalDateTime.now())
                 .build();
         saveTaskRequired(task);
@@ -116,13 +121,11 @@ public class ExportTaskServiceImpl implements ExportTaskService {
     }
 
     @Override
-    public Optional<Path> findCompletedFile(String taskId) {
-        Optional<ExportTask> optionalTask = findTask(taskId);
-        if (!optionalTask.isPresent() || optionalTask.get().getStatus() != ExportTaskStatus.SUCCESS) {
+    public Optional<String> createDownloadUrl(ExportTask task) {
+        if (task.getStatus() != ExportTaskStatus.SUCCESS || task.getObjectKey() == null) {
             return Optional.empty();
         }
-        Path path = Paths.get(optionalTask.get().getFilePath());
-        return Files.isRegularFile(path) ? Optional.of(path) : Optional.empty();
+        return Optional.of(minioObjectStorageService.createDownloadUrl(task.getObjectKey(), task.getFileName()));
     }
 
     @Scheduled(fixedDelay = 3600000L, initialDelay = 3600000L)
@@ -135,18 +138,19 @@ public class ExportTaskServiceImpl implements ExportTaskService {
         task.setStatus(ExportTaskStatus.RUNNING);
         saveTaskQuietly(task);
         try {
-            Path filePath = Paths.get(task.getFilePath());
-            Path temporaryFilePath = filePath.resolveSibling(filePath.getFileName() + ".part");
+            Path temporaryFilePath = getTemporaryFilePath(task);
             Long maxId = task.getSnapshotMaxId();
             task.setTotal(maxId == null ? 0 : studentMapper.countByMaxId(maxId));
             if (task.getTotal() > getSheetRowLimit()) {
                 throw new IllegalStateException("导出数据超过 Excel 单 Sheet 最大行数，请缩小导出范围或改用 CSV");
             }
             saveTaskQuietly(task);
-            Files.createDirectories(filePath.getParent());
+            Files.createDirectories(temporaryFilePath.getParent());
             Files.deleteIfExists(temporaryFilePath);
             writeExcel(task, temporaryFilePath);
-            Files.move(temporaryFilePath, filePath, StandardCopyOption.REPLACE_EXISTING);
+            String objectKey = buildExportObjectKey(task);
+            minioObjectStorageService.uploadExcel(temporaryFilePath, objectKey);
+            task.setObjectKey(objectKey);
             task.setStatus(ExportTaskStatus.SUCCESS);
             task.setFinishedAt(LocalDateTime.now());
             saveTaskQuietly(task);
@@ -161,6 +165,8 @@ public class ExportTaskServiceImpl implements ExportTaskService {
             saveTaskQuietly(task);
             log.error("export task failed, taskId={}, elapsedMs={}",
                     task.getTaskId(), System.currentTimeMillis() - start, ex);
+        } finally {
+            deleteTemporaryFileQuietly(task);
         }
     }
 
@@ -265,6 +271,19 @@ public class ExportTaskServiceImpl implements ExportTaskService {
         return Paths.get(configuredPath);
     }
 
+    private Path getTemporaryFilePath(ExportTask task) {
+        return getExportDirectory().resolve(task.getFileName() + ".part");
+    }
+
+    private String buildExportObjectKey(ExportTask task) {
+        String prefix = minioProperties.getExportObjectPrefix();
+        if (prefix == null || prefix.trim().isEmpty()) {
+            prefix = "excel/student";
+        }
+        prefix = prefix.replaceAll("^/+", "").replaceAll("/+$", "");
+        return prefix + "/" + task.getFileName();
+    }
+
     private void cleanupExpiredFiles() {
         Path exportDirectory = getExportDirectory();
         if (!Files.isDirectory(exportDirectory)) {
@@ -279,7 +298,7 @@ public class ExportTaskServiceImpl implements ExportTaskService {
                     continue;
                 }
                 String fileName = path.getFileName().toString();
-                if (!fileName.endsWith(".xlsx") && !fileName.endsWith(".part")) {
+                if (!fileName.endsWith(".part")) {
                     continue;
                 }
                 if (Files.getLastModifiedTime(path).toMillis() < expireBefore) {
@@ -294,12 +313,17 @@ public class ExportTaskServiceImpl implements ExportTaskService {
 
     private void deletePartialFile(ExportTask task) {
         try {
-            Path filePath = Paths.get(task.getFilePath());
-            Files.deleteIfExists(filePath);
-            Files.deleteIfExists(filePath.resolveSibling(filePath.getFileName() + ".part"));
+            Files.deleteIfExists(getTemporaryFilePath(task));
         } catch (IOException cleanupException) {
-            log.warn("delete partial export file failed, taskId={}, filePath={}",
-                    task.getTaskId(), task.getFilePath(), cleanupException);
+            log.warn("delete partial export file failed, taskId={}", task.getTaskId(), cleanupException);
+        }
+    }
+
+    private void deleteTemporaryFileQuietly(ExportTask task) {
+        try {
+            Files.deleteIfExists(getTemporaryFilePath(task));
+        } catch (IOException ex) {
+            log.warn("delete export temporary file failed, taskId={}", task.getTaskId(), ex);
         }
     }
 }

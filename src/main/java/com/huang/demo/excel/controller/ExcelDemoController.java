@@ -14,8 +14,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
-import org.springframework.core.io.FileSystemResource;
-import org.springframework.core.io.Resource;
+import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -27,10 +26,9 @@ import org.springframework.web.multipart.MultipartFile;
 
 import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
+import java.net.URI;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -91,7 +89,7 @@ public class ExcelDemoController {
 
     @ApiOperation("下载已完成的学生数据导出文件")
     @GetMapping("/export/{taskId}/download")
-    public ResponseEntity<Resource> downloadExport(@PathVariable("taskId") String taskId) throws IOException {
+    public ResponseEntity<Void> downloadExport(@PathVariable("taskId") String taskId) {
         ExportTask task = exportTaskService.findTask(taskId)
                 .orElseThrow(() -> new ResponseStatusException(
                         org.springframework.http.HttpStatus.NOT_FOUND, "导出任务不存在"));
@@ -100,18 +98,12 @@ public class ExcelDemoController {
                     org.springframework.http.HttpStatus.CONFLICT, "导出任务尚未完成");
         }
 
-        Path filePath = exportTaskService.findCompletedFile(taskId)
+        String downloadUrl = exportTaskService.createDownloadUrl(task)
                 .orElseThrow(() -> new ResponseStatusException(
                         org.springframework.http.HttpStatus.NOT_FOUND, "导出文件不存在"));
-        Resource resource = new FileSystemResource(filePath);
-        String fileName = URLEncoder.encode(task.getFileName(), StandardCharsets.UTF_8.name())
-                .replace("+", "%20");
-        return ResponseEntity.ok()
-                .contentType(MediaType.parseMediaType(
-                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
-                .contentLength(Files.size(filePath))
-                .header("Content-disposition", "attachment;filename*=UTF-8''" + fileName)
-                .body(resource);
+        return ResponseEntity.status(HttpStatus.FOUND)
+                .location(URI.create(downloadUrl))
+                .build();
     }
 
     @ApiOperation("下载学生导入模板")

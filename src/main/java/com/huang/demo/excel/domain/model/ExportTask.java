@@ -27,7 +27,7 @@ public class ExportTask {
 
     private String fileName;
 
-    private String filePath;
+    private String objectKey;
 
     private volatile String errorMessage;
 
