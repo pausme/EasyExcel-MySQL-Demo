@@ -70,31 +70,23 @@ public class ExcelDemoController {
         setExcelDownloadHeaders(response, "student-demo");
 
         int total = studentService.count();
-        int sheetRowLimit = properties.getSheetRowLimit();
         int exportPageSize = properties.getExportPageSize();
-        int sheetCount = Math.max(1, (total + sheetRowLimit - 1) / sheetRowLimit);
         int exported = 0;
 
         try (ExcelWriter writer = EasyExcel.write(response.getOutputStream(), StudentExcelRow.class).build()) {
-            for (int sheetIndex = 0; sheetIndex < sheetCount; sheetIndex++) {
-                long sheetStartTime = System.currentTimeMillis();
-                int sheetStart = sheetIndex * sheetRowLimit;
-                int sheetEnd = Math.min(total, sheetStart + sheetRowLimit);
-                int sheetRows = 0;
-                WriteSheet writeSheet = EasyExcel.writerSheet(sheetIndex, "Sheet" + (sheetIndex + 1)).build();
-                for (int offset = sheetStart; offset < sheetEnd; offset += exportPageSize) {
-                    int limit = Math.min(exportPageSize, sheetEnd - offset);
-                    List<StudentExcelRow> rows = studentService.listPage(offset, limit);
-                    writer.write(rows, writeSheet);
-                    sheetRows += rows.size();
-                    exported += rows.size();
-                }
-                log.info("export sheet finished, sheet={}, rows={}, elapsedMs={}",
-                        sheetIndex + 1, sheetRows, System.currentTimeMillis() - sheetStartTime);
+            long sheetStartTime = System.currentTimeMillis();
+            WriteSheet writeSheet = EasyExcel.writerSheet("学生数据").build();
+            for (int offset = 0; offset < total; offset += exportPageSize) {
+                int limit = Math.min(exportPageSize, total - offset);
+                List<StudentExcelRow> rows = studentService.listPage(offset, limit);
+                writer.write(rows, writeSheet);
+                exported += rows.size();
             }
+            log.info("export sheet finished, sheet=1, rows={}, elapsedMs={}",
+                    exported, System.currentTimeMillis() - sheetStartTime);
         }
-        log.info("export api finished, total={}, exported={}, sheetCount={}, elapsedMs={}",
-                total, exported, sheetCount, System.currentTimeMillis() - start);
+        log.info("export api finished, total={}, exported={}, sheetCount=1, elapsedMs={}",
+                total, exported, System.currentTimeMillis() - start);
     }
 
     @ApiOperation("下载学生导入模板")

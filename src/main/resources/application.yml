@@ -20,7 +20,7 @@ mybatis:
 
 app:
   excel:
-    export-page-size: 500
+    export-page-size: 5000
     sheet-row-limit: 5000
     import-batch-size: 2000
     insert-batch-size: 2000
