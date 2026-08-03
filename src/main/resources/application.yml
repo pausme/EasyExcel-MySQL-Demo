@@ -10,6 +10,8 @@ spring:
   redis:
     host: ${REDIS_HOST}
     port: ${REDIS_PORT}
+    database: ${REDIS_DATABASE}
+    password: ${REDIS_PASSWORD}
     timeout: 3000ms
   servlet:
     multipart:
