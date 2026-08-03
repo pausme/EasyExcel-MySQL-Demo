@@ -20,4 +20,8 @@ public class ExcelDemoProperties {
     private int insertBatchSize;
 
     private int demoSeedCount;
+
+    private String exportTempDir;
+
+    private int exportFileRetentionHours = 24;
 }

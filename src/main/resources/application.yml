@@ -7,6 +7,10 @@ spring:
     username: root
     password: ${MYSQL_PASSWORD}
     driver-class-name: com.mysql.cj.jdbc.Driver
+  redis:
+    host: ${REDIS_HOST}
+    port: ${REDIS_PORT}
+    timeout: 3000ms
   servlet:
     multipart:
       max-file-size: 100MB
@@ -21,7 +25,9 @@ mybatis:
 app:
   excel:
     export-page-size: 5000
-    sheet-row-limit: 5000
+    sheet-row-limit: 50000
     import-batch-size: 2000
     insert-batch-size: 2000
     demo-seed-count: 12000
+    export-temp-dir: ${EXPORT_TEMP_DIR:${java.io.tmpdir}/student-excel-export}
+    export-file-retention-hours: 24

@@ -1,16 +1,22 @@
 package com.huang.demo.excel.controller;
 
 import com.alibaba.excel.EasyExcel;
-import com.alibaba.excel.ExcelWriter;
-import com.alibaba.excel.write.metadata.WriteSheet;
+import com.huang.demo.excel.api.dto.ExportTaskResponse;
 import com.huang.demo.excel.config.ExcelDemoProperties;
+import com.huang.demo.excel.domain.model.ExportTask;
+import com.huang.demo.excel.domain.model.ExportTaskStatus;
 import com.huang.demo.excel.listener.StudentImportListener;
 import com.huang.demo.excel.model.StudentExcelRow;
+import com.huang.demo.excel.service.ExportTaskService;
 import com.huang.demo.excel.service.StudentService;
 import io.swagger.annotations.ApiOperation;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+import org.springframework.core.io.FileSystemResource;
+import org.springframework.core.io.Resource;
+import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -23,8 +29,9 @@ import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Map;
 
 @RestController
@@ -35,10 +42,14 @@ public class ExcelDemoController {
 
     private final StudentService studentService;
     private final ExcelDemoProperties properties;
+    private final ExportTaskService exportTaskService;
 
-    public ExcelDemoController(StudentService studentService, ExcelDemoProperties properties) {
+    public ExcelDemoController(StudentService studentService,
+                               ExcelDemoProperties properties,
+                               ExportTaskService exportTaskService) {
         this.studentService = studentService;
         this.properties = properties;
+        this.exportTaskService = exportTaskService;
     }
 
     @ApiOperation("查询学生数据总数")
@@ -63,30 +74,44 @@ public class ExcelDemoController {
         return result;
     }
 
-    @ApiOperation("导出学生数据 Excel")
-    @GetMapping("/export")
-    public void export(HttpServletResponse response) throws IOException {
-        long start = System.currentTimeMillis();
-        setExcelDownloadHeaders(response, "student-demo");
+    @ApiOperation("提交学生数据导出任务")
+    @PostMapping("/export")
+    public ExportTaskResponse submitExport() {
+        return ExportTaskResponse.from(exportTaskService.submitExport());
+    }
 
-        int total = studentService.count();
-        int exportPageSize = properties.getExportPageSize();
-        int exported = 0;
+    @ApiOperation("查询学生数据导出任务状态")
+    @GetMapping("/export/{taskId}")
+    public ExportTaskResponse exportStatus(@PathVariable("taskId") String taskId) {
+        ExportTask task = exportTaskService.findTask(taskId)
+                .orElseThrow(() -> new ResponseStatusException(
+                        org.springframework.http.HttpStatus.NOT_FOUND, "导出任务不存在"));
+        return ExportTaskResponse.from(task);
+    }
 
-        try (ExcelWriter writer = EasyExcel.write(response.getOutputStream(), StudentExcelRow.class).build()) {
-            long sheetStartTime = System.currentTimeMillis();
-            WriteSheet writeSheet = EasyExcel.writerSheet("学生数据").build();
-            for (int offset = 0; offset < total; offset += exportPageSize) {
-                int limit = Math.min(exportPageSize, total - offset);
-                List<StudentExcelRow> rows = studentService.listPage(offset, limit);
-                writer.write(rows, writeSheet);
-                exported += rows.size();
-            }
-            log.info("export sheet finished, sheet=1, rows={}, elapsedMs={}",
-                    exported, System.currentTimeMillis() - sheetStartTime);
+    @ApiOperation("下载已完成的学生数据导出文件")
+    @GetMapping("/export/{taskId}/download")
+    public ResponseEntity<Resource> downloadExport(@PathVariable("taskId") String taskId) throws IOException {
+        ExportTask task = exportTaskService.findTask(taskId)
+                .orElseThrow(() -> new ResponseStatusException(
+                        org.springframework.http.HttpStatus.NOT_FOUND, "导出任务不存在"));
+        if (task.getStatus() != ExportTaskStatus.SUCCESS) {
+            throw new ResponseStatusException(
+                    org.springframework.http.HttpStatus.CONFLICT, "导出任务尚未完成");
         }
-        log.info("export api finished, total={}, exported={}, sheetCount=1, elapsedMs={}",
-                total, exported, System.currentTimeMillis() - start);
+
+        Path filePath = exportTaskService.findCompletedFile(taskId)
+                .orElseThrow(() -> new ResponseStatusException(
+                        org.springframework.http.HttpStatus.NOT_FOUND, "导出文件不存在"));
+        Resource resource = new FileSystemResource(filePath);
+        String fileName = URLEncoder.encode(task.getFileName(), StandardCharsets.UTF_8.name())
+                .replace("+", "%20");
+        return ResponseEntity.ok()
+                .contentType(MediaType.parseMediaType(
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+                .contentLength(Files.size(filePath))
+                .header("Content-disposition", "attachment;filename*=UTF-8''" + fileName)
+                .body(resource);
     }
 
     @ApiOperation("下载学生导入模板")

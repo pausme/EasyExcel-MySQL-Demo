@@ -38,6 +38,25 @@
         LIMIT #{limit} OFFSET #{offset}
     </select>
 
+    <select id="maxId" resultType="long">
+        SELECT MAX(id) FROM student_record
+    </select>
+
+    <select id="countByMaxId" resultType="int">
+        SELECT COUNT(*)
+        FROM student_record
+        WHERE id &lt;= #{maxId}
+    </select>
+
+    <select id="listByCursor" resultType="com.huang.demo.excel.domain.model.StudentExportRecord">
+        SELECT id, student_no, name, age, gender, class_name, email, birthday
+        FROM student_record
+        WHERE id &gt; #{lastId}
+          AND id &lt;= #{maxId}
+        ORDER BY id
+        LIMIT #{limit}
+    </select>
+
     <insert id="saveBatch">
         INSERT INTO student_record (student_no, name, age, gender, class_name, email, birthday)
         VALUES
