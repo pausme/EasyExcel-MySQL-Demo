@@ -29,6 +29,12 @@ app:
     export-page-size: 5000
     sheet-row-limit: 1048575
     import-batch-size: 2000
+    import-worker-count: ${IMPORT_WORKER_COUNT:4}
+    import-queue-capacity: ${IMPORT_QUEUE_CAPACITY:20}
+    import-executor-queue-capacity: ${IMPORT_EXECUTOR_QUEUE_CAPACITY:20}
+    import-await-termination-seconds: ${IMPORT_AWAIT_TERMINATION_SECONDS:30}
+    import-max-retry-times: ${IMPORT_MAX_RETRY_TIMES:3}
+    import-retry-backoff-millis: ${IMPORT_RETRY_BACKOFF_MILLIS:200}
     insert-batch-size: 2000
     demo-seed-count: 12000
     export-temp-dir: ${EXPORT_TEMP_DIR:${java.io.tmpdir}/student-excel-export}

@@ -126,6 +126,35 @@ export EXPORT_REJECTED_EXECUTION_POLICY='abort'
 
 导入使用 `student_no` 作为唯一业务键，重复导入同一个学生时会更新已有数据。
 如果旧表中已经存在重复 `student_no`，需要先清理重复数据后再启动应用创建唯一索引。
-导入接口会把整份 Excel 解析和多批写库放在同一个数据库事务中；文件后半段解析或写库失败时，
-前面已经写入的批次会一起回滚。百万级生产导入如果需要更强的可观测性和失败行明细，建议改为
+导入接口采用生产者/消费者模型：EasyExcel 解析时每累计 `app.excel.import-batch-size`
+行放入阻塞队列，多个写库线程并发消费，每个批次使用独立事务提交。该模式优先提升吞吐，
+文件后半段解析或写库失败时，已经提交成功的批次不会回滚。
+如果同一个 `student_no` 在不同批次重复出现，最终值取决于批次提交顺序；生产环境应在导入前校验文件内唯一性。
+
+导入线程池可通过环境变量调整：
+
+```bash
+export IMPORT_WORKER_COUNT='4'
+export IMPORT_QUEUE_CAPACITY='20'
+export IMPORT_EXECUTOR_QUEUE_CAPACITY='20'
+export IMPORT_AWAIT_TERMINATION_SECONDS='30'
+export IMPORT_MAX_RETRY_TIMES='3'
+export IMPORT_RETRY_BACKOFF_MILLIS='200'
+```
+
+并发写入 `INSERT ... ON DUPLICATE KEY UPDATE` 时，MySQL 可能因为唯一索引锁竞争产生瞬时死锁。
+导入批次会按 `student_no` 排序后写入，并对死锁等瞬时数据库异常进行有限重试。
+
+百万级生产导入如果需要全量原子性、失败行明细、断点续传和人工修正，建议改为
 “导入任务表 + 暂存表 + 校验通过后合并”的方案。
+
+## 性能记录
+
+2026-08-04 实测：
+
+- 100 万条数据导入：`35272 ms`
+- `batchCount=500`
+- 100 万条数据导出：`59151 ms`
+
+当前导入采用 `2000` 行一批、阻塞队列、多 worker 独立事务写库的方式，性能会随
+`IMPORT_WORKER_COUNT`、`IMPORT_QUEUE_CAPACITY`、`IMPORT_MAX_RETRY_TIMES` 和数据库状态变化。

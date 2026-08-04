@@ -17,6 +17,18 @@ public class ExcelDemoProperties {
 
     private int importBatchSize;
 
+    private int importWorkerCount = 4;
+
+    private int importQueueCapacity = 20;
+
+    private int importExecutorQueueCapacity = 20;
+
+    private int importAwaitTerminationSeconds = 30;
+
+    private int importMaxRetryTimes = 3;
+
+    private long importRetryBackoffMillis = 200L;
+
     private int insertBatchSize;
 
     private int demoSeedCount;

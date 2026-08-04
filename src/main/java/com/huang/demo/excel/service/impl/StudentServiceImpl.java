@@ -9,6 +9,8 @@ import com.huang.demo.excel.repository.StudentMapper;
 import com.huang.demo.excel.service.StudentService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.dao.TransientDataAccessException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -16,24 +18,36 @@ import javax.annotation.PostConstruct;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 @Service
 public class StudentServiceImpl implements StudentService {
 
     private static final Logger log = LoggerFactory.getLogger(StudentServiceImpl.class);
+    private static final List<StudentExcelRow> IMPORT_POISON_BATCH = Collections.emptyList();
 
     private final StudentMapper studentMapper;
     private final ExcelDemoProperties properties;
     private final TransactionTemplate transactionTemplate;
+    private final Executor importWorkerExecutor;
 
     public StudentServiceImpl(StudentMapper studentMapper,
                               ExcelDemoProperties properties,
-                              TransactionTemplate transactionTemplate) {
+                              TransactionTemplate transactionTemplate,
+                              @Qualifier("importWorkerExecutor") Executor importWorkerExecutor) {
         this.studentMapper = studentMapper;
         this.properties = properties;
         this.transactionTemplate = transactionTemplate;
+        this.importWorkerExecutor = importWorkerExecutor;
     }
 
     @PostConstruct
@@ -77,31 +91,42 @@ public class StudentServiceImpl implements StudentService {
             return;
         }
         long start = System.currentTimeMillis();
-        int batchSize = getInsertBatchSize();
-        int batchCount = 0;
-        int inserted = 0;
-        for (int from = 0; from < rows.size(); from += batchSize) {
-            int to = Math.min(rows.size(), from + batchSize);
-            List<StudentExcelRow> chunk = rows.subList(from, to);
-            batchCount++;
-            insertChunk(chunk, "import", batchCount);
-            inserted += chunk.size();
-        }
+        int batchCount = saveBatchInTransactionWithRetry(rows, "import");
         log.info("batch inserted students, rows={}, batches={}, batchSize={}, elapsedMs={}",
-                inserted, batchCount, batchSize, System.currentTimeMillis() - start);
+                rows.size(), batchCount, getInsertBatchSize(), System.currentTimeMillis() - start);
     }
 
     @Override
     public StudentImportResult importExcel(InputStream inputStream, int batchSize) {
         long start = System.currentTimeMillis();
-        StudentImportResult result = transactionTemplate.execute(status -> {
-            StudentImportListener listener = new StudentImportListener(this, batchSize);
+        int importBatchSize = Math.max(1, batchSize);
+        int workerCount = Math.max(1, properties.getImportWorkerCount());
+        int queueCapacity = Math.max(workerCount, properties.getImportQueueCapacity());
+        BlockingQueue<List<StudentExcelRow>> importQueue =
+                new ArrayBlockingQueue<List<StudentExcelRow>>(queueCapacity);
+        AtomicInteger importedCount = new AtomicInteger();
+        AtomicInteger importedBatchCount = new AtomicInteger();
+        AtomicReference<Throwable> workerFailure = new AtomicReference<Throwable>();
+        CountDownLatch workerLatch = new CountDownLatch(workerCount);
+
+        startImportWorkers(workerCount, importQueue, importedCount, importedBatchCount, workerFailure, workerLatch);
+
+        StudentImportListener listener = new StudentImportListener(importBatchSize, importQueue, workerFailure);
+        try {
             EasyExcel.read(inputStream, StudentExcelRow.class, listener).doReadAll();
-            return StudentImportResult.builder()
-                    .importedCount(listener.getImportedCount())
-                    .batchCount(listener.getBatchCount())
-                    .build();
-        });
+            stopImportWorkers(importQueue, workerCount);
+            awaitImportWorkers(workerLatch);
+            throwIfImportWorkerFailed(workerFailure);
+        } catch (RuntimeException ex) {
+            stopImportWorkersQuietly(importQueue, workerCount);
+            awaitImportWorkersQuietly(workerLatch);
+            throw ex;
+        }
+
+        StudentImportResult result = StudentImportResult.builder()
+                .importedCount(importedCount.get())
+                .batchCount(importedBatchCount.get())
+                .build();
         log.info("import students finished, imported={}, batchCount={}, elapsedMs={}",
                 result.getImportedCount(), result.getBatchCount(), System.currentTimeMillis() - start);
         return result;
@@ -155,6 +180,169 @@ public class StudentServiceImpl implements StudentService {
         transactionTemplate.executeWithoutResult(status -> studentMapper.saveBatch(rows));
         log.debug("insert student chunk, scene={}, batchNo={}, rows={}, elapsedMs={}",
                 scene, batchNo, rows.size(), System.currentTimeMillis() - start);
+    }
+
+    private int saveBatchInTransaction(List<StudentExcelRow> rows, String scene) {
+        return transactionTemplate.execute(status -> {
+            int batchSize = getInsertBatchSize();
+            int batchCount = 0;
+            for (int from = 0; from < rows.size(); from += batchSize) {
+                int to = Math.min(rows.size(), from + batchSize);
+                List<StudentExcelRow> chunk = rows.subList(from, to);
+                batchCount++;
+                long start = System.currentTimeMillis();
+                studentMapper.saveBatch(chunk);
+                log.debug("insert student chunk, scene={}, batchNo={}, rows={}, elapsedMs={}",
+                        scene, batchCount, chunk.size(), System.currentTimeMillis() - start);
+            }
+            return batchCount;
+        });
+    }
+
+    private void importWorker(int workerNo,
+                              BlockingQueue<List<StudentExcelRow>> importQueue,
+                              AtomicInteger importedCount,
+                              AtomicInteger importedBatchCount,
+                              AtomicReference<Throwable> workerFailure,
+                              CountDownLatch workerLatch) {
+        try {
+            while (true) {
+                List<StudentExcelRow> batch = importQueue.take();
+                if (batch == IMPORT_POISON_BATCH) {
+                    return;
+                }
+                if (workerFailure.get() != null) {
+                    continue;
+                }
+                long start = System.currentTimeMillis();
+                try {
+                    int chunkCount = saveBatchInTransactionWithRetry(batch, "import-worker-" + workerNo);
+                    int totalImported = importedCount.addAndGet(batch.size());
+                    int totalBatchCount = importedBatchCount.incrementAndGet();
+                    log.info("import worker batch committed, workerNo={}, batchRows={}, chunkCount={}, totalImported={}, totalBatchCount={}, elapsedMs={}",
+                            workerNo, batch.size(), chunkCount, totalImported, totalBatchCount,
+                            System.currentTimeMillis() - start);
+                } catch (RuntimeException ex) {
+                    workerFailure.compareAndSet(null, ex);
+                    log.error("import worker batch failed, workerNo={}, batchRows={}, elapsedMs={}",
+                            workerNo, batch.size(), System.currentTimeMillis() - start, ex);
+                }
+            }
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            workerFailure.compareAndSet(null, ex);
+        } finally {
+            workerLatch.countDown();
+        }
+    }
+
+    private void startImportWorkers(int workerCount,
+                                    BlockingQueue<List<StudentExcelRow>> importQueue,
+                                    AtomicInteger importedCount,
+                                    AtomicInteger importedBatchCount,
+                                    AtomicReference<Throwable> workerFailure,
+                                    CountDownLatch workerLatch) {
+        try {
+            for (int workerIndex = 1; workerIndex <= workerCount; workerIndex++) {
+                final int workerNo = workerIndex;
+                importWorkerExecutor.execute(() -> importWorker(workerNo, importQueue, importedCount,
+                        importedBatchCount, workerFailure, workerLatch));
+            }
+        } catch (RuntimeException ex) {
+            stopImportWorkersQuietly(importQueue, workerCount);
+            throw new IllegalStateException("导入写库线程池繁忙，请稍后重试", ex);
+        }
+    }
+
+    private void stopImportWorkers(BlockingQueue<List<StudentExcelRow>> importQueue, int workerCount) {
+        for (int i = 0; i < workerCount; i++) {
+            try {
+                importQueue.put(IMPORT_POISON_BATCH);
+            } catch (InterruptedException ex) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("停止导入写库线程失败", ex);
+            }
+        }
+    }
+
+    private void stopImportWorkersQuietly(BlockingQueue<List<StudentExcelRow>> importQueue, int workerCount) {
+        for (int i = 0; i < workerCount; i++) {
+            try {
+                importQueue.offer(IMPORT_POISON_BATCH, 1, TimeUnit.SECONDS);
+            } catch (InterruptedException ex) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+        }
+    }
+
+    private void awaitImportWorkers(CountDownLatch workerLatch) {
+        try {
+            workerLatch.await();
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("等待导入写库线程结束失败", ex);
+        }
+    }
+
+    private void awaitImportWorkersQuietly(CountDownLatch workerLatch) {
+        try {
+            workerLatch.await(10, TimeUnit.SECONDS);
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private void throwIfImportWorkerFailed(AtomicReference<Throwable> workerFailure) {
+        Throwable failure = workerFailure.get();
+        if (failure != null) {
+            throw new IllegalStateException("导入写库线程执行失败", failure);
+        }
+    }
+
+    private int saveBatchInTransactionWithRetry(List<StudentExcelRow> rows, String scene) {
+        List<StudentExcelRow> orderedRows = new ArrayList<StudentExcelRow>(rows);
+        orderedRows.sort(Comparator.comparing(StudentExcelRow::getStudentNo, Comparator.nullsLast(String::compareTo)));
+        int maxRetryTimes = Math.max(0, properties.getImportMaxRetryTimes());
+        long retryBackoffMillis = Math.max(0L, properties.getImportRetryBackoffMillis());
+        int attempt = 0;
+        while (true) {
+            try {
+                return saveBatchInTransaction(orderedRows, scene);
+            } catch (RuntimeException ex) {
+                if (!isRetryableImportException(ex) || attempt >= maxRetryTimes) {
+                    throw ex;
+                }
+                attempt++;
+                long sleepMillis = retryBackoffMillis * attempt;
+                log.warn("retry import batch after transient database error, scene={}, attempt={}, maxRetryTimes={}, rows={}, backoffMs={}",
+                        scene, attempt, maxRetryTimes, orderedRows.size(), sleepMillis, ex);
+                sleepQuietly(sleepMillis);
+            }
+        }
+    }
+
+    private boolean isRetryableImportException(Throwable throwable) {
+        Throwable current = throwable;
+        while (current != null) {
+            if (current instanceof TransientDataAccessException) {
+                return true;
+            }
+            current = current.getCause();
+        }
+        return false;
+    }
+
+    private void sleepQuietly(long sleepMillis) {
+        if (sleepMillis <= 0L) {
+            return;
+        }
+        try {
+            Thread.sleep(sleepMillis);
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("导入重试等待被中断", ex);
+        }
     }
 
     private int getInsertBatchSize() {

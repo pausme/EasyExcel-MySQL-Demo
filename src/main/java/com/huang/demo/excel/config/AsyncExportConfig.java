@@ -35,6 +35,21 @@ public class AsyncExportConfig {
         return executor;
     }
 
+    @Bean("importWorkerExecutor")
+    public Executor importWorkerExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        int workerCount = Math.max(1, properties.getImportWorkerCount());
+        executor.setCorePoolSize(workerCount);
+        executor.setMaxPoolSize(workerCount);
+        executor.setQueueCapacity(Math.max(0, properties.getImportExecutorQueueCapacity()));
+        executor.setRejectedExecutionHandler(new ThreadPoolExecutor.AbortPolicy());
+        executor.setThreadNamePrefix("student-import-");
+        executor.setWaitForTasksToCompleteOnShutdown(true);
+        executor.setAwaitTerminationSeconds(Math.max(1, properties.getImportAwaitTerminationSeconds()));
+        executor.initialize();
+        return executor;
+    }
+
     private RejectedExecutionHandler buildRejectedExecutionHandler() {
         String policy = properties.getExportRejectedExecutionPolicy();
         if ("caller-runs".equalsIgnoreCase(policy)) {
