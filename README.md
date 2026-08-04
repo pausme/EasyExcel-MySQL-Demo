@@ -41,7 +41,7 @@ export REDIS_PORT='your_redis_port'
 导出文件上传到 MinIO，启动前还需要设置：
 
 ```bash
-export MINIO_ENDPOINT='http://106.14.81.111:7000'
+export MINIO_ENDPOINT='http://your-minio-host:7000'
 export MINIO_ACCESS_KEY='your_minio_access_key'
 export MINIO_SECRET_KEY='your_minio_secret_key'
 export MINIO_BUCKET_NAME='student-excel'
