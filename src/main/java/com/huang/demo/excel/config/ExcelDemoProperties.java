@@ -19,6 +19,8 @@ public class ExcelDemoProperties {
 
     private int importWorkerCount = 4;
 
+    private int importMaxConcurrentTasks = 1;
+
     private int importQueueCapacity = 20;
 
     private int importExecutorQueueCapacity = 20;
@@ -28,6 +30,10 @@ public class ExcelDemoProperties {
     private int importMaxRetryTimes = 3;
 
     private long importRetryBackoffMillis = 200L;
+
+    private int importProgressLogInterval = 50;
+
+    private boolean importBatchSortEnabled = true;
 
     private int insertBatchSize;
 

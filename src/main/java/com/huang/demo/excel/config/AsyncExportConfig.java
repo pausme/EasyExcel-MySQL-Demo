@@ -36,7 +36,7 @@ public class AsyncExportConfig {
     }
 
     @Bean("importWorkerExecutor")
-    public Executor importWorkerExecutor() {
+    public ThreadPoolTaskExecutor importWorkerExecutor() {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
         int workerCount = Math.max(1, properties.getImportWorkerCount());
         executor.setCorePoolSize(workerCount);

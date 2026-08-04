@@ -135,15 +135,23 @@ export EXPORT_REJECTED_EXECUTION_POLICY='abort'
 
 ```bash
 export IMPORT_WORKER_COUNT='4'
+export IMPORT_MAX_CONCURRENT_TASKS='1'
 export IMPORT_QUEUE_CAPACITY='20'
 export IMPORT_EXECUTOR_QUEUE_CAPACITY='20'
 export IMPORT_AWAIT_TERMINATION_SECONDS='30'
 export IMPORT_MAX_RETRY_TIMES='3'
 export IMPORT_RETRY_BACKOFF_MILLIS='200'
+export IMPORT_PROGRESS_LOG_INTERVAL='50'
+export IMPORT_BATCH_SORT_ENABLED='true'
 ```
+
+默认同时只允许 1 个导入任务执行，避免多个上传请求叠加出过多写库 worker。
+导入失败时会清空待写队列、取消 worker，并等待已启动 worker 结束后再向接口返回。
 
 并发写入 `INSERT ... ON DUPLICATE KEY UPDATE` 时，MySQL 可能因为唯一索引锁竞争产生瞬时死锁。
 导入批次会按 `student_no` 排序后写入，并对死锁等瞬时数据库异常进行有限重试。
+排序可以通过 `IMPORT_BATCH_SORT_ENABLED=false` 关闭；关闭后少一点 CPU 开销，但死锁概率可能上升。
+进度日志默认每 50 批输出一次，可以通过 `IMPORT_PROGRESS_LOG_INTERVAL` 调整。
 
 百万级生产导入如果需要全量原子性、失败行明细、断点续传和人工修正，建议改为
 “导入任务表 + 暂存表 + 校验通过后合并”的方案。

@@ -11,6 +11,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.dao.TransientDataAccessException;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -24,7 +25,9 @@ import java.util.List;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Future;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -38,16 +41,18 @@ public class StudentServiceImpl implements StudentService {
     private final StudentMapper studentMapper;
     private final ExcelDemoProperties properties;
     private final TransactionTemplate transactionTemplate;
-    private final Executor importWorkerExecutor;
+    private final ThreadPoolTaskExecutor importWorkerExecutor;
+    private final Semaphore importTaskSemaphore;
 
     public StudentServiceImpl(StudentMapper studentMapper,
                               ExcelDemoProperties properties,
                               TransactionTemplate transactionTemplate,
-                              @Qualifier("importWorkerExecutor") Executor importWorkerExecutor) {
+                              @Qualifier("importWorkerExecutor") ThreadPoolTaskExecutor importWorkerExecutor) {
         this.studentMapper = studentMapper;
         this.properties = properties;
         this.transactionTemplate = transactionTemplate;
         this.importWorkerExecutor = importWorkerExecutor;
+        this.importTaskSemaphore = new Semaphore(Math.max(1, properties.getImportMaxConcurrentTasks()));
     }
 
     @PostConstruct
@@ -99,6 +104,7 @@ public class StudentServiceImpl implements StudentService {
     @Override
     public StudentImportResult importExcel(InputStream inputStream, int batchSize) {
         long start = System.currentTimeMillis();
+        acquireImportPermit();
         int importBatchSize = Math.max(1, batchSize);
         int workerCount = Math.max(1, properties.getImportWorkerCount());
         int queueCapacity = Math.max(workerCount, properties.getImportQueueCapacity());
@@ -109,18 +115,21 @@ public class StudentServiceImpl implements StudentService {
         AtomicReference<Throwable> workerFailure = new AtomicReference<Throwable>();
         CountDownLatch workerLatch = new CountDownLatch(workerCount);
 
-        startImportWorkers(workerCount, importQueue, importedCount, importedBatchCount, workerFailure, workerLatch);
-
-        StudentImportListener listener = new StudentImportListener(importBatchSize, importQueue, workerFailure);
+        List<Future<?>> workerFutures = startImportWorkers(
+                workerCount, importQueue, importedCount, importedBatchCount, workerFailure, workerLatch);
+        StudentImportListener listener = new StudentImportListener(
+                importBatchSize, importQueue, workerFailure, getImportProgressLogInterval());
         try {
             EasyExcel.read(inputStream, StudentExcelRow.class, listener).doReadAll();
             stopImportWorkers(importQueue, workerCount);
             awaitImportWorkers(workerLatch);
+            awaitWorkerFutures(workerFutures);
             throwIfImportWorkerFailed(workerFailure);
         } catch (RuntimeException ex) {
-            stopImportWorkersQuietly(importQueue, workerCount);
-            awaitImportWorkersQuietly(workerLatch);
+            cleanupFailedImportWorkers(importQueue, workerCount, workerFutures, workerLatch);
             throw ex;
+        } finally {
+            importTaskSemaphore.release();
         }
 
         StudentImportResult result = StudentImportResult.builder()
@@ -236,20 +245,29 @@ public class StudentServiceImpl implements StudentService {
         }
     }
 
-    private void startImportWorkers(int workerCount,
-                                    BlockingQueue<List<StudentExcelRow>> importQueue,
-                                    AtomicInteger importedCount,
-                                    AtomicInteger importedBatchCount,
-                                    AtomicReference<Throwable> workerFailure,
-                                    CountDownLatch workerLatch) {
+    private List<Future<?>> startImportWorkers(int workerCount,
+                                               BlockingQueue<List<StudentExcelRow>> importQueue,
+                                               AtomicInteger importedCount,
+                                               AtomicInteger importedBatchCount,
+                                               AtomicReference<Throwable> workerFailure,
+                                               CountDownLatch workerLatch) {
+        List<Future<?>> futures = new ArrayList<Future<?>>(workerCount);
+        int submittedCount = 0;
         try {
             for (int workerIndex = 1; workerIndex <= workerCount; workerIndex++) {
                 final int workerNo = workerIndex;
-                importWorkerExecutor.execute(() -> importWorker(workerNo, importQueue, importedCount,
-                        importedBatchCount, workerFailure, workerLatch));
+                futures.add(importWorkerExecutor.submit(() -> importWorker(workerNo, importQueue, importedCount,
+                        importedBatchCount, workerFailure, workerLatch)));
+                submittedCount++;
             }
+            return futures;
         } catch (RuntimeException ex) {
-            stopImportWorkersQuietly(importQueue, workerCount);
+            cancelWorkerFutures(futures);
+            for (int i = submittedCount; i < workerCount; i++) {
+                workerLatch.countDown();
+            }
+            stopImportWorkers(importQueue, submittedCount);
+            awaitImportWorkers(workerLatch);
             throw new IllegalStateException("导入写库线程池繁忙，请稍后重试", ex);
         }
     }
@@ -265,31 +283,12 @@ public class StudentServiceImpl implements StudentService {
         }
     }
 
-    private void stopImportWorkersQuietly(BlockingQueue<List<StudentExcelRow>> importQueue, int workerCount) {
-        for (int i = 0; i < workerCount; i++) {
-            try {
-                importQueue.offer(IMPORT_POISON_BATCH, 1, TimeUnit.SECONDS);
-            } catch (InterruptedException ex) {
-                Thread.currentThread().interrupt();
-                return;
-            }
-        }
-    }
-
     private void awaitImportWorkers(CountDownLatch workerLatch) {
         try {
             workerLatch.await();
         } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
             throw new IllegalStateException("等待导入写库线程结束失败", ex);
-        }
-    }
-
-    private void awaitImportWorkersQuietly(CountDownLatch workerLatch) {
-        try {
-            workerLatch.await(10, TimeUnit.SECONDS);
-        } catch (InterruptedException ex) {
-            Thread.currentThread().interrupt();
         }
     }
 
@@ -300,9 +299,47 @@ public class StudentServiceImpl implements StudentService {
         }
     }
 
+    private void cleanupFailedImportWorkers(BlockingQueue<List<StudentExcelRow>> importQueue,
+                                            int workerCount,
+                                            List<Future<?>> workerFutures,
+                                            CountDownLatch workerLatch) {
+        importQueue.clear();
+        cancelWorkerFutures(workerFutures);
+        stopImportWorkers(importQueue, workerCount);
+        awaitImportWorkers(workerLatch);
+    }
+
+    private void cancelWorkerFutures(List<Future<?>> workerFutures) {
+        for (Future<?> future : workerFutures) {
+            future.cancel(true);
+        }
+    }
+
+    private void awaitWorkerFutures(List<Future<?>> workerFutures) {
+        for (Future<?> future : workerFutures) {
+            try {
+                future.get();
+            } catch (InterruptedException ex) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("等待导入写库线程结束失败", ex);
+            } catch (ExecutionException ex) {
+                throw new IllegalStateException("导入写库线程执行失败", ex.getCause());
+            }
+        }
+    }
+
+    private void acquireImportPermit() {
+        if (importTaskSemaphore.tryAcquire()) {
+            return;
+        }
+        throw new IllegalStateException("当前已有导入任务执行中，请稍后重试");
+    }
+
     private int saveBatchInTransactionWithRetry(List<StudentExcelRow> rows, String scene) {
         List<StudentExcelRow> orderedRows = new ArrayList<StudentExcelRow>(rows);
-        orderedRows.sort(Comparator.comparing(StudentExcelRow::getStudentNo, Comparator.nullsLast(String::compareTo)));
+        if (properties.isImportBatchSortEnabled()) {
+            orderedRows.sort(Comparator.comparing(StudentExcelRow::getStudentNo, Comparator.nullsLast(String::compareTo)));
+        }
         int maxRetryTimes = Math.max(0, properties.getImportMaxRetryTimes());
         long retryBackoffMillis = Math.max(0L, properties.getImportRetryBackoffMillis());
         int attempt = 0;
@@ -347,5 +384,9 @@ public class StudentServiceImpl implements StudentService {
 
     private int getInsertBatchSize() {
         return Math.max(1, properties.getInsertBatchSize());
+    }
+
+    private int getImportProgressLogInterval() {
+        return Math.max(1, properties.getImportProgressLogInterval());
     }
 }

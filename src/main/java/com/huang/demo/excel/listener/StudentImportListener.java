@@ -19,6 +19,7 @@ public class StudentImportListener extends AnalysisEventListener<StudentExcelRow
     private final int batchSize;
     private final BlockingQueue<List<StudentExcelRow>> importQueue;
     private final AtomicReference<Throwable> workerFailure;
+    private final int progressLogInterval;
     private final List<StudentExcelRow> cache = new ArrayList<StudentExcelRow>();
 
     private int parsedCount;
@@ -26,10 +27,12 @@ public class StudentImportListener extends AnalysisEventListener<StudentExcelRow
 
     public StudentImportListener(int batchSize,
                                  BlockingQueue<List<StudentExcelRow>> importQueue,
-                                 AtomicReference<Throwable> workerFailure) {
+                                 AtomicReference<Throwable> workerFailure,
+                                 int progressLogInterval) {
         this.batchSize = batchSize;
         this.importQueue = importQueue;
         this.workerFailure = workerFailure;
+        this.progressLogInterval = progressLogInterval;
     }
 
     @Override
@@ -65,8 +68,10 @@ public class StudentImportListener extends AnalysisEventListener<StudentExcelRow
         parsedCount += batch.size();
         batchCount++;
         cache.clear();
-        log.info("import batch queued, batchNo={}, rows={}, totalParsed={}, elapsedMs={}",
-                batchCount, batch.size(), parsedCount, System.currentTimeMillis() - start);
+        if (shouldLogProgress()) {
+            log.info("import batch queued, batchNo={}, rows={}, totalParsed={}, elapsedMs={}",
+                    batchCount, batch.size(), parsedCount, System.currentTimeMillis() - start);
+        }
     }
 
     private void enqueue(List<StudentExcelRow> batch) {
@@ -88,5 +93,10 @@ public class StudentImportListener extends AnalysisEventListener<StudentExcelRow
         if (failure != null) {
             throw new IllegalStateException("导入写库线程执行失败", failure);
         }
+    }
+
+    private boolean shouldLogProgress() {
+        int interval = Math.max(1, progressLogInterval);
+        return batchCount == 1 || batchCount % interval == 0;
     }
 }
