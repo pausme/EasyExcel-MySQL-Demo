@@ -26,8 +26,6 @@ import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URLEncoder;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -108,14 +106,8 @@ public class ExcelDemoController {
             }
             return;
         }
-
-        Path localFilePath = exportTaskService.findLocalFile(task)
-                .orElseThrow(() -> new ResponseStatusException(
-                        org.springframework.http.HttpStatus.NOT_FOUND, "导出文件不存在"));
-        setExcelDownloadHeaders(response, task.getFileName());
-        try (InputStream inputStream = Files.newInputStream(localFilePath)) {
-            org.springframework.util.StreamUtils.copy(inputStream, response.getOutputStream());
-        }
+        throw new ResponseStatusException(
+                org.springframework.http.HttpStatus.NOT_FOUND, "导出文件不存在或 MinIO 无法读取");
     }
 
     @ApiOperation("下载学生导入模板")

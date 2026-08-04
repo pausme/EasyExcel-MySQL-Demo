@@ -28,7 +28,6 @@ import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.nio.file.StandardCopyOption;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -46,8 +45,6 @@ public class ExportTaskServiceImpl implements ExportTaskService {
     private static final int MAX_EXPORT_PAGE_SIZE = 10000;
     private static final int MAX_SHEET_DATA_ROWS = 1048575;
     private static final String EXPORT_TASK_KEY_PREFIX = "excel:student:export:";
-    private static final String STORAGE_TYPE_MINIO = "MINIO";
-    private static final String STORAGE_TYPE_LOCAL = "LOCAL";
 
     private final StudentMapper studentMapper;
     private final ExcelDemoProperties properties;
@@ -151,18 +148,6 @@ public class ExportTaskServiceImpl implements ExportTaskService {
         }
     }
 
-    @Override
-    public Optional<Path> findLocalFile(ExportTask task) {
-        if (task.getStatus() != ExportTaskStatus.SUCCESS || task.getLocalFilePath() == null) {
-            return Optional.empty();
-        }
-        Path filePath = Paths.get(task.getLocalFilePath());
-        if (!Files.isRegularFile(filePath)) {
-            return Optional.empty();
-        }
-        return Optional.of(filePath);
-    }
-
     @Scheduled(fixedDelay = 3600000L, initialDelay = 3600000L)
     public void cleanupExpiredExportFiles() {
         cleanupExpiredFiles();
@@ -182,7 +167,6 @@ public class ExportTaskServiceImpl implements ExportTaskService {
             saveTaskQuietly(task);
             Files.createDirectories(temporaryFilePath.getParent());
             Files.deleteIfExists(temporaryFilePath);
-            Files.deleteIfExists(getLocalFilePath(task));
             writeExcel(task, temporaryFilePath);
             storeExportFile(task, temporaryFilePath);
             task.setStatus(ExportTaskStatus.SUCCESS);
@@ -204,20 +188,10 @@ public class ExportTaskServiceImpl implements ExportTaskService {
         }
     }
 
-    private void storeExportFile(ExportTask task, Path temporaryFilePath) throws IOException {
+    private void storeExportFile(ExportTask task, Path temporaryFilePath) {
         String objectKey = buildExportObjectKey(task);
-        Path localFilePath = getLocalFilePath(task);
-        Files.move(temporaryFilePath, localFilePath, StandardCopyOption.REPLACE_EXISTING);
-        task.setLocalFilePath(localFilePath.toAbsolutePath().toString());
-        try {
-            minioObjectStorageService.uploadExcel(localFilePath, objectKey);
-            task.setObjectKey(objectKey);
-            task.setStorageType(STORAGE_TYPE_MINIO);
-        } catch (RuntimeException ex) {
-            task.setStorageType(STORAGE_TYPE_LOCAL);
-            log.warn("upload export file to MinIO failed, use local file fallback, taskId={}, filePath={}",
-                    task.getTaskId(), localFilePath, ex);
-        }
+        minioObjectStorageService.uploadExcel(temporaryFilePath, objectKey);
+        task.setObjectKey(objectKey);
     }
 
     private void writeExcel(ExportTask task, Path filePath) {
@@ -325,10 +299,6 @@ public class ExportTaskServiceImpl implements ExportTaskService {
         return getExportDirectory().resolve(task.getFileName() + ".part");
     }
 
-    private Path getLocalFilePath(ExportTask task) {
-        return getExportDirectory().resolve(task.getFileName());
-    }
-
     private String buildExportObjectKey(ExportTask task) {
         String prefix = minioProperties.getExportObjectPrefix();
         if (prefix == null || prefix.trim().isEmpty()) {
@@ -352,7 +322,7 @@ public class ExportTaskServiceImpl implements ExportTaskService {
                     continue;
                 }
                 String fileName = path.getFileName().toString();
-                if (!fileName.endsWith(".part") && !fileName.endsWith(".xlsx")) {
+                if (!fileName.endsWith(".part")) {
                     continue;
                 }
                 if (Files.getLastModifiedTime(path).toMillis() < expireBefore) {

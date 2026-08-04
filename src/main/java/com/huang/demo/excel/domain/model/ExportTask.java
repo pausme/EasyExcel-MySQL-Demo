@@ -29,10 +29,6 @@ public class ExportTask {
 
     private String objectKey;
 
-    private String localFilePath;
-
-    private String storageType;
-
     private volatile String errorMessage;
 
     private volatile LocalDateTime createdAt;
