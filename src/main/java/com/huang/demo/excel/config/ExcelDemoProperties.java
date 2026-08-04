@@ -25,4 +25,6 @@ public class ExcelDemoProperties {
 
     private int exportFileRetentionHours = 24;
 
+    private boolean initEnabled = true;
+
 }

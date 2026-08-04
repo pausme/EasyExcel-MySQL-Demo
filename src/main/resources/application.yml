@@ -8,10 +8,10 @@ spring:
     password: ${MYSQL_PASSWORD}
     driver-class-name: com.mysql.cj.jdbc.Driver
   redis:
-    host: ${REDIS_HOST}
-    port: ${REDIS_PORT}
-    database: ${REDIS_DATABASE}
-    password: ${REDIS_PASSWORD}
+    host: ${REDIS_HOST:106.14.81.111}
+    port: ${REDIS_PORT:16379}
+    database: ${REDIS_DATABASE:0}
+    password: ${REDIS_PASSWORD:}
     timeout: 3000ms
   servlet:
     multipart:

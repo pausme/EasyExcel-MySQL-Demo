@@ -35,6 +35,10 @@ public class StudentServiceImpl implements StudentService {
 
     @PostConstruct
     public void init() {
+        if (!properties.isInitEnabled()) {
+            log.info("student service database initialization skipped");
+            return;
+        }
         long start = System.currentTimeMillis();
         studentMapper.createTableIfAbsent();
         if (studentMapper.countStudentNoUniqueIndex() == 0) {

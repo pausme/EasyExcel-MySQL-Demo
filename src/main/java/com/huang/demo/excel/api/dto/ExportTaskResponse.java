@@ -27,6 +27,8 @@ public class ExportTaskResponse {
 
     private String fileName;
 
+    private String storageType;
+
     private String errorMessage;
 
     private LocalDateTime createdAt;
@@ -41,6 +43,7 @@ public class ExportTaskResponse {
                 .exported(task.getExported())
                 .sheetCount(task.getSheetCount())
                 .fileName(task.getFileName())
+                .storageType(task.getStorageType())
                 .errorMessage(task.getErrorMessage())
                 .createdAt(task.getCreatedAt())
                 .finishedAt(task.getFinishedAt())

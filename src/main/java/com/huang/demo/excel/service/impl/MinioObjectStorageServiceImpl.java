@@ -2,6 +2,7 @@ package com.huang.demo.excel.service.impl;
 
 import com.huang.demo.excel.config.MinioProperties;
 import com.huang.demo.excel.service.MinioObjectStorageService;
+import io.minio.GetObjectArgs;
 import io.minio.GetPresignedObjectUrlArgs;
 import io.minio.MinioClient;
 import io.minio.PutObjectArgs;
@@ -39,6 +40,18 @@ public class MinioObjectStorageServiceImpl implements MinioObjectStorageService 
                     .build());
         } catch (Exception ex) {
             throw new IllegalStateException("上传导出文件到 MinIO 失败", ex);
+        }
+    }
+
+    @Override
+    public InputStream downloadExcel(String objectKey) {
+        try {
+            return minioClient.getObject(GetObjectArgs.builder()
+                    .bucket(properties.getBucketName())
+                    .object(objectKey)
+                    .build());
+        } catch (Exception ex) {
+            throw new IllegalStateException("下载 MinIO 导出文件失败", ex);
         }
     }
 

@@ -13,8 +13,6 @@ import io.swagger.annotations.ApiOperation;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.MediaType;
-import org.springframework.http.ResponseEntity;
-import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -26,8 +24,10 @@ import org.springframework.web.multipart.MultipartFile;
 
 import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
-import java.net.URI;
+import java.io.InputStream;
 import java.net.URLEncoder;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -89,7 +89,8 @@ public class ExcelDemoController {
 
     @ApiOperation("下载已完成的学生数据导出文件")
     @GetMapping("/export/{taskId}/download")
-    public ResponseEntity<Void> downloadExport(@PathVariable("taskId") String taskId) {
+    public void downloadExport(@PathVariable("taskId") String taskId,
+                               HttpServletResponse response) throws IOException {
         ExportTask task = exportTaskService.findTask(taskId)
                 .orElseThrow(() -> new ResponseStatusException(
                         org.springframework.http.HttpStatus.NOT_FOUND, "导出任务不存在"));
@@ -98,12 +99,23 @@ public class ExcelDemoController {
                     org.springframework.http.HttpStatus.CONFLICT, "导出任务尚未完成");
         }
 
-        String downloadUrl = exportTaskService.createDownloadUrl(task)
+        InputStream minioInputStream = exportTaskService.openDownloadStream(task)
+                .orElse(null);
+        if (minioInputStream != null) {
+            setExcelDownloadHeaders(response, task.getFileName());
+            try (InputStream inputStream = minioInputStream) {
+                org.springframework.util.StreamUtils.copy(inputStream, response.getOutputStream());
+            }
+            return;
+        }
+
+        Path localFilePath = exportTaskService.findLocalFile(task)
                 .orElseThrow(() -> new ResponseStatusException(
                         org.springframework.http.HttpStatus.NOT_FOUND, "导出文件不存在"));
-        return ResponseEntity.status(HttpStatus.FOUND)
-                .location(URI.create(downloadUrl))
-                .build();
+        setExcelDownloadHeaders(response, task.getFileName());
+        try (InputStream inputStream = Files.newInputStream(localFilePath)) {
+            org.springframework.util.StreamUtils.copy(inputStream, response.getOutputStream());
+        }
     }
 
     @ApiOperation("下载学生导入模板")
@@ -136,7 +148,8 @@ public class ExcelDemoController {
     private void setExcelDownloadHeaders(HttpServletResponse response, String fileName) throws IOException {
         response.setContentType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
         response.setCharacterEncoding(StandardCharsets.UTF_8.name());
-        String encodedFileName = URLEncoder.encode(fileName, StandardCharsets.UTF_8.name()).replace("+", "%20");
-        response.setHeader("Content-disposition", "attachment;filename*=UTF-8''" + encodedFileName + ".xlsx");
+        String downloadFileName = fileName.endsWith(".xlsx") ? fileName : fileName + ".xlsx";
+        String encodedFileName = URLEncoder.encode(downloadFileName, StandardCharsets.UTF_8.name()).replace("+", "%20");
+        response.setHeader("Content-disposition", "attachment;filename*=UTF-8''" + encodedFileName);
     }
 }
