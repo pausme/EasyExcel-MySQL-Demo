@@ -8,7 +8,7 @@ spring:
     password: ${MYSQL_PASSWORD}
     driver-class-name: com.mysql.cj.jdbc.Driver
     hikari:
-      maximum-pool-size: ${HIKARI_MAXIMUM_POOL_SIZE:10}
+      maximum-pool-size: ${HIKARI_MAXIMUM_POOL_SIZE}
   redis:
     host: ${REDIS_HOST}
     port: ${REDIS_PORT}
@@ -36,6 +36,7 @@ app:
     import-queue-capacity: ${IMPORT_QUEUE_CAPACITY:20}
     import-executor-queue-capacity: ${IMPORT_EXECUTOR_QUEUE_CAPACITY:20}
     import-await-termination-seconds: ${IMPORT_AWAIT_TERMINATION_SECONDS:30}
+    import-worker-finish-wait-seconds: ${IMPORT_WORKER_FINISH_WAIT_SECONDS:0}
     import-transaction-timeout-seconds: ${IMPORT_TRANSACTION_TIMEOUT_SECONDS:60}
     import-max-retry-times: ${IMPORT_MAX_RETRY_TIMES:3}
     import-retry-backoff-millis: ${IMPORT_RETRY_BACKOFF_MILLIS:200}

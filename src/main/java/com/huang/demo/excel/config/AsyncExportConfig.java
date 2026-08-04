@@ -14,8 +14,6 @@ import java.util.concurrent.ThreadPoolExecutor;
 @EnableScheduling
 public class AsyncExportConfig {
 
-    private static final int DEFAULT_HIKARI_MAXIMUM_POOL_SIZE = 10;
-
     private final ExcelDemoProperties properties;
     private final Environment environment;
 
@@ -69,12 +67,12 @@ public class AsyncExportConfig {
 
     private int getDataSourceMaximumPoolSize() {
         if (environment == null) {
-            return DEFAULT_HIKARI_MAXIMUM_POOL_SIZE;
+            throw new IllegalStateException("缺少数据库连接池最大连接数配置 spring.datasource.hikari.maximum-pool-size");
         }
         Integer maximumPoolSize = environment.getProperty(
                 "spring.datasource.hikari.maximum-pool-size", Integer.class);
         if (maximumPoolSize == null) {
-            return DEFAULT_HIKARI_MAXIMUM_POOL_SIZE;
+            throw new IllegalStateException("缺少数据库连接池最大连接数配置 spring.datasource.hikari.maximum-pool-size");
         }
         return Math.max(1, maximumPoolSize);
     }

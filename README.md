@@ -30,6 +30,7 @@ src/main/resources/mapper/StudentMapper.xml
 export MYSQL_URL='your_mysql_host:your_mysql_port'
 export MYSQL_USERNAME='your_mysql_username'
 export MYSQL_PASSWORD='your_mysql_password'
+export HIKARI_MAXIMUM_POOL_SIZE='10'
 ```
 
 导出任务状态存储在 Redis，启动前需要设置连接信息：
@@ -80,8 +81,8 @@ src/main/resources/db/mysql
 ## 启动和测试
 
 ```bash
-MYSQL_URL='your_mysql_host:your_mysql_port' MYSQL_USERNAME='your_mysql_username' MYSQL_PASSWORD='your_mysql_password' mvn test
-MYSQL_URL='your_mysql_host:your_mysql_port' MYSQL_USERNAME='your_mysql_username' MYSQL_PASSWORD='your_mysql_password' mvn spring-boot:run
+MYSQL_URL='your_mysql_host:your_mysql_port' MYSQL_USERNAME='your_mysql_username' MYSQL_PASSWORD='your_mysql_password' HIKARI_MAXIMUM_POOL_SIZE='10' mvn test
+MYSQL_URL='your_mysql_host:your_mysql_port' MYSQL_USERNAME='your_mysql_username' MYSQL_PASSWORD='your_mysql_password' HIKARI_MAXIMUM_POOL_SIZE='10' mvn spring-boot:run
 ```
 
 大文件回导的 multipart 限制默认是 200MB，可按实际导出文件体积调整：
@@ -139,18 +140,20 @@ export IMPORT_MAX_CONCURRENT_TASKS='1'
 export IMPORT_QUEUE_CAPACITY='20'
 export IMPORT_EXECUTOR_QUEUE_CAPACITY='20'
 export IMPORT_AWAIT_TERMINATION_SECONDS='30'
+export IMPORT_WORKER_FINISH_WAIT_SECONDS='0'
 export IMPORT_TRANSACTION_TIMEOUT_SECONDS='60'
 export IMPORT_MAX_RETRY_TIMES='3'
 export IMPORT_RETRY_BACKOFF_MILLIS='200'
 export IMPORT_PROGRESS_LOG_INTERVAL='50'
 export IMPORT_BATCH_SORT_ENABLED='true'
-export HIKARI_MAXIMUM_POOL_SIZE='10'
 ```
 
 默认同时只允许 1 个导入任务执行，避免多个上传请求叠加出过多写库 worker。
 如果允许多个导入任务并发，导入线程池大小会按 `IMPORT_WORKER_COUNT * IMPORT_MAX_CONCURRENT_TASKS` 创建。
 启动时会校验导入线程总数不能超过 `HIKARI_MAXIMUM_POOL_SIZE`，否则应用直接启动失败，避免 worker 大量阻塞等待数据库连接。
 导入失败时会清空待写队列、取消 worker，并等待已启动 worker 结束后再向接口返回。
+`IMPORT_AWAIT_TERMINATION_SECONDS` 只用于应用停机时等待导入线程池退出。
+`IMPORT_WORKER_FINISH_WAIT_SECONDS` 用于接口请求内等待 worker 收尾，默认 `0` 表示不主动超时，避免请求先失败但旧 worker 仍继续写库；如果设置为正数，启动时会校验它不能小于单批事务和重试窗口。
 批次写库事务默认 60 秒超时，可以通过 `IMPORT_TRANSACTION_TIMEOUT_SECONDS` 调整。
 
 并发写入 `INSERT ... ON DUPLICATE KEY UPDATE` 时，MySQL 可能因为唯一索引锁竞争产生瞬时死锁。

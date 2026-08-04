@@ -49,7 +49,6 @@ class StudentServiceImplTest {
         properties.setImportMaxConcurrentTasks(1);
         properties.setImportWorkerCount(2);
         properties.setImportQueueCapacity(2);
-        properties.setImportAwaitTerminationSeconds(1);
         StudentServiceImpl studentService = new StudentServiceImpl(
                 mock(StudentMapper.class),
                 properties,
@@ -67,6 +66,24 @@ class StudentServiceImplTest {
             assertTrue(firstException.getMessage().contains("导入写库线程池繁忙"));
             assertTrue(secondException.getMessage().contains("导入写库线程池繁忙"));
         });
+    }
+
+    @Test
+    void initRejectsWorkerFinishWaitShorterThanTransactionRetryWindow() {
+        ExcelDemoProperties properties = new ExcelDemoProperties();
+        properties.setInitEnabled(false);
+        properties.setImportWorkerFinishWaitSeconds(30);
+        properties.setImportTransactionTimeoutSeconds(60);
+        properties.setImportMaxRetryTimes(3);
+        StudentServiceImpl studentService = new StudentServiceImpl(
+                mock(StudentMapper.class),
+                properties,
+                mock(PlatformTransactionManager.class),
+                mock(ThreadPoolTaskExecutor.class));
+
+        IllegalStateException exception = assertThrows(IllegalStateException.class, studentService::init);
+
+        assertTrue(exception.getMessage().contains("IMPORT_WORKER_FINISH_WAIT_SECONDS"));
     }
 
     private static class RejectingTaskExecutor extends ThreadPoolTaskExecutor {

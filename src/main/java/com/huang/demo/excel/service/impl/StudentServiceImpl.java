@@ -59,6 +59,7 @@ public class StudentServiceImpl implements StudentService {
 
     @PostConstruct
     public void init() {
+        validateImportWorkerFinishWaitSeconds();
         if (!properties.isInitEnabled()) {
             log.info("student service database initialization skipped");
             return;
@@ -294,10 +295,14 @@ public class StudentServiceImpl implements StudentService {
 
     private void awaitImportWorkers(CountDownLatch workerLatch) {
         try {
-            boolean finished = workerLatch.await(
-                    Math.max(1, properties.getImportAwaitTerminationSeconds()), TimeUnit.SECONDS);
+            int waitSeconds = properties.getImportWorkerFinishWaitSeconds();
+            if (waitSeconds <= 0) {
+                workerLatch.await();
+                return;
+            }
+            boolean finished = workerLatch.await(waitSeconds, TimeUnit.SECONDS);
             if (!finished) {
-                throw new IllegalStateException("等待导入写库线程结束超时");
+                throw new IllegalStateException("等待导入写库线程结束超时，waitSeconds=" + waitSeconds);
             }
         } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
@@ -346,6 +351,28 @@ public class StudentServiceImpl implements StudentService {
             return;
         }
         throw new IllegalStateException("当前已有导入任务执行中，请稍后重试");
+    }
+
+    private void validateImportWorkerFinishWaitSeconds() {
+        int waitSeconds = properties.getImportWorkerFinishWaitSeconds();
+        if (waitSeconds <= 0) {
+            return;
+        }
+        int minimumWaitSeconds = calculateMinimumImportWorkerFinishWaitSeconds();
+        if (waitSeconds < minimumWaitSeconds) {
+            throw new IllegalStateException("IMPORT_WORKER_FINISH_WAIT_SECONDS 不能小于单批导入事务和重试窗口，waitSeconds="
+                    + waitSeconds + ", minimumWaitSeconds=" + minimumWaitSeconds);
+        }
+    }
+
+    private int calculateMinimumImportWorkerFinishWaitSeconds() {
+        int transactionTimeoutSeconds = Math.max(1, properties.getImportTransactionTimeoutSeconds());
+        int maxRetryTimes = Math.max(0, properties.getImportMaxRetryTimes());
+        long retryBackoffMillis = Math.max(0L, properties.getImportRetryBackoffMillis());
+        long retryBackoffTotalMillis = retryBackoffMillis * maxRetryTimes * (maxRetryTimes + 1L) / 2L;
+        long retryBackoffTotalSeconds = (retryBackoffTotalMillis + 999L) / 1000L;
+        long minimumWaitSeconds = transactionTimeoutSeconds * (maxRetryTimes + 1L) + retryBackoffTotalSeconds;
+        return minimumWaitSeconds > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) minimumWaitSeconds;
     }
 
     private static class ImportWorkerHandle {
