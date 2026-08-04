@@ -154,7 +154,7 @@ export IMPORT_BATCH_SORT_ENABLED='true'
 导入失败时会清空待写队列、取消 worker，并等待已启动 worker 结束后再向接口返回。
 `IMPORT_AWAIT_TERMINATION_SECONDS` 只用于应用停机时等待导入线程池退出。
 `IMPORT_WORKER_FINISH_WAIT_SECONDS` 用于接口请求内等待 worker 收尾，默认 `0` 表示不主动超时，避免请求先失败但旧 worker 仍继续写库；如果设置为正数，启动时会校验它不能小于单批事务和重试窗口。
-批次写库事务默认 60 秒超时，可以通过 `IMPORT_TRANSACTION_TIMEOUT_SECONDS` 调整。
+批次写库事务默认 60 秒超时，可以通过 `IMPORT_TRANSACTION_TIMEOUT_SECONDS` 调整，该值必须大于 0。
 
 并发写入 `INSERT ... ON DUPLICATE KEY UPDATE` 时，MySQL 可能因为唯一索引锁竞争产生瞬时死锁。
 导入批次会按 `student_no` 排序后写入，并对死锁等瞬时数据库异常进行有限重试。

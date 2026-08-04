@@ -86,6 +86,22 @@ class StudentServiceImplTest {
         assertTrue(exception.getMessage().contains("IMPORT_WORKER_FINISH_WAIT_SECONDS"));
     }
 
+    @Test
+    void initRejectsNonPositiveImportTransactionTimeout() {
+        ExcelDemoProperties properties = new ExcelDemoProperties();
+        properties.setInitEnabled(false);
+        properties.setImportTransactionTimeoutSeconds(0);
+        StudentServiceImpl studentService = new StudentServiceImpl(
+                mock(StudentMapper.class),
+                properties,
+                mock(PlatformTransactionManager.class),
+                mock(ThreadPoolTaskExecutor.class));
+
+        IllegalStateException exception = assertThrows(IllegalStateException.class, studentService::init);
+
+        assertTrue(exception.getMessage().contains("IMPORT_TRANSACTION_TIMEOUT_SECONDS"));
+    }
+
     private static class RejectingTaskExecutor extends ThreadPoolTaskExecutor {
 
         @Override

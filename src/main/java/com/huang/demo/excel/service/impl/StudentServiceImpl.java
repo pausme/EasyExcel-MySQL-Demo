@@ -59,6 +59,7 @@ public class StudentServiceImpl implements StudentService {
 
     @PostConstruct
     public void init() {
+        validateImportTransactionTimeoutSeconds();
         validateImportWorkerFinishWaitSeconds();
         if (!properties.isInitEnabled()) {
             log.info("student service database initialization skipped");
@@ -353,6 +354,12 @@ public class StudentServiceImpl implements StudentService {
         throw new IllegalStateException("当前已有导入任务执行中，请稍后重试");
     }
 
+    private void validateImportTransactionTimeoutSeconds() {
+        if (properties.getImportTransactionTimeoutSeconds() <= 0) {
+            throw new IllegalStateException("IMPORT_TRANSACTION_TIMEOUT_SECONDS 必须大于 0");
+        }
+    }
+
     private void validateImportWorkerFinishWaitSeconds() {
         int waitSeconds = properties.getImportWorkerFinishWaitSeconds();
         if (waitSeconds <= 0) {
@@ -366,7 +373,7 @@ public class StudentServiceImpl implements StudentService {
     }
 
     private int calculateMinimumImportWorkerFinishWaitSeconds() {
-        int transactionTimeoutSeconds = Math.max(1, properties.getImportTransactionTimeoutSeconds());
+        int transactionTimeoutSeconds = properties.getImportTransactionTimeoutSeconds();
         int maxRetryTimes = Math.max(0, properties.getImportMaxRetryTimes());
         long retryBackoffMillis = Math.max(0L, properties.getImportRetryBackoffMillis());
         long retryBackoffTotalMillis = retryBackoffMillis * maxRetryTimes * (maxRetryTimes + 1L) / 2L;
@@ -477,10 +484,7 @@ public class StudentServiceImpl implements StudentService {
 
     private TransactionTemplate newImportTransactionTemplate() {
         TransactionTemplate template = new TransactionTemplate(transactionManager);
-        int timeoutSeconds = properties.getImportTransactionTimeoutSeconds();
-        if (timeoutSeconds > 0) {
-            template.setTimeout(timeoutSeconds);
-        }
+        template.setTimeout(properties.getImportTransactionTimeoutSeconds());
         return template;
     }
 }
