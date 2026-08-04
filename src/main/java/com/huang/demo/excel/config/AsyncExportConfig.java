@@ -39,8 +39,10 @@ public class AsyncExportConfig {
     public ThreadPoolTaskExecutor importWorkerExecutor() {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
         int workerCount = Math.max(1, properties.getImportWorkerCount());
-        executor.setCorePoolSize(workerCount);
-        executor.setMaxPoolSize(workerCount);
+        int maxConcurrentTasks = Math.max(1, properties.getImportMaxConcurrentTasks());
+        int totalWorkerCapacity = workerCount * maxConcurrentTasks;
+        executor.setCorePoolSize(totalWorkerCapacity);
+        executor.setMaxPoolSize(totalWorkerCapacity);
         executor.setQueueCapacity(Math.max(0, properties.getImportExecutorQueueCapacity()));
         executor.setRejectedExecutionHandler(new ThreadPoolExecutor.AbortPolicy());
         executor.setThreadNamePrefix("student-import-");

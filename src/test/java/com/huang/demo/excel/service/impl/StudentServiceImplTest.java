@@ -1,0 +1,49 @@
+package com.huang.demo.excel.service.impl;
+
+import com.huang.demo.excel.config.ExcelDemoProperties;
+import com.huang.demo.excel.repository.StudentMapper;
+import org.junit.jupiter.api.Test;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
+import org.springframework.transaction.PlatformTransactionManager;
+
+import java.io.ByteArrayInputStream;
+import java.util.concurrent.Future;
+import java.util.concurrent.RejectedExecutionException;
+
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.mock;
+
+class StudentServiceImplTest {
+
+    @Test
+    void importExcelReleasesPermitWhenWorkerSubmissionFails() {
+        ExcelDemoProperties properties = new ExcelDemoProperties();
+        properties.setImportMaxConcurrentTasks(1);
+        properties.setImportWorkerCount(1);
+        properties.setImportQueueCapacity(1);
+        StudentServiceImpl studentService = new StudentServiceImpl(
+                mock(StudentMapper.class),
+                properties,
+                mock(PlatformTransactionManager.class),
+                new RejectingTaskExecutor());
+
+        IllegalStateException firstException = assertThrows(
+                IllegalStateException.class,
+                () -> studentService.importExcel(new ByteArrayInputStream(new byte[0]), 2000));
+        IllegalStateException secondException = assertThrows(
+                IllegalStateException.class,
+                () -> studentService.importExcel(new ByteArrayInputStream(new byte[0]), 2000));
+
+        assertTrue(firstException.getMessage().contains("导入写库线程池繁忙"));
+        assertTrue(secondException.getMessage().contains("导入写库线程池繁忙"));
+    }
+
+    private static class RejectingTaskExecutor extends ThreadPoolTaskExecutor {
+
+        @Override
+        public Future<?> submit(Runnable task) {
+            throw new RejectedExecutionException("test rejection");
+        }
+    }
+}

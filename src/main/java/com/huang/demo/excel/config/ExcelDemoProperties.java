@@ -27,6 +27,8 @@ public class ExcelDemoProperties {
 
     private int importAwaitTerminationSeconds = 30;
 
+    private int importTransactionTimeoutSeconds = 60;
+
     private int importMaxRetryTimes = 3;
 
     private long importRetryBackoffMillis = 200L;

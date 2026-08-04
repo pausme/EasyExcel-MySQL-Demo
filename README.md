@@ -139,6 +139,7 @@ export IMPORT_MAX_CONCURRENT_TASKS='1'
 export IMPORT_QUEUE_CAPACITY='20'
 export IMPORT_EXECUTOR_QUEUE_CAPACITY='20'
 export IMPORT_AWAIT_TERMINATION_SECONDS='30'
+export IMPORT_TRANSACTION_TIMEOUT_SECONDS='60'
 export IMPORT_MAX_RETRY_TIMES='3'
 export IMPORT_RETRY_BACKOFF_MILLIS='200'
 export IMPORT_PROGRESS_LOG_INTERVAL='50'
@@ -146,7 +147,9 @@ export IMPORT_BATCH_SORT_ENABLED='true'
 ```
 
 默认同时只允许 1 个导入任务执行，避免多个上传请求叠加出过多写库 worker。
+如果允许多个导入任务并发，导入线程池大小会按 `IMPORT_WORKER_COUNT * IMPORT_MAX_CONCURRENT_TASKS` 创建。
 导入失败时会清空待写队列、取消 worker，并等待已启动 worker 结束后再向接口返回。
+批次写库事务默认 60 秒超时，可以通过 `IMPORT_TRANSACTION_TIMEOUT_SECONDS` 调整。
 
 并发写入 `INSERT ... ON DUPLICATE KEY UPDATE` 时，MySQL 可能因为唯一索引锁竞争产生瞬时死锁。
 导入批次会按 `student_no` 排序后写入，并对死锁等瞬时数据库异常进行有限重试。

@@ -13,6 +13,7 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.dao.TransientDataAccessException;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import javax.annotation.PostConstruct;
@@ -40,17 +41,17 @@ public class StudentServiceImpl implements StudentService {
 
     private final StudentMapper studentMapper;
     private final ExcelDemoProperties properties;
-    private final TransactionTemplate transactionTemplate;
+    private final PlatformTransactionManager transactionManager;
     private final ThreadPoolTaskExecutor importWorkerExecutor;
     private final Semaphore importTaskSemaphore;
 
     public StudentServiceImpl(StudentMapper studentMapper,
                               ExcelDemoProperties properties,
-                              TransactionTemplate transactionTemplate,
+                              PlatformTransactionManager transactionManager,
                               @Qualifier("importWorkerExecutor") ThreadPoolTaskExecutor importWorkerExecutor) {
         this.studentMapper = studentMapper;
         this.properties = properties;
-        this.transactionTemplate = transactionTemplate;
+        this.transactionManager = transactionManager;
         this.importWorkerExecutor = importWorkerExecutor;
         this.importTaskSemaphore = new Semaphore(Math.max(1, properties.getImportMaxConcurrentTasks()));
     }
@@ -105,40 +106,42 @@ public class StudentServiceImpl implements StudentService {
     public StudentImportResult importExcel(InputStream inputStream, int batchSize) {
         long start = System.currentTimeMillis();
         acquireImportPermit();
-        int importBatchSize = Math.max(1, batchSize);
-        int workerCount = Math.max(1, properties.getImportWorkerCount());
-        int queueCapacity = Math.max(workerCount, properties.getImportQueueCapacity());
-        BlockingQueue<List<StudentExcelRow>> importQueue =
-                new ArrayBlockingQueue<List<StudentExcelRow>>(queueCapacity);
-        AtomicInteger importedCount = new AtomicInteger();
-        AtomicInteger importedBatchCount = new AtomicInteger();
-        AtomicReference<Throwable> workerFailure = new AtomicReference<Throwable>();
-        CountDownLatch workerLatch = new CountDownLatch(workerCount);
-
-        List<Future<?>> workerFutures = startImportWorkers(
-                workerCount, importQueue, importedCount, importedBatchCount, workerFailure, workerLatch);
-        StudentImportListener listener = new StudentImportListener(
-                importBatchSize, importQueue, workerFailure, getImportProgressLogInterval());
         try {
-            EasyExcel.read(inputStream, StudentExcelRow.class, listener).doReadAll();
-            stopImportWorkers(importQueue, workerCount);
-            awaitImportWorkers(workerLatch);
-            awaitWorkerFutures(workerFutures);
-            throwIfImportWorkerFailed(workerFailure);
-        } catch (RuntimeException ex) {
-            cleanupFailedImportWorkers(importQueue, workerCount, workerFutures, workerLatch);
-            throw ex;
+            int importBatchSize = Math.max(1, batchSize);
+            int workerCount = Math.max(1, properties.getImportWorkerCount());
+            int queueCapacity = Math.max(workerCount, properties.getImportQueueCapacity());
+            BlockingQueue<List<StudentExcelRow>> importQueue =
+                    new ArrayBlockingQueue<List<StudentExcelRow>>(queueCapacity);
+            AtomicInteger importedCount = new AtomicInteger();
+            AtomicInteger importedBatchCount = new AtomicInteger();
+            AtomicReference<Throwable> workerFailure = new AtomicReference<Throwable>();
+            CountDownLatch workerLatch = new CountDownLatch(workerCount);
+
+            List<Future<?>> workerFutures = startImportWorkers(
+                    workerCount, importQueue, importedCount, importedBatchCount, workerFailure, workerLatch);
+            StudentImportListener listener = new StudentImportListener(
+                    importBatchSize, importQueue, workerFailure, getImportProgressLogInterval());
+            try {
+                EasyExcel.read(inputStream, StudentExcelRow.class, listener).doReadAll();
+                stopImportWorkers(importQueue, workerCount);
+                awaitImportWorkers(workerLatch);
+                awaitWorkerFutures(workerFutures);
+                throwIfImportWorkerFailed(workerFailure);
+            } catch (RuntimeException ex) {
+                cleanupFailedImportWorkers(importQueue, workerCount, workerFutures, workerLatch);
+                throw ex;
+            }
+
+            StudentImportResult result = StudentImportResult.builder()
+                    .importedCount(importedCount.get())
+                    .batchCount(importedBatchCount.get())
+                    .build();
+            log.info("import students finished, imported={}, batchCount={}, elapsedMs={}",
+                    result.getImportedCount(), result.getBatchCount(), System.currentTimeMillis() - start);
+            return result;
         } finally {
             importTaskSemaphore.release();
         }
-
-        StudentImportResult result = StudentImportResult.builder()
-                .importedCount(importedCount.get())
-                .batchCount(importedBatchCount.get())
-                .build();
-        log.info("import students finished, imported={}, batchCount={}, elapsedMs={}",
-                result.getImportedCount(), result.getBatchCount(), System.currentTimeMillis() - start);
-        return result;
     }
 
     @Override
@@ -186,13 +189,13 @@ public class StudentServiceImpl implements StudentService {
 
     private void insertChunk(List<StudentExcelRow> rows, String scene, int batchNo) {
         long start = System.currentTimeMillis();
-        transactionTemplate.executeWithoutResult(status -> studentMapper.saveBatch(rows));
+        newTransactionTemplate().executeWithoutResult(status -> studentMapper.saveBatch(rows));
         log.debug("insert student chunk, scene={}, batchNo={}, rows={}, elapsedMs={}",
                 scene, batchNo, rows.size(), System.currentTimeMillis() - start);
     }
 
     private int saveBatchInTransaction(List<StudentExcelRow> rows, String scene) {
-        return transactionTemplate.execute(status -> {
+        return newImportTransactionTemplate().execute(status -> {
             int batchSize = getInsertBatchSize();
             int batchCount = 0;
             for (int from = 0; from < rows.size(); from += batchSize) {
@@ -388,5 +391,18 @@ public class StudentServiceImpl implements StudentService {
 
     private int getImportProgressLogInterval() {
         return Math.max(1, properties.getImportProgressLogInterval());
+    }
+
+    private TransactionTemplate newTransactionTemplate() {
+        return new TransactionTemplate(transactionManager);
+    }
+
+    private TransactionTemplate newImportTransactionTemplate() {
+        TransactionTemplate template = new TransactionTemplate(transactionManager);
+        int timeoutSeconds = properties.getImportTransactionTimeoutSeconds();
+        if (timeoutSeconds > 0) {
+            template.setTimeout(timeoutSeconds);
+        }
+        return template;
     }
 }
