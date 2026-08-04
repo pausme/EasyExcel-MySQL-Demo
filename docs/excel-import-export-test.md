@@ -12,9 +12,12 @@
 
 ```bash
 export MYSQL_URL='your-server-host:13306'
+export MYSQL_USERNAME='<数据库用户名>'
 export MYSQL_PASSWORD='<数据库密码>'
 export REDIS_HOST='your-server-host'
 export REDIS_PORT='16379'
+export REDIS_DATABASE='0'
+export REDIS_PASSWORD='<Redis密码>'
 export MINIO_ENDPOINT='http://your-minio-host:7000'
 export MINIO_ACCESS_KEY='<MinIO Access Key>'
 export MINIO_SECRET_KEY='<MinIO Secret Key>'

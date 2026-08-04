@@ -28,14 +28,17 @@ src/main/resources/mapper/StudentMapper.xml
 
 ```bash
 export MYSQL_URL='your_mysql_host:your_mysql_port'
+export MYSQL_USERNAME='your_mysql_username'
 export MYSQL_PASSWORD='your_mysql_password'
 ```
 
-导出任务状态存储在 Redis，默认连接：
+导出任务状态存储在 Redis，启动前需要设置连接信息：
 
 ```bash
 export REDIS_HOST='your_redis_host'
 export REDIS_PORT='your_redis_port'
+export REDIS_DATABASE='your_redis_database'
+export REDIS_PASSWORD='your_redis_password'
 ```
 
 导出文件上传到 MinIO，启动前还需要设置：
@@ -77,8 +80,8 @@ src/main/resources/db/mysql
 ## 启动和测试
 
 ```bash
-MYSQL_URL='your_mysql_host:your_mysql_port' MYSQL_PASSWORD='your_mysql_password' mvn test
-MYSQL_URL='your_mysql_host:your_mysql_port' MYSQL_PASSWORD='your_mysql_password' mvn spring-boot:run
+MYSQL_URL='your_mysql_host:your_mysql_port' MYSQL_USERNAME='your_mysql_username' MYSQL_PASSWORD='your_mysql_password' mvn test
+MYSQL_URL='your_mysql_host:your_mysql_port' MYSQL_USERNAME='your_mysql_username' MYSQL_PASSWORD='your_mysql_password' mvn spring-boot:run
 ```
 
 大文件回导的 multipart 限制默认是 200MB，可按实际导出文件体积调整：
