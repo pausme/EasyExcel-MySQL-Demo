@@ -2,6 +2,8 @@ package com.huang.demo.excel.service.impl;
 
 import com.alibaba.excel.EasyExcel;
 import com.huang.demo.excel.config.ExcelDemoProperties;
+import com.huang.demo.excel.domain.model.StudentImportResult;
+import com.huang.demo.excel.listener.StudentImportListener;
 import com.huang.demo.excel.model.StudentExcelRow;
 import com.huang.demo.excel.repository.StudentMapper;
 import com.huang.demo.excel.service.StudentService;
@@ -11,6 +13,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import javax.annotation.PostConstruct;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -86,6 +89,22 @@ public class StudentServiceImpl implements StudentService {
         }
         log.info("batch inserted students, rows={}, batches={}, batchSize={}, elapsedMs={}",
                 inserted, batchCount, batchSize, System.currentTimeMillis() - start);
+    }
+
+    @Override
+    public StudentImportResult importExcel(InputStream inputStream, int batchSize) {
+        long start = System.currentTimeMillis();
+        StudentImportResult result = transactionTemplate.execute(status -> {
+            StudentImportListener listener = new StudentImportListener(this, batchSize);
+            EasyExcel.read(inputStream, StudentExcelRow.class, listener).doReadAll();
+            return StudentImportResult.builder()
+                    .importedCount(listener.getImportedCount())
+                    .batchCount(listener.getBatchCount())
+                    .build();
+        });
+        log.info("import students finished, imported={}, batchCount={}, elapsedMs={}",
+                result.getImportedCount(), result.getBatchCount(), System.currentTimeMillis() - start);
+        return result;
     }
 
     @Override

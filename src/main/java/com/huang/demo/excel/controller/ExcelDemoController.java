@@ -1,12 +1,10 @@
 package com.huang.demo.excel.controller;
 
-import com.alibaba.excel.EasyExcel;
 import com.huang.demo.excel.api.dto.ExportTaskResponse;
 import com.huang.demo.excel.config.ExcelDemoProperties;
 import com.huang.demo.excel.domain.model.ExportTask;
 import com.huang.demo.excel.domain.model.ExportTaskStatus;
-import com.huang.demo.excel.listener.StudentImportListener;
-import com.huang.demo.excel.model.StudentExcelRow;
+import com.huang.demo.excel.domain.model.StudentImportResult;
 import com.huang.demo.excel.service.ExportTaskService;
 import com.huang.demo.excel.service.StudentService;
 import io.swagger.annotations.ApiOperation;
@@ -119,17 +117,16 @@ public class ExcelDemoController {
     @PostMapping(value = "/import", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public Map<String, Object> importExcel(@RequestParam("file") MultipartFile file) throws IOException {
         long start = System.currentTimeMillis();
-        StudentImportListener listener = new StudentImportListener(studentService, properties.getImportBatchSize());
-        EasyExcel.read(file.getInputStream(), StudentExcelRow.class, listener).doReadAll();
+        StudentImportResult importResult = studentService.importExcel(file.getInputStream(), properties.getImportBatchSize());
         long elapsed = System.currentTimeMillis() - start;
 
         Map<String, Object> result = new LinkedHashMap<String, Object>();
-        result.put("imported", listener.getImportedCount());
-        result.put("batchCount", listener.getBatchCount());
+        result.put("imported", importResult.getImportedCount());
+        result.put("batchCount", importResult.getBatchCount());
         result.put("count", studentService.count());
         result.put("elapsedMs", elapsed);
         log.info("import api finished, fileName={}, imported={}, batchCount={}, elapsedMs={}",
-                file.getOriginalFilename(), listener.getImportedCount(), listener.getBatchCount(), elapsed);
+                file.getOriginalFilename(), importResult.getImportedCount(), importResult.getBatchCount(), elapsed);
         return result;
     }
 
