@@ -17,7 +17,7 @@ EXCEL_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetm
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Excel import load test")
-    parser.add_argument("--base-url", required=True, help="Application URL, e.g. http://127.0.0.1:18088")
+    parser.add_argument("--base-url", required=True, help="Application URL, e.g. http://<host>:<port>")
     parser.add_argument("--file", required=True, dest="file_path", help="Path to the xlsx file")
     parser.add_argument("--concurrency", type=int, default=1, help="Concurrent upload requests, default: 1")
     parser.add_argument("--requests", type=int, default=1, help="Total requests per level, default: 1")

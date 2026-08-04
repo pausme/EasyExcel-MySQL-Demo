@@ -33,7 +33,7 @@ Windows PowerShell：
 
 ```powershell
 python .\scripts\import_load_test.py `
-  --base-url http://127.0.0.1:18088 `
+  --base-url 'http://<应用地址>:<应用端口>' `
   --file .\student-112000.xlsx `
   --concurrency 1 `
   --requests 1 `
@@ -44,7 +44,7 @@ Linux/macOS：
 
 ```bash
 python3 scripts/import_load_test.py \
-  --base-url http://127.0.0.1:18088 \
+  --base-url 'http://<应用地址>:<应用端口>' \
   --file ./student-112000.xlsx \
   --concurrency 1 \
   --requests 1 \
@@ -57,7 +57,7 @@ python3 scripts/import_load_test.py \
 
 ```bash
 python3 scripts/import_load_test.py \
-  --base-url http://127.0.0.1:18088 \
+  --base-url 'http://<应用地址>:<应用端口>' \
   --file ./student-112000.xlsx \
   --matrix 1,2,4 \
   --requests 4 \

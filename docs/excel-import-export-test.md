@@ -4,21 +4,22 @@
 
 验证学生数据的异步导出、MinIO 文件保存、签名下载地址、Excel 导入，以及重复学号更新行为。
 
-接口根路径：`http://<应用地址>:18088/api/excel`
+接口根路径：`http://<应用地址>:<应用端口>/api/excel`
 
 ## 2. 测试环境
 
 测试前设置数据库、Redis 和 MinIO 环境变量。当前 MinIO 桶默认配置为 `student-excel`；如果继续使用已创建的 `public` 桶，必须显式设置 `MINIO_BUCKET_NAME=public`。
 
 ```bash
-export MYSQL_URL='your-server-host:13306'
+export SERVER_PORT='<应用端口>'
+export MYSQL_URL='<数据库地址>:<数据库端口>'
 export MYSQL_USERNAME='<数据库用户名>'
 export MYSQL_PASSWORD='<数据库密码>'
-export REDIS_HOST='your-server-host'
-export REDIS_PORT='16379'
+export REDIS_HOST='<Redis地址>'
+export REDIS_PORT='<Redis端口>'
 export REDIS_DATABASE='0'
 export REDIS_PASSWORD='<Redis密码>'
-export MINIO_ENDPOINT='http://your-minio-host:7000'
+export MINIO_ENDPOINT='http://<MinIO地址>:<MinIO API端口>'
 export MINIO_ACCESS_KEY='<MinIO Access Key>'
 export MINIO_SECRET_KEY='<MinIO Secret Key>'
 export MINIO_BUCKET_NAME='public'
@@ -27,7 +28,7 @@ export MINIO_BUCKET_NAME='public'
 确认 MinIO API 健康检查正常：
 
 ```bash
-curl http://your-minio-host:7000/minio/health/live
+curl "$MINIO_ENDPOINT/minio/health/live"
 ```
 
 预期：返回 HTTP `200`。
@@ -50,14 +51,14 @@ curl http://your-minio-host:7000/minio/health/live
 1. 调用：
 
 ```bash
-curl -X POST http://<应用地址>:18088/api/excel/export
+curl -X POST "http://<应用地址>:<应用端口>/api/excel/export"
 ```
 
 2. 保存响应中的 `taskId`。
 3. 轮询：
 
 ```bash
-curl http://<应用地址>:18088/api/excel/export/<taskId>
+curl "http://<应用地址>:<应用端口>/api/excel/export/<taskId>"
 ```
 
 预期：状态按 `QUEUED -> RUNNING -> SUCCESS` 变化；成功时满足：
@@ -70,7 +71,7 @@ curl http://<应用地址>:18088/api/excel/export/<taskId>
 ### 4.2 下载文件
 
 ```bash
-curl -I http://<应用地址>:18088/api/excel/export/<taskId>/download
+curl -I "http://<应用地址>:<应用端口>/api/excel/export/<taskId>/download"
 ```
 
 预期：返回 HTTP `302`，并包含 `Location` 响应头。浏览器或 HTTP 客户端跟随该地址后应下载 xlsx 文件。
@@ -109,14 +110,14 @@ curl -I http://<应用地址>:18088/api/excel/export/<taskId>/download
 1. 下载模板：
 
 ```bash
-curl -OJ http://<应用地址>:18088/api/excel/template
+curl -OJ "http://<应用地址>:<应用端口>/api/excel/template"
 ```
 
 2. 填入一条此前不存在的学号，例如 `S900001`。
 3. 上传：
 
 ```bash
-curl -X POST http://<应用地址>:18088/api/excel/import \
+curl -X POST "http://<应用地址>:<应用端口>/api/excel/import" \
   -F "file=@student-import-template.xlsx"
 ```
 

@@ -95,20 +95,23 @@ docs/import-load-test.md          # 压测使用说明
 数据库、Redis、Hikari 和 MinIO 的连接信息必须显式配置，不在 `application.yml` 中写入服务器地址或数据库凭据。
 
 ```bash
+# 应用
+export SERVER_PORT='<应用端口>'
+
 # MySQL
-export MYSQL_URL='your_mysql_host:your_mysql_port'
+export MYSQL_URL='<数据库地址>:<数据库端口>'
 export MYSQL_USERNAME='your_mysql_username'
 export MYSQL_PASSWORD='your_mysql_password'
 export HIKARI_MAXIMUM_POOL_SIZE='10'
 
 # Redis
-export REDIS_HOST='your_redis_host'
-export REDIS_PORT='your_redis_port'
+export REDIS_HOST='<Redis地址>'
+export REDIS_PORT='<Redis端口>'
 export REDIS_DATABASE='your_redis_database'
 export REDIS_PASSWORD='your_redis_password'
 
 # MinIO
-export MINIO_ENDPOINT='http://your-minio-host:7000'
+export MINIO_ENDPOINT='http://<MinIO地址>:<MinIO API端口>'
 export MINIO_ACCESS_KEY='your_minio_access_key'
 export MINIO_SECRET_KEY='your_minio_secret_key'
 export MINIO_BUCKET_NAME='public'
@@ -138,12 +141,11 @@ mvn test
 mvn spring-boot:run
 ```
 
-Windows 使用项目指定环境时可以执行：
+Windows 或 macOS/Linux 在 Maven、JDK 已加入 PATH 后可以执行：
 
 ```powershell
-$env:JAVA_HOME='C:\Program Files\Java\jdk-1.8'
-& 'E:\Dependent\apache-maven-3.9.2\bin\mvn.cmd' test
-& 'E:\Dependent\apache-maven-3.9.2\bin\mvn.cmd' spring-boot:run
+mvn test
+mvn spring-boot:run
 ```
 
 大文件导入的 multipart 限制默认是 200MB：
@@ -229,7 +231,7 @@ export EXPORT_REJECTED_EXECUTION_POLICY='abort'
 
 ```bash
 python3 scripts/import_load_test.py \
-  --base-url http://127.0.0.1:18088 \
+  --base-url 'http://<应用地址>:<应用端口>' \
   --file ./student-112000.xlsx \
   --matrix 1,2,4 \
   --requests 4 \
