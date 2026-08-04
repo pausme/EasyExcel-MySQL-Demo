@@ -16,7 +16,8 @@ import org.springframework.boot.test.context.SpringBootTest;
         "app.minio.endpoint=http://127.0.0.1:9000",
         "app.minio.access-key=test",
         "app.minio.secret-key=test",
-        "app.minio.bucket-name=public"
+        "app.minio.bucket-name=public",
+        "app.minio.lifecycle-enabled=false"
 })
 class DemoApplicationTests {
 

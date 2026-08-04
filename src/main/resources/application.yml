@@ -15,8 +15,8 @@ spring:
     timeout: 3000ms
   servlet:
     multipart:
-      max-file-size: 100MB
-      max-request-size: 100MB
+      max-file-size: ${SPRING_SERVLET_MULTIPART_MAX_FILE_SIZE:200MB}
+      max-request-size: ${SPRING_SERVLET_MULTIPART_MAX_REQUEST_SIZE:200MB}
 
 mybatis:
   mapper-locations: classpath:mapper/*.xml
@@ -33,10 +33,17 @@ app:
     demo-seed-count: 12000
     export-temp-dir: ${EXPORT_TEMP_DIR:${java.io.tmpdir}/student-excel-export}
     export-file-retention-hours: 24
+    export-core-pool-size: ${EXPORT_CORE_POOL_SIZE:2}
+    export-max-pool-size: ${EXPORT_MAX_POOL_SIZE:2}
+    export-queue-capacity: ${EXPORT_QUEUE_CAPACITY:10}
+    export-await-termination-seconds: ${EXPORT_AWAIT_TERMINATION_SECONDS:30}
+    export-rejected-execution-policy: ${EXPORT_REJECTED_EXECUTION_POLICY:abort}
   minio:
     endpoint: ${MINIO_ENDPOINT}
     access-key: ${MINIO_ACCESS_KEY}
     secret-key: ${MINIO_SECRET_KEY}
-    bucket-name: ${MINIO_BUCKET_NAME:public}
+    bucket-name: ${MINIO_BUCKET_NAME:student-excel}
     export-object-prefix: ${MINIO_EXPORT_OBJECT_PREFIX:excel/student}
     download-url-expire-minutes: ${MINIO_DOWNLOAD_URL_EXPIRE_MINUTES:30}
+    lifecycle-enabled: ${MINIO_LIFECYCLE_ENABLED:true}
+    lifecycle-expire-days: ${MINIO_LIFECYCLE_EXPIRE_DAYS:1}

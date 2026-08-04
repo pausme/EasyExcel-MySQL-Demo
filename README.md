@@ -44,11 +44,22 @@ export REDIS_PORT='your_redis_port'
 export MINIO_ENDPOINT='http://106.14.81.111:7000'
 export MINIO_ACCESS_KEY='your_minio_access_key'
 export MINIO_SECRET_KEY='your_minio_secret_key'
-export MINIO_BUCKET_NAME='public'
+export MINIO_BUCKET_NAME='student-excel'
 ```
 
-下载接口会重定向到有效期为 30 分钟的 MinIO 签名地址。即使当前 Bucket 名称为 `public`，
-也建议在生产环境中将 Bucket 设为私有。
+建议将 Bucket 设为私有。下载接口会返回 302，重定向到有效期为 30 分钟的 MinIO 签名地址，
+避免大文件下载占用应用服务器带宽和 Tomcat 工作线程。
+
+导出对象默认写入 `excel/student/` 前缀。应用启动时会尽力为该前缀配置 MinIO 生命周期规则，
+默认 1 天后自动删除导出对象：
+
+```bash
+export MINIO_LIFECYCLE_ENABLED='true'
+export MINIO_LIFECYCLE_EXPIRE_DAYS='1'
+```
+
+如果 Bucket 已有其他生命周期规则，应用只会替换规则 ID 为 `student-excel-export-retention` 的规则。
+生产环境也可以直接在 MinIO 控制台维护生命周期规则。
 
 ## 数据库脚本
 
@@ -70,6 +81,13 @@ MYSQL_URL='your_mysql_host:your_mysql_port' MYSQL_PASSWORD='your_mysql_password'
 MYSQL_URL='your_mysql_host:your_mysql_port' MYSQL_PASSWORD='your_mysql_password' mvn spring-boot:run
 ```
 
+大文件回导的 multipart 限制默认是 200MB，可按实际导出文件体积调整：
+
+```bash
+export SPRING_SERVLET_MULTIPART_MAX_FILE_SIZE='200MB'
+export SPRING_SERVLET_MULTIPART_MAX_REQUEST_SIZE='200MB'
+```
+
 ## 接口
 
 ```text
@@ -87,8 +105,21 @@ POST /api/excel/seed/{count}
 单 Sheet 最多写入 1048575 条数据，超过时导出任务会失败并提示改用 CSV 或缩小导出范围。
 文件会先生成到 `app.excel.export-temp-dir` 配置的本地临时目录，再上传到 MinIO。
 上传成功后会删除本地临时文件，对象路径前缀由 `MINIO_EXPORT_OBJECT_PREFIX` 配置。
-请在 MinIO 为该前缀配置生命周期规则，自动清理超过保留期的导出文件。
+MinIO 对象清理由 Bucket 生命周期规则负责，Redis 任务状态过期不会删除已经上传的对象。
 任务状态 Redis key 前缀为 `excel:student:export:`，过期时间与 `app.excel.export-file-retention-hours` 一致。
+
+异步导出线程池可通过环境变量调整：
+
+```bash
+export EXPORT_CORE_POOL_SIZE='2'
+export EXPORT_MAX_POOL_SIZE='2'
+export EXPORT_QUEUE_CAPACITY='10'
+export EXPORT_AWAIT_TERMINATION_SECONDS='30'
+export EXPORT_REJECTED_EXECUTION_POLICY='abort'
+```
+
+拒绝策略支持 `abort` 和 `caller-runs`。默认 `abort` 会让提交失败并把任务标记为失败；
+`caller-runs` 会让提交请求线程执行导出任务，通常只适合本地调试。
 
 导入使用 `student_no` 作为唯一业务键，重复导入同一个学生时会更新已有数据。
 如果旧表中已经存在重复 `student_no`，需要先清理重复数据后再启动应用创建唯一索引。

@@ -23,7 +23,6 @@ import org.springframework.stereotype.Service;
 
 import javax.annotation.PostConstruct;
 import java.io.IOException;
-import java.io.InputStream;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -130,20 +129,6 @@ public class ExportTaskServiceImpl implements ExportTaskService {
             return Optional.of(minioObjectStorageService.createDownloadUrl(task.getObjectKey(), task.getFileName()));
         } catch (RuntimeException ex) {
             log.warn("create minio download url failed, taskId={}, objectKey={}", task.getTaskId(), task.getObjectKey(), ex);
-            return Optional.empty();
-        }
-    }
-
-    @Override
-    public Optional<InputStream> openDownloadStream(ExportTask task) {
-        if (task.getStatus() != ExportTaskStatus.SUCCESS || task.getObjectKey() == null) {
-            return Optional.empty();
-        }
-        try {
-            return Optional.of(minioObjectStorageService.downloadExcel(task.getObjectKey()));
-        } catch (RuntimeException ex) {
-            log.warn("download export file from MinIO failed, taskId={}, objectKey={}",
-                    task.getTaskId(), task.getObjectKey(), ex);
             return Optional.empty();
         }
     }

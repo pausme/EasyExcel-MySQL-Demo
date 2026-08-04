@@ -25,6 +25,16 @@ public class ExcelDemoProperties {
 
     private int exportFileRetentionHours = 24;
 
+    private int exportCorePoolSize = 2;
+
+    private int exportMaxPoolSize = 2;
+
+    private int exportQueueCapacity = 10;
+
+    private int exportAwaitTerminationSeconds = 30;
+
+    private String exportRejectedExecutionPolicy = "abort";
+
     private boolean initEnabled = true;
 
 }

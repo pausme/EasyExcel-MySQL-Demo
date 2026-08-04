@@ -22,4 +22,8 @@ public class MinioProperties {
     private String exportObjectPrefix = "excel/student";
 
     private int downloadUrlExpireMinutes = 30;
+
+    private boolean lifecycleEnabled = true;
+
+    private int lifecycleExpireDays = 1;
 }

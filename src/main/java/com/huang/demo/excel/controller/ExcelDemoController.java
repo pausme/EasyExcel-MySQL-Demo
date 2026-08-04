@@ -12,7 +12,9 @@ import com.huang.demo.excel.service.StudentService;
 import io.swagger.annotations.ApiOperation;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -24,7 +26,7 @@ import org.springframework.web.multipart.MultipartFile;
 
 import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
-import java.io.InputStream;
+import java.net.URI;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
@@ -87,8 +89,7 @@ public class ExcelDemoController {
 
     @ApiOperation("下载已完成的学生数据导出文件")
     @GetMapping("/export/{taskId}/download")
-    public void downloadExport(@PathVariable("taskId") String taskId,
-                               HttpServletResponse response) throws IOException {
+    public ResponseEntity<Void> downloadExport(@PathVariable("taskId") String taskId) {
         ExportTask task = exportTaskService.findTask(taskId)
                 .orElseThrow(() -> new ResponseStatusException(
                         org.springframework.http.HttpStatus.NOT_FOUND, "导出任务不存在"));
@@ -97,17 +98,12 @@ public class ExcelDemoController {
                     org.springframework.http.HttpStatus.CONFLICT, "导出任务尚未完成");
         }
 
-        InputStream minioInputStream = exportTaskService.openDownloadStream(task)
-                .orElse(null);
-        if (minioInputStream != null) {
-            setExcelDownloadHeaders(response, task.getFileName());
-            try (InputStream inputStream = minioInputStream) {
-                org.springframework.util.StreamUtils.copy(inputStream, response.getOutputStream());
-            }
-            return;
-        }
-        throw new ResponseStatusException(
-                org.springframework.http.HttpStatus.NOT_FOUND, "导出文件不存在或 MinIO 无法读取");
+        String downloadUrl = exportTaskService.createDownloadUrl(task)
+                .orElseThrow(() -> new ResponseStatusException(
+                        org.springframework.http.HttpStatus.NOT_FOUND, "导出文件不存在"));
+        return ResponseEntity.status(HttpStatus.FOUND)
+                .location(URI.create(downloadUrl))
+                .build();
     }
 
     @ApiOperation("下载学生导入模板")
