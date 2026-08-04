@@ -1,6 +1,71 @@
 # EasyExcel MySQL Demo
 
-基于 Spring Boot、EasyExcel、MyBatis 的 Excel 导入导出演示项目。
+基于 Spring Boot、EasyExcel、MyBatis、MySQL、Redis 和 MinIO 的 Excel 导入导出演示项目。
+重点演示大文件场景下的流式解析、批量写库、异步导出和对象存储。
+
+## 功能概览
+
+- Excel 导入：流式读取 Excel，分批放入有界队列，由多个 worker 批量写入 MySQL。
+- Excel 导出：异步提交任务，使用游标分页读取数据库，生成单 Sheet Excel 后上传 MinIO。
+- 文件下载：应用只返回 MinIO 签名地址，不经过应用服务器转发大文件内容。
+- 数据更新：使用 `student_no` 作为唯一业务键，重复导入时更新已有记录。
+- 压测工具：提供 Python 标准库脚本，支持并发矩阵和吞吐量统计。
+
+## 实现思路
+
+### 导入流程
+
+```text
+HTTP 上传 Excel
+        |
+        v
+EasyExcel 流式解析
+        |
+        v
+每 2000 行组成一个批次 -> 有界 BlockingQueue
+        |
+        v
+多个导入 worker 消费批次
+        |
+        v
+事务批量 upsert 到 student_record
+```
+
+导入不会把整份 Excel 加载到内存中。解析线程只保留当前批次，队列容量有限，队列满时解析会产生背压。
+每个批次使用独立事务，SQL 使用 `INSERT ... ON DUPLICATE KEY UPDATE`，因此适合吞吐优先的批量回导。
+
+导入 worker 的数量、导入任务并发数和数据库连接池相互约束：
+
+```text
+IMPORT_WORKER_COUNT * IMPORT_MAX_CONCURRENT_TASKS <= HIKARI_MAXIMUM_POOL_SIZE
+```
+
+默认只允许一个导入任务执行。导入失败时会清空待处理队列、取消 worker，并等待已经启动的 worker 收尾。
+数据库瞬时异常会按配置进行有限重试，批次写入前可以按 `student_no` 排序以降低死锁概率。
+
+### 导出流程
+
+```text
+提交导出请求
+        |
+        v
+Redis 保存任务状态，线程池异步执行
+        |
+        v
+记录当前 MAX(id)，按 id 游标分页读取
+        |
+        v
+EasyExcel 写入单 Sheet 临时文件
+        |
+        v
+上传 MinIO，删除本地临时文件
+        |
+        v
+查询任务状态并返回 MinIO 签名下载地址
+```
+
+导出使用 `id > lastId AND id <= maxId` 的游标条件，避免大 offset 分页越来越慢，且保证一次导出有固定的数据边界。
+为了让导出的文件可以直接作为导入文件使用，当前导出只生成一个 Sheet；超过 Excel 单 Sheet 行数限制时任务失败。
 
 ## 项目结构
 
@@ -8,111 +73,123 @@
 src/main/java/com/huang/demo
 ├── DemoApplication.java
 └── excel
-    ├── config        # 导入导出批次、初始化数据量配置
-    ├── controller    # HTTP 接口
-    ├── listener      # EasyExcel 导入监听器
+    ├── config        # 配置属性和导入导出线程池
+    ├── controller    # Excel HTTP 接口
+    ├── listener      # EasyExcel 流式导入监听器
     ├── model         # Excel 行模型
-    ├── repository    # MyBatis Mapper 接口
-    └── service       # 业务编排和计时日志
-```
+    ├── domain/model  # 领域模型和任务结果
+    ├── repository    # MyBatis Mapper
+    └── service       # 导入导出业务编排
 
-MyBatis XML 位于：
+src/main/resources
+├── mapper            # MyBatis XML
+└── db/mysql          # 数据库初始化脚本
 
-```text
-src/main/resources/mapper/StudentMapper.xml
+scripts/import_load_test.py       # 导入压测脚本
+docs/excel-import-export-test.md  # 功能测试文档
+docs/import-load-test.md          # 压测使用说明
 ```
 
 ## 环境变量
 
-数据库密码不写入配置文件，启动前需要设置：
+数据库、Redis、Hikari 和 MinIO 的连接信息必须显式配置，不在 `application.yml` 中写入服务器地址或数据库凭据。
 
 ```bash
+# MySQL
 export MYSQL_URL='your_mysql_host:your_mysql_port'
 export MYSQL_USERNAME='your_mysql_username'
 export MYSQL_PASSWORD='your_mysql_password'
 export HIKARI_MAXIMUM_POOL_SIZE='10'
-```
 
-导出任务状态存储在 Redis，启动前需要设置连接信息：
-
-```bash
+# Redis
 export REDIS_HOST='your_redis_host'
 export REDIS_PORT='your_redis_port'
 export REDIS_DATABASE='your_redis_database'
 export REDIS_PASSWORD='your_redis_password'
-```
 
-导出文件上传到 MinIO，启动前还需要设置：
-
-```bash
+# MinIO
 export MINIO_ENDPOINT='http://your-minio-host:7000'
 export MINIO_ACCESS_KEY='your_minio_access_key'
 export MINIO_SECRET_KEY='your_minio_secret_key'
-export MINIO_BUCKET_NAME='student-excel'
+export MINIO_BUCKET_NAME='public'
 ```
 
-建议将 Bucket 设为私有。下载接口会返回 302，重定向到有效期为 30 分钟的 MinIO 签名地址，
-避免大文件下载占用应用服务器带宽和 Tomcat 工作线程。
+建议将 MinIO Bucket 设置为私有。导出下载接口返回有效期默认 30 分钟的签名地址，避免大文件流量经过应用服务器。
+导出对象默认写入 `excel/student/` 前缀，生命周期规则默认在 1 天后清理对象。
 
-导出对象默认写入 `excel/student/` 前缀。应用启动时会尽力为该前缀配置 MinIO 生命周期规则，
-默认 1 天后自动删除导出对象：
+## 数据库初始化
 
-```bash
-export MINIO_LIFECYCLE_ENABLED='true'
-export MINIO_LIFECYCLE_EXPIRE_DAYS='1'
-```
-
-如果 Bucket 已有其他生命周期规则，应用只会替换规则 ID 为 `student-excel-export-retention` 的规则。
-生产环境也可以直接在 MinIO 控制台维护生命周期规则。
-
-## 数据库脚本
-
-脚本目录：
+脚本位于 `src/main/resources/db/mysql`：
 
 ```text
-src/main/resources/db/mysql
-├── create_database.sql
-├── create_tables.sql
-└── schema.sql
+create_database.sql  # 创建 demo 数据库
+create_tables.sql    # 创建 student_record 表
+schema.sql            # 完整结构脚本
 ```
 
-如果 SQL 控制台不能稳定执行多语句脚本，推荐先执行 `create_database.sql`，选中 `demo` schema 后再执行 `create_tables.sql`。
+如果 SQL 客户端不能稳定执行多语句脚本，建议先执行 `create_database.sql`，再选择 `demo` 数据库执行 `create_tables.sql`。
 
 ## 启动和测试
 
+使用 Maven：
+
 ```bash
-MYSQL_URL='your_mysql_host:your_mysql_port' MYSQL_USERNAME='your_mysql_username' MYSQL_PASSWORD='your_mysql_password' HIKARI_MAXIMUM_POOL_SIZE='10' mvn test
-MYSQL_URL='your_mysql_host:your_mysql_port' MYSQL_USERNAME='your_mysql_username' MYSQL_PASSWORD='your_mysql_password' HIKARI_MAXIMUM_POOL_SIZE='10' mvn spring-boot:run
+mvn test
+mvn spring-boot:run
 ```
 
-大文件回导的 multipart 限制默认是 200MB，可按实际导出文件体积调整：
+Windows 使用项目指定环境时可以执行：
+
+```powershell
+$env:JAVA_HOME='C:\Program Files\Java\jdk-1.8'
+& 'E:\Dependent\apache-maven-3.9.2\bin\mvn.cmd' test
+& 'E:\Dependent\apache-maven-3.9.2\bin\mvn.cmd' spring-boot:run
+```
+
+大文件导入的 multipart 限制默认是 200MB：
 
 ```bash
 export SPRING_SERVLET_MULTIPART_MAX_FILE_SIZE='200MB'
 export SPRING_SERVLET_MULTIPART_MAX_REQUEST_SIZE='200MB'
 ```
 
-## 接口
+## HTTP 接口
 
-```text
-GET  /api/excel/count
-POST /api/excel/export                 提交异步导出任务
-GET  /api/excel/export/{taskId}        查询导出任务状态
-GET  /api/excel/export/{taskId}/download
-GET  /api/excel/template               下载导入模板
-POST /api/excel/import                  multipart file 字段名: file
-POST /api/excel/seed/{count}
+基础路径：`/api/excel`
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/count` | 查询学生总数 |
+| POST | `/seed/{count}` | 生成演示数据 |
+| POST | `/export` | 提交异步导出任务 |
+| GET | `/export/{taskId}` | 查询导出任务状态 |
+| GET | `/export/{taskId}/download` | 获取 302 MinIO 签名下载地址 |
+| GET | `/template` | 下载导入模板 |
+| POST | `/import` | 上传 Excel，字段名为 `file` |
+
+导入成功响应包含：`imported`、`batchCount`、`count` 和 `elapsedMs`。
+导出接口先返回任务 ID，任务完成后再调用状态接口和下载接口。
+
+## 关键配置
+
+导入配置通过 `app.excel` 绑定，常用环境变量如下：
+
+```bash
+export IMPORT_WORKER_COUNT='4'
+export IMPORT_MAX_CONCURRENT_TASKS='1'
+export IMPORT_QUEUE_CAPACITY='20'
+export IMPORT_TRANSACTION_TIMEOUT_SECONDS='60'
+export IMPORT_MAX_RETRY_TIMES='3'
+export IMPORT_RETRY_BACKOFF_MILLIS='200'
+export IMPORT_PROGRESS_LOG_INTERVAL='50'
+export IMPORT_BATCH_SORT_ENABLED='true'
 ```
 
-导出任务会在后台使用 `id` 游标分页，导出开始时记录 `MAX(id)` 作为边界。
-为了保证导出的 Excel 可以直接作为导入文件，导出只生成单个 Sheet；
-单 Sheet 最多写入 1048575 条数据，超过时导出任务会失败并提示改用 CSV 或缩小导出范围。
-文件会先生成到 `app.excel.export-temp-dir` 配置的本地临时目录，再上传到 MinIO。
-上传成功后会删除本地临时文件，对象路径前缀由 `MINIO_EXPORT_OBJECT_PREFIX` 配置。
-MinIO 对象清理由 Bucket 生命周期规则负责，Redis 任务状态过期不会删除已经上传的对象。
-任务状态 Redis key 前缀为 `excel:student:export:`，过期时间与 `app.excel.export-file-retention-hours` 一致。
+`IMPORT_AWAIT_TERMINATION_SECONDS` 只控制应用停机时等待线程池退出。
+`IMPORT_WORKER_FINISH_WAIT_SECONDS` 控制接口等待 worker 收尾，默认 `0` 表示不主动超时。
+如果设置为正数，应用启动时会校验它覆盖单批事务和重试时间窗口。
 
-异步导出线程池可通过环境变量调整：
+导出线程池可以通过以下变量调整：
 
 ```bash
 export EXPORT_CORE_POOL_SIZE='2'
@@ -122,55 +199,32 @@ export EXPORT_AWAIT_TERMINATION_SECONDS='30'
 export EXPORT_REJECTED_EXECUTION_POLICY='abort'
 ```
 
-拒绝策略支持 `abort` 和 `caller-runs`。默认 `abort` 会让提交失败并把任务标记为失败；
-`caller-runs` 会让提交请求线程执行导出任务，通常只适合本地调试。
+## 一致性和容量边界
 
-导入使用 `student_no` 作为唯一业务键，重复导入同一个学生时会更新已有数据。
-如果旧表中已经存在重复 `student_no`，需要先清理重复数据后再启动应用创建唯一索引。
-导入接口采用生产者/消费者模型：EasyExcel 解析时每累计 `app.excel.import-batch-size`
-行放入阻塞队列，多个写库线程并发消费，每个批次使用独立事务提交。该模式优先提升吞吐，
-文件后半段解析或写库失败时，已经提交成功的批次不会回滚。
-如果同一个 `student_no` 在不同批次重复出现，最终值取决于批次提交顺序；生产环境应在导入前校验文件内唯一性。
+- 导入是批次独立事务，后续批次失败时，已经提交的前序批次不会自动回滚。
+- 如果需要全量原子性、失败行明细和断点续传，应使用“导入任务表 + 暂存表 + 校验后合并”。
+- 同一个 `student_no` 出现在不同导入批次时，最终值取决于批次提交顺序，生产环境建议先校验文件内重复数据。
+- 当前导出只使用一个 Sheet，单 Sheet 数据行上限为 `1048575`。
+- MinIO 对象由 Bucket 生命周期规则清理，Redis 任务状态过期不会自动删除已经上传的对象。
+- 导入内存主要由当前批次、有限队列和并发任务数量决定；增加 worker 或并发任务会增加数据库连接和内存压力。
 
-导入线程池可通过环境变量调整：
+## 性能基线和压测
+
+历史基线：
+
+- 100 万条导入：约 `35272 ms`，`batchCount=500`；
+- 100 万条导出：约 `59151 ms`。
+
+运行压测脚本：
 
 ```bash
-export IMPORT_WORKER_COUNT='4'
-export IMPORT_MAX_CONCURRENT_TASKS='1'
-export IMPORT_QUEUE_CAPACITY='20'
-export IMPORT_EXECUTOR_QUEUE_CAPACITY='20'
-export IMPORT_AWAIT_TERMINATION_SECONDS='30'
-export IMPORT_WORKER_FINISH_WAIT_SECONDS='0'
-export IMPORT_TRANSACTION_TIMEOUT_SECONDS='60'
-export IMPORT_MAX_RETRY_TIMES='3'
-export IMPORT_RETRY_BACKOFF_MILLIS='200'
-export IMPORT_PROGRESS_LOG_INTERVAL='50'
-export IMPORT_BATCH_SORT_ENABLED='true'
+python3 scripts/import_load_test.py \
+  --base-url http://127.0.0.1:18088 \
+  --file ./student-112000.xlsx \
+  --matrix 1,2,4 \
+  --requests 4 \
+  --output ./import-load-matrix.json
 ```
 
-默认同时只允许 1 个导入任务执行，避免多个上传请求叠加出过多写库 worker。
-如果允许多个导入任务并发，导入线程池大小会按 `IMPORT_WORKER_COUNT * IMPORT_MAX_CONCURRENT_TASKS` 创建。
-启动时会校验导入线程总数不能超过 `HIKARI_MAXIMUM_POOL_SIZE`，否则应用直接启动失败，避免 worker 大量阻塞等待数据库连接。
-导入失败时会清空待写队列、取消 worker，并等待已启动 worker 结束后再向接口返回。
-`IMPORT_AWAIT_TERMINATION_SECONDS` 只用于应用停机时等待导入线程池退出。
-`IMPORT_WORKER_FINISH_WAIT_SECONDS` 用于接口请求内等待 worker 收尾，默认 `0` 表示不主动超时，避免请求先失败但旧 worker 仍继续写库；如果设置为正数，启动时会校验它不能小于单批事务和重试窗口。
-批次写库事务默认 60 秒超时，可以通过 `IMPORT_TRANSACTION_TIMEOUT_SECONDS` 调整，该值必须大于 0。
-
-并发写入 `INSERT ... ON DUPLICATE KEY UPDATE` 时，MySQL 可能因为唯一索引锁竞争产生瞬时死锁。
-导入批次会按 `student_no` 排序后写入，并对死锁等瞬时数据库异常进行有限重试。
-排序可以通过 `IMPORT_BATCH_SORT_ENABLED=false` 关闭；关闭后少一点 CPU 开销，但死锁概率可能上升。
-进度日志默认每 50 批输出一次，可以通过 `IMPORT_PROGRESS_LOG_INTERVAL` 调整。
-
-百万级生产导入如果需要全量原子性、失败行明细、断点续传和人工修正，建议改为
-“导入任务表 + 暂存表 + 校验通过后合并”的方案。
-
-## 性能记录
-
-2026-08-04 实测：
-
-- 100 万条数据导入：`35272 ms`
-- `batchCount=500`
-- 100 万条数据导出：`59151 ms`
-
-当前导入采用 `2000` 行一批、阻塞队列、多 worker 独立事务写库的方式，性能会随
-`IMPORT_WORKER_COUNT`、`IMPORT_QUEUE_CAPACITY`、`IMPORT_MAX_RETRY_TIMES` 和数据库状态变化。
+脚本使用 Python 标准库流式上传，输出成功率、总耗时、请求吞吐和行吞吐。
+完整说明见：[docs/import-load-test.md](docs/import-load-test.md)。功能测试见：[docs/excel-import-export-test.md](docs/excel-import-export-test.md)。
