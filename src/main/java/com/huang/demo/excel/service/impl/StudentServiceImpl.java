@@ -30,6 +30,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -117,7 +118,7 @@ public class StudentServiceImpl implements StudentService {
             AtomicReference<Throwable> workerFailure = new AtomicReference<Throwable>();
             CountDownLatch workerLatch = new CountDownLatch(workerCount);
 
-            List<Future<?>> workerFutures = startImportWorkers(
+            List<ImportWorkerHandle> workerHandles = startImportWorkers(
                     workerCount, importQueue, importedCount, importedBatchCount, workerFailure, workerLatch);
             StudentImportListener listener = new StudentImportListener(
                     importBatchSize, importQueue, workerFailure, getImportProgressLogInterval());
@@ -125,10 +126,10 @@ public class StudentServiceImpl implements StudentService {
                 EasyExcel.read(inputStream, StudentExcelRow.class, listener).doReadAll();
                 stopImportWorkers(importQueue, workerCount);
                 awaitImportWorkers(workerLatch);
-                awaitWorkerFutures(workerFutures);
+                awaitWorkerFutures(workerHandles);
                 throwIfImportWorkerFailed(workerFailure);
             } catch (RuntimeException ex) {
-                cleanupFailedImportWorkers(importQueue, workerCount, workerFutures, workerLatch);
+                cleanupFailedImportWorkers(importQueue, workerCount, workerHandles, workerLatch);
                 throw ex;
             }
 
@@ -215,8 +216,7 @@ public class StudentServiceImpl implements StudentService {
                               BlockingQueue<List<StudentExcelRow>> importQueue,
                               AtomicInteger importedCount,
                               AtomicInteger importedBatchCount,
-                              AtomicReference<Throwable> workerFailure,
-                              CountDownLatch workerLatch) {
+                              AtomicReference<Throwable> workerFailure) {
         try {
             while (true) {
                 List<StudentExcelRow> batch = importQueue.take();
@@ -243,33 +243,39 @@ public class StudentServiceImpl implements StudentService {
         } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
             workerFailure.compareAndSet(null, ex);
-        } finally {
-            workerLatch.countDown();
         }
     }
 
-    private List<Future<?>> startImportWorkers(int workerCount,
-                                               BlockingQueue<List<StudentExcelRow>> importQueue,
-                                               AtomicInteger importedCount,
-                                               AtomicInteger importedBatchCount,
-                                               AtomicReference<Throwable> workerFailure,
-                                               CountDownLatch workerLatch) {
-        List<Future<?>> futures = new ArrayList<Future<?>>(workerCount);
-        int submittedCount = 0;
+    private List<ImportWorkerHandle> startImportWorkers(int workerCount,
+                                                        BlockingQueue<List<StudentExcelRow>> importQueue,
+                                                        AtomicInteger importedCount,
+                                                        AtomicInteger importedBatchCount,
+                                                        AtomicReference<Throwable> workerFailure,
+                                                        CountDownLatch workerLatch) {
+        List<ImportWorkerHandle> workerHandles = new ArrayList<ImportWorkerHandle>(workerCount);
         try {
             for (int workerIndex = 1; workerIndex <= workerCount; workerIndex++) {
                 final int workerNo = workerIndex;
-                futures.add(importWorkerExecutor.submit(() -> importWorker(workerNo, importQueue, importedCount,
-                        importedBatchCount, workerFailure, workerLatch)));
-                submittedCount++;
+                ImportWorkerHandle workerHandle = new ImportWorkerHandle(workerLatch);
+                Future<?> future = importWorkerExecutor.submit(() -> {
+                    workerHandle.markStarted();
+                    try {
+                        importWorker(workerNo, importQueue, importedCount, importedBatchCount, workerFailure);
+                    } finally {
+                        workerHandle.markFinished();
+                    }
+                });
+                workerHandle.setFuture(future);
+                workerHandles.add(workerHandle);
             }
-            return futures;
+            return workerHandles;
         } catch (RuntimeException ex) {
-            cancelWorkerFutures(futures);
+            int submittedCount = workerHandles.size();
+            stopImportWorkers(importQueue, submittedCount);
+            cancelWorkerFutures(workerHandles);
             for (int i = submittedCount; i < workerCount; i++) {
                 workerLatch.countDown();
             }
-            stopImportWorkers(importQueue, submittedCount);
             awaitImportWorkers(workerLatch);
             throw new IllegalStateException("导入写库线程池繁忙，请稍后重试", ex);
         }
@@ -288,7 +294,11 @@ public class StudentServiceImpl implements StudentService {
 
     private void awaitImportWorkers(CountDownLatch workerLatch) {
         try {
-            workerLatch.await();
+            boolean finished = workerLatch.await(
+                    Math.max(1, properties.getImportAwaitTerminationSeconds()), TimeUnit.SECONDS);
+            if (!finished) {
+                throw new IllegalStateException("等待导入写库线程结束超时");
+            }
         } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
             throw new IllegalStateException("等待导入写库线程结束失败", ex);
@@ -304,24 +314,24 @@ public class StudentServiceImpl implements StudentService {
 
     private void cleanupFailedImportWorkers(BlockingQueue<List<StudentExcelRow>> importQueue,
                                             int workerCount,
-                                            List<Future<?>> workerFutures,
+                                            List<ImportWorkerHandle> workerHandles,
                                             CountDownLatch workerLatch) {
         importQueue.clear();
-        cancelWorkerFutures(workerFutures);
         stopImportWorkers(importQueue, workerCount);
+        cancelWorkerFutures(workerHandles);
         awaitImportWorkers(workerLatch);
     }
 
-    private void cancelWorkerFutures(List<Future<?>> workerFutures) {
-        for (Future<?> future : workerFutures) {
-            future.cancel(true);
+    private void cancelWorkerFutures(List<ImportWorkerHandle> workerHandles) {
+        for (ImportWorkerHandle workerHandle : workerHandles) {
+            workerHandle.cancel();
         }
     }
 
-    private void awaitWorkerFutures(List<Future<?>> workerFutures) {
-        for (Future<?> future : workerFutures) {
+    private void awaitWorkerFutures(List<ImportWorkerHandle> workerHandles) {
+        for (ImportWorkerHandle workerHandle : workerHandles) {
             try {
-                future.get();
+                workerHandle.getFuture().get();
             } catch (InterruptedException ex) {
                 Thread.currentThread().interrupt();
                 throw new IllegalStateException("等待导入写库线程结束失败", ex);
@@ -336,6 +346,47 @@ public class StudentServiceImpl implements StudentService {
             return;
         }
         throw new IllegalStateException("当前已有导入任务执行中，请稍后重试");
+    }
+
+    private static class ImportWorkerHandle {
+
+        private final CountDownLatch workerLatch;
+        private final AtomicBoolean started = new AtomicBoolean(false);
+        private final AtomicBoolean finished = new AtomicBoolean(false);
+        private Future<?> future;
+
+        private ImportWorkerHandle(CountDownLatch workerLatch) {
+            this.workerLatch = workerLatch;
+        }
+
+        private void setFuture(Future<?> future) {
+            this.future = future;
+        }
+
+        private Future<?> getFuture() {
+            return future;
+        }
+
+        private void markStarted() {
+            started.set(true);
+        }
+
+        private void markFinished() {
+            if (finished.compareAndSet(false, true)) {
+                workerLatch.countDown();
+            }
+        }
+
+        private void cancel() {
+            if (future == null) {
+                markFinished();
+                return;
+            }
+            boolean cancelled = future.cancel(true);
+            if (cancelled && !started.get()) {
+                markFinished();
+            }
+        }
     }
 
     private int saveBatchInTransactionWithRetry(List<StudentExcelRow> rows, String scene) {

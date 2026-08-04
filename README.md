@@ -144,10 +144,12 @@ export IMPORT_MAX_RETRY_TIMES='3'
 export IMPORT_RETRY_BACKOFF_MILLIS='200'
 export IMPORT_PROGRESS_LOG_INTERVAL='50'
 export IMPORT_BATCH_SORT_ENABLED='true'
+export HIKARI_MAXIMUM_POOL_SIZE='10'
 ```
 
 默认同时只允许 1 个导入任务执行，避免多个上传请求叠加出过多写库 worker。
 如果允许多个导入任务并发，导入线程池大小会按 `IMPORT_WORKER_COUNT * IMPORT_MAX_CONCURRENT_TASKS` 创建。
+启动时会校验导入线程总数不能超过 `HIKARI_MAXIMUM_POOL_SIZE`，否则应用直接启动失败，避免 worker 大量阻塞等待数据库连接。
 导入失败时会清空待写队列、取消 worker，并等待已启动 worker 结束后再向接口返回。
 批次写库事务默认 60 秒超时，可以通过 `IMPORT_TRANSACTION_TIMEOUT_SECONDS` 调整。
 

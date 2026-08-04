@@ -2,6 +2,7 @@ package com.huang.demo.excel.config;
 
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.env.Environment;
 import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
@@ -13,10 +14,14 @@ import java.util.concurrent.ThreadPoolExecutor;
 @EnableScheduling
 public class AsyncExportConfig {
 
-    private final ExcelDemoProperties properties;
+    private static final int DEFAULT_HIKARI_MAXIMUM_POOL_SIZE = 10;
 
-    public AsyncExportConfig(ExcelDemoProperties properties) {
+    private final ExcelDemoProperties properties;
+    private final Environment environment;
+
+    public AsyncExportConfig(ExcelDemoProperties properties, Environment environment) {
         this.properties = properties;
+        this.environment = environment;
     }
 
     @Bean("exportTaskExecutor")
@@ -41,6 +46,7 @@ public class AsyncExportConfig {
         int workerCount = Math.max(1, properties.getImportWorkerCount());
         int maxConcurrentTasks = Math.max(1, properties.getImportMaxConcurrentTasks());
         int totalWorkerCapacity = workerCount * maxConcurrentTasks;
+        validateImportWorkerCapacity(totalWorkerCapacity);
         executor.setCorePoolSize(totalWorkerCapacity);
         executor.setMaxPoolSize(totalWorkerCapacity);
         executor.setQueueCapacity(Math.max(0, properties.getImportExecutorQueueCapacity()));
@@ -50,6 +56,27 @@ public class AsyncExportConfig {
         executor.setAwaitTerminationSeconds(Math.max(1, properties.getImportAwaitTerminationSeconds()));
         executor.initialize();
         return executor;
+    }
+
+    private void validateImportWorkerCapacity(int totalWorkerCapacity) {
+        int maximumPoolSize = getDataSourceMaximumPoolSize();
+        if (totalWorkerCapacity > maximumPoolSize) {
+            throw new IllegalStateException(
+                    "导入写库线程总数不能超过数据库连接池最大连接数，totalWorkerCapacity="
+                            + totalWorkerCapacity + ", hikariMaximumPoolSize=" + maximumPoolSize);
+        }
+    }
+
+    private int getDataSourceMaximumPoolSize() {
+        if (environment == null) {
+            return DEFAULT_HIKARI_MAXIMUM_POOL_SIZE;
+        }
+        Integer maximumPoolSize = environment.getProperty(
+                "spring.datasource.hikari.maximum-pool-size", Integer.class);
+        if (maximumPoolSize == null) {
+            return DEFAULT_HIKARI_MAXIMUM_POOL_SIZE;
+        }
+        return Math.max(1, maximumPoolSize);
     }
 
     private RejectedExecutionHandler buildRejectedExecutionHandler() {
