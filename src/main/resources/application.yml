@@ -60,3 +60,12 @@ app:
     download-url-expire-minutes: ${MINIO_DOWNLOAD_URL_EXPIRE_MINUTES:30}
     lifecycle-enabled: ${MINIO_LIFECYCLE_ENABLED:true}
     lifecycle-expire-days: ${MINIO_LIFECYCLE_EXPIRE_DAYS:1}
+  file:
+    init-enabled: ${FILE_CENTER_INIT_ENABLED:true}
+    object-prefix: ${FILE_CENTER_OBJECT_PREFIX:files/general}
+    multipart-object-prefix: ${FILE_CENTER_MULTIPART_OBJECT_PREFIX:files/multipart}
+    download-url-expire-minutes: ${FILE_CENTER_DOWNLOAD_URL_EXPIRE_MINUTES:30}
+    upload-url-expire-minutes: ${FILE_CENTER_UPLOAD_URL_EXPIRE_MINUTES:30}
+    multipart-part-size: ${FILE_CENTER_MULTIPART_PART_SIZE:8388608}
+    multipart-max-part-count: ${FILE_CENTER_MULTIPART_MAX_PART_COUNT:1000}
+    max-page-size: ${FILE_CENTER_MAX_PAGE_SIZE:100}

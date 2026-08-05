@@ -19,7 +19,8 @@ import org.springframework.boot.test.context.SpringBootTest;
         "app.minio.access-key=test",
         "app.minio.secret-key=test",
         "app.minio.bucket-name=public",
-        "app.minio.lifecycle-enabled=false"
+        "app.minio.lifecycle-enabled=false",
+        "app.file.init-enabled=false"
 })
 class DemoApplicationTests {
 

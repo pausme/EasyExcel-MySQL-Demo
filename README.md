@@ -8,6 +8,7 @@
 - Excel 导入：流式读取 Excel，分批放入有界队列，由多个 worker 批量写入 MySQL。
 - Excel 导出：异步提交任务，使用游标分页读取数据库，生成单 Sheet Excel 后上传 MinIO。
 - 文件下载：应用只返回 MinIO 签名地址，不经过应用服务器转发大文件内容。
+- 通用文件中心：支持普通上传、元数据查询、逻辑删除、分页查询和签名下载。
 - 数据更新：使用 `student_no` 作为唯一业务键，重复导入时更新已有记录。
 - 压测工具：提供 Python 标准库脚本，支持并发矩阵和吞吐量统计。
 
@@ -115,10 +116,19 @@ export MINIO_ENDPOINT='http://<MinIO地址>:<MinIO API端口>'
 export MINIO_ACCESS_KEY='your_minio_access_key'
 export MINIO_SECRET_KEY='your_minio_secret_key'
 export MINIO_BUCKET_NAME='public'
+export FILE_CENTER_INIT_ENABLED='true'
+export FILE_CENTER_OBJECT_PREFIX='files/general'
+export FILE_CENTER_MULTIPART_OBJECT_PREFIX='files/multipart'
+export FILE_CENTER_DOWNLOAD_URL_EXPIRE_MINUTES='30'
+export FILE_CENTER_UPLOAD_URL_EXPIRE_MINUTES='30'
+export FILE_CENTER_MULTIPART_PART_SIZE='8388608'
+export FILE_CENTER_MULTIPART_MAX_PART_COUNT='1000'
+export FILE_CENTER_MAX_PAGE_SIZE='100'
 ```
 
 建议将 MinIO Bucket 设置为私有。导出下载接口返回有效期默认 30 分钟的签名地址，避免大文件流量经过应用服务器。
 导出对象默认写入 `excel/student/` 前缀，生命周期规则默认在 1 天后清理对象。
+通用文件中心默认写入 `files/general/` 前缀，可通过 `FILE_CENTER_OBJECT_PREFIX` 调整。
 
 ## 数据库初始化
 
@@ -168,6 +178,51 @@ export SPRING_SERVLET_MULTIPART_MAX_REQUEST_SIZE='200MB'
 | GET | `/export/{taskId}/download` | 获取 302 MinIO 签名下载地址 |
 | GET | `/template` | 下载导入模板 |
 | POST | `/import` | 上传 Excel，字段名为 `file` |
+
+基础路径：`/api/files`
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| POST | `/upload` | 上传通用文件 |
+| POST | `/instant-check` | 根据 MD5 和文件大小秒传检查 |
+| POST | `/direct/init` | 初始化客户端直传，返回 MinIO PUT 签名地址 |
+| POST | `/direct/{uploadId}/complete` | 客户端直传完成后确认落库 |
+| POST | `/multipart/init` | 初始化客户端分片上传，返回每个分片的 PUT 签名地址 |
+| GET | `/multipart/{uploadId}/parts` | 查询已经上传到 MinIO 的分片序号 |
+| POST | `/multipart/{uploadId}/complete` | 合并分片并生成正式文件记录 |
+| POST | `/multipart/{uploadId}/abort` | 取消分片任务并清理已上传分片 |
+| GET | `/{fileId}` | 查询文件详情 |
+| GET | `/{fileId}/download` | 获取 302 MinIO 签名下载地址 |
+| POST | `/{fileId}/delete` | 逻辑删除文件 |
+| POST | `/page` | 分页查询文件 |
+
+客户端直传流程：
+
+```text
+POST /api/files/instant-check
+        |
+        |-- exists=true  直接复用返回的 fileId
+        |
+        |-- exists=false
+             POST /api/files/direct/init
+             PUT uploadUrl 到 MinIO
+             POST /api/files/direct/{uploadId}/complete
+```
+
+客户端分片上传流程：
+
+```text
+POST /api/files/multipart/init
+        |
+        v
+并发 PUT 每个 part 的 uploadUrl 到 MinIO
+        |
+        v
+可用 GET /api/files/multipart/{uploadId}/parts 断点续传
+        |
+        v
+POST /api/files/multipart/{uploadId}/complete 合并分片
+```
 
 导入成功响应包含：`imported`、`batchCount`、`count` 和 `elapsedMs`。
 导出接口先返回任务 ID，任务完成后再调用状态接口和下载接口。
