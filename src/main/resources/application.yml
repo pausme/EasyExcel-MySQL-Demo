@@ -69,3 +69,5 @@ app:
     multipart-part-size: ${FILE_CENTER_MULTIPART_PART_SIZE:8388608}
     multipart-max-part-count: ${FILE_CENTER_MULTIPART_MAX_PART_COUNT:1000}
     max-page-size: ${FILE_CENTER_MAX_PAGE_SIZE:100}
+    cors-enabled: ${FILE_CENTER_CORS_ENABLED:true}
+    cors-allowed-origin-patterns: ${FILE_CENTER_CORS_ALLOWED_ORIGIN_PATTERNS:http://localhost:*,http://127.0.0.1:*,null}

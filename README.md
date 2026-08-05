@@ -9,6 +9,7 @@
 - Excel 导出：异步提交任务，使用游标分页读取数据库，生成单 Sheet Excel 后上传 MinIO。
 - 文件下载：应用只返回 MinIO 签名地址，不经过应用服务器转发大文件内容。
 - 通用文件中心：支持普通上传、元数据查询、逻辑删除、分页查询和签名下载。
+- 文件中心测试页：启动应用后访问 `/file-upload-test.html`，可测试秒传、客户端直传和分片上传。
 - 数据更新：使用 `student_no` 作为唯一业务键，重复导入时更新已有记录。
 - 压测工具：提供 Python 标准库脚本，支持并发矩阵和吞吐量统计。
 
@@ -124,6 +125,8 @@ export FILE_CENTER_UPLOAD_URL_EXPIRE_MINUTES='30'
 export FILE_CENTER_MULTIPART_PART_SIZE='8388608'
 export FILE_CENTER_MULTIPART_MAX_PART_COUNT='1000'
 export FILE_CENTER_MAX_PAGE_SIZE='100'
+export FILE_CENTER_CORS_ENABLED='true'
+export FILE_CENTER_CORS_ALLOWED_ORIGIN_PATTERNS='http://localhost:*,http://127.0.0.1:*,null'
 ```
 
 建议将 MinIO Bucket 设置为私有。导出下载接口返回有效期默认 30 分钟的签名地址，避免大文件流量经过应用服务器。
@@ -223,6 +226,18 @@ POST /api/files/multipart/init
         v
 POST /api/files/multipart/{uploadId}/complete 合并分片
 ```
+
+浏览器测试入口：`http://localhost:${SERVER_PORT}/file-upload-test.html`。
+页面会先计算文件 MD5，再调用后端初始化接口，并把文件或分片直接 PUT 到 MinIO 签名地址。
+如果后端请求报 CORS，可通过 `FILE_CENTER_CORS_ALLOWED_ORIGIN_PATTERNS` 放开测试页面 Origin。
+如果 MinIO 直传报 CORS，需要在 MinIO 上允许应用域名访问 PUT、GET、HEAD 方法。
+Docker Compose 本地测试可在 MinIO 容器环境变量中加入：
+
+```yaml
+MINIO_API_CORS_ALLOW_ORIGIN: "http://localhost:${SERVER_PORT}"
+```
+
+如果同一个 MinIO 还要给多个本地域名测试，可以用英文逗号分隔多个 Origin。
 
 导入成功响应包含：`imported`、`batchCount`、`count` 和 `elapsedMs`。
 导出接口先返回任务 ID，任务完成后再调用状态接口和下载接口。

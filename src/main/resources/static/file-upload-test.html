@@ -1,0 +1,1019 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>文件中心上传测试</title>
+    <style>
+        :root {
+            --bg: #f7f8fb;
+            --panel: #ffffff;
+            --text: #18202f;
+            --muted: #667085;
+            --line: #d9dee8;
+            --primary: #2563eb;
+            --primary-dark: #1d4ed8;
+            --ok: #15803d;
+            --warn: #b45309;
+            --bad: #b91c1c;
+            --soft: #eef4ff;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            color: var(--text);
+            background: var(--bg);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, "PingFang SC", "Microsoft YaHei", sans-serif;
+            font-size: 14px;
+            line-height: 1.5;
+        }
+
+        header {
+            border-bottom: 1px solid var(--line);
+            background: var(--panel);
+        }
+
+        .wrap {
+            width: min(1180px, calc(100vw - 32px));
+            margin: 0 auto;
+        }
+
+        .topbar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+            padding: 16px 0;
+        }
+
+        h1 {
+            margin: 0;
+            font-size: 22px;
+            font-weight: 700;
+        }
+
+        main {
+            padding: 18px 0 32px;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: minmax(0, 1.1fr) minmax(360px, 0.9fr);
+            gap: 16px;
+            align-items: start;
+        }
+
+        .panel {
+            background: var(--panel);
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            padding: 16px;
+        }
+
+        .panel h2 {
+            margin: 0 0 12px;
+            font-size: 16px;
+            font-weight: 700;
+        }
+
+        .form-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 12px;
+        }
+
+        label {
+            display: grid;
+            gap: 6px;
+            color: var(--muted);
+            font-size: 13px;
+            font-weight: 600;
+        }
+
+        input,
+        select,
+        textarea {
+            width: 100%;
+            min-height: 38px;
+            border: 1px solid var(--line);
+            border-radius: 6px;
+            padding: 8px 10px;
+            color: var(--text);
+            background: #fff;
+            font: inherit;
+        }
+
+        input[type="file"] {
+            padding: 7px;
+        }
+
+        textarea {
+            min-height: 260px;
+            resize: vertical;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            font-size: 12px;
+        }
+
+        .full {
+            grid-column: 1 / -1;
+        }
+
+        .actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-top: 14px;
+        }
+
+        button {
+            min-height: 38px;
+            border: 1px solid var(--line);
+            border-radius: 6px;
+            padding: 8px 12px;
+            color: var(--text);
+            background: #fff;
+            font: inherit;
+            font-weight: 700;
+            cursor: pointer;
+        }
+
+        button.primary {
+            border-color: var(--primary);
+            color: #fff;
+            background: var(--primary);
+        }
+
+        button:hover {
+            border-color: var(--primary);
+        }
+
+        button.primary:hover {
+            background: var(--primary-dark);
+        }
+
+        button:disabled {
+            cursor: not-allowed;
+            opacity: 0.55;
+        }
+
+        .metric-row {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 10px;
+            margin: 14px 0;
+        }
+
+        .metric {
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            padding: 10px;
+            background: #fbfcff;
+        }
+
+        .metric span {
+            display: block;
+            color: var(--muted);
+            font-size: 12px;
+        }
+
+        .metric strong {
+            display: block;
+            overflow: hidden;
+            margin-top: 4px;
+            font-size: 15px;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .progress {
+            overflow: hidden;
+            height: 10px;
+            border-radius: 999px;
+            background: #e5e7eb;
+        }
+
+        .bar {
+            width: 0;
+            height: 100%;
+            background: var(--primary);
+            transition: width 0.16s ease;
+        }
+
+        .status {
+            display: inline-flex;
+            align-items: center;
+            min-height: 28px;
+            border-radius: 999px;
+            padding: 4px 10px;
+            background: var(--soft);
+            color: var(--primary-dark);
+            font-size: 13px;
+            font-weight: 700;
+        }
+
+        .status.ok {
+            background: #eaf7ef;
+            color: var(--ok);
+        }
+
+        .status.warn {
+            background: #fff7ed;
+            color: var(--warn);
+        }
+
+        .status.bad {
+            background: #fef2f2;
+            color: var(--bad);
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        th,
+        td {
+            border-bottom: 1px solid var(--line);
+            padding: 9px 8px;
+            text-align: left;
+            vertical-align: top;
+        }
+
+        th {
+            color: var(--muted);
+            font-size: 12px;
+            font-weight: 700;
+        }
+
+        td {
+            font-size: 13px;
+        }
+
+        .file-name {
+            max-width: 260px;
+            overflow-wrap: anywhere;
+            font-weight: 700;
+        }
+
+        .link-button {
+            min-height: 30px;
+            padding: 5px 9px;
+            font-size: 12px;
+        }
+
+        @media (max-width: 860px) {
+            .grid,
+            .form-grid,
+            .metric-row {
+                grid-template-columns: 1fr;
+            }
+
+            .topbar {
+                align-items: flex-start;
+                flex-direction: column;
+            }
+        }
+    </style>
+</head>
+<body>
+<header>
+    <div class="wrap topbar">
+        <h1>文件中心上传测试</h1>
+        <span id="status" class="status">未开始</span>
+    </div>
+</header>
+<main class="wrap">
+    <div class="grid">
+        <section class="panel">
+            <h2>上传</h2>
+            <div class="form-grid">
+                <label class="full">
+                    文件
+                    <input id="fileInput" type="file">
+                </label>
+                <label>
+                    后端地址
+                    <input id="baseUrlInput" type="text" value="">
+                </label>
+                <label>
+                    上传方式
+                    <select id="modeInput">
+                        <option value="multipart">分片上传</option>
+                        <option value="direct">直传</option>
+                    </select>
+                </label>
+                <label>
+                    分片大小 MB
+                    <input id="partSizeInput" type="number" min="5" step="1" value="8">
+                </label>
+                <label>
+                    并发数
+                    <input id="concurrencyInput" type="number" min="1" max="8" step="1" value="3">
+                </label>
+            </div>
+
+            <div class="metric-row">
+                <div class="metric">
+                    <span>文件大小</span>
+                    <strong id="fileSizeText">-</strong>
+                </div>
+                <div class="metric">
+                    <span>MD5</span>
+                    <strong id="md5Text">-</strong>
+                </div>
+                <div class="metric">
+                    <span>Upload ID</span>
+                    <strong id="uploadIdText">-</strong>
+                </div>
+                <div class="metric">
+                    <span>File ID</span>
+                    <strong id="fileIdText">-</strong>
+                </div>
+            </div>
+
+            <label>
+                MD5 进度
+                <div class="progress"><div id="hashBar" class="bar"></div></div>
+            </label>
+            <label style="margin-top: 12px;">
+                上传进度
+                <div class="progress"><div id="uploadBar" class="bar"></div></div>
+            </label>
+
+            <div class="actions">
+                <button id="instantButton">秒传检查</button>
+                <button id="uploadButton" class="primary">开始上传</button>
+                <button id="partsButton">查询分片</button>
+                <button id="abortButton">取消分片</button>
+                <button id="pageButton">刷新列表</button>
+                <button id="clearButton">清空日志</button>
+            </div>
+        </section>
+
+        <section class="panel">
+            <h2>日志</h2>
+            <textarea id="logOutput" readonly></textarea>
+        </section>
+    </div>
+
+    <section class="panel" style="margin-top: 16px;">
+        <h2>文件列表</h2>
+        <table>
+            <thead>
+            <tr>
+                <th>文件</th>
+                <th>大小</th>
+                <th>MD5</th>
+                <th>创建时间</th>
+                <th>操作</th>
+            </tr>
+            </thead>
+            <tbody id="fileTableBody">
+            <tr><td colspan="5">暂无数据</td></tr>
+            </tbody>
+        </table>
+    </section>
+</main>
+
+<script>
+    var state = {
+        file: null,
+        fileMd5: '',
+        uploadId: '',
+        fileId: '',
+        multipartParts: []
+    };
+
+    var els = {
+        fileInput: document.getElementById('fileInput'),
+        baseUrlInput: document.getElementById('baseUrlInput'),
+        modeInput: document.getElementById('modeInput'),
+        partSizeInput: document.getElementById('partSizeInput'),
+        concurrencyInput: document.getElementById('concurrencyInput'),
+        instantButton: document.getElementById('instantButton'),
+        uploadButton: document.getElementById('uploadButton'),
+        partsButton: document.getElementById('partsButton'),
+        abortButton: document.getElementById('abortButton'),
+        pageButton: document.getElementById('pageButton'),
+        clearButton: document.getElementById('clearButton'),
+        fileSizeText: document.getElementById('fileSizeText'),
+        md5Text: document.getElementById('md5Text'),
+        uploadIdText: document.getElementById('uploadIdText'),
+        fileIdText: document.getElementById('fileIdText'),
+        hashBar: document.getElementById('hashBar'),
+        uploadBar: document.getElementById('uploadBar'),
+        status: document.getElementById('status'),
+        logOutput: document.getElementById('logOutput'),
+        fileTableBody: document.getElementById('fileTableBody')
+    };
+
+    els.baseUrlInput.value = window.location.origin === 'null' ? 'http://localhost:18088' : window.location.origin;
+
+    els.fileInput.addEventListener('change', function () {
+        state.file = els.fileInput.files && els.fileInput.files.length > 0 ? els.fileInput.files[0] : null;
+        state.fileMd5 = '';
+        state.uploadId = '';
+        state.fileId = '';
+        state.multipartParts = [];
+        els.fileSizeText.textContent = state.file ? formatBytes(state.file.size) : '-';
+        els.md5Text.textContent = '-';
+        els.uploadIdText.textContent = '-';
+        els.fileIdText.textContent = '-';
+        setProgress(els.hashBar, 0);
+        setProgress(els.uploadBar, 0);
+        if (state.file) {
+            log('已选择文件：' + state.file.name + '，大小：' + formatBytes(state.file.size));
+        }
+    });
+
+    els.instantButton.addEventListener('click', function () {
+        runGuarded(checkInstant);
+    });
+
+    els.uploadButton.addEventListener('click', function () {
+        runGuarded(function () {
+            return els.modeInput.value === 'direct' ? uploadDirect() : uploadMultipart();
+        });
+    });
+
+    els.partsButton.addEventListener('click', function () {
+        runGuarded(listParts);
+    });
+
+    els.abortButton.addEventListener('click', function () {
+        runGuarded(abortMultipart);
+    });
+
+    els.pageButton.addEventListener('click', function () {
+        runGuarded(loadFiles);
+    });
+
+    els.clearButton.addEventListener('click', function () {
+        els.logOutput.value = '';
+    });
+
+    loadFiles().catch(function (error) {
+        log('刷新列表失败：' + error.message);
+    });
+
+    async function uploadDirect() {
+        var file = requireFile();
+        var md5 = await ensureMd5(file);
+        setStatus('初始化直传', '');
+        var init = await postJson('/api/files/direct/init', {
+            originalName: file.name,
+            contentType: file.type || 'application/octet-stream',
+            fileSize: file.size,
+            fileMd5: md5
+        });
+        logJson('直传初始化响应', init);
+        if (init.instant) {
+            markCompleted(init.fileId, init.file);
+            return;
+        }
+        state.uploadId = init.uploadId;
+        state.fileId = init.fileId;
+        renderIds();
+        setStatus('上传到 MinIO', '');
+        await putObject(init.uploadUrl, file);
+        setProgress(els.uploadBar, 100);
+        setStatus('确认完成', '');
+        var completed = await postJson('/api/files/direct/' + encodeURIComponent(init.uploadId) + '/complete');
+        logJson('直传完成响应', completed);
+        markCompleted(completed.fileId, completed);
+        await loadFiles();
+    }
+
+    async function uploadMultipart() {
+        var file = requireFile();
+        var md5 = await ensureMd5(file);
+        var partSize = normalizePartSize();
+        setStatus('初始化分片', '');
+        var init = await postJson('/api/files/multipart/init', {
+            originalName: file.name,
+            contentType: file.type || 'application/octet-stream',
+            fileSize: file.size,
+            fileMd5: md5,
+            partSize: partSize
+        });
+        logJson('分片初始化响应', init);
+        if (init.instant) {
+            markCompleted(init.fileId, init.file);
+            return;
+        }
+        state.uploadId = init.uploadId;
+        state.fileId = init.fileId;
+        state.multipartParts = init.parts || [];
+        renderIds();
+        await uploadParts(file, init);
+        setStatus('合并分片', '');
+        var completed = await postJson('/api/files/multipart/' + encodeURIComponent(init.uploadId) + '/complete');
+        logJson('分片完成响应', completed);
+        markCompleted(completed.fileId, completed);
+        await loadFiles();
+    }
+
+    async function checkInstant() {
+        var file = requireFile();
+        var md5 = await ensureMd5(file);
+        setStatus('秒传检查', '');
+        var result = await postJson('/api/files/instant-check', {
+            fileMd5: md5,
+            fileSize: file.size
+        });
+        logJson('秒传检查响应', result);
+        if (result.exists && result.file) {
+            markCompleted(result.file.fileId, result.file);
+        } else {
+            setStatus('未命中秒传', 'warn');
+        }
+    }
+
+    async function listParts() {
+        if (!state.uploadId) {
+            throw new Error('当前没有 uploadId');
+        }
+        var result = await getJson('/api/files/multipart/' + encodeURIComponent(state.uploadId) + '/parts');
+        logJson('分片进度响应', result);
+        if (result.partCount) {
+            setProgress(els.uploadBar, (result.uploadedParts.length / result.partCount) * 100);
+        }
+    }
+
+    async function abortMultipart() {
+        if (!state.uploadId) {
+            throw new Error('当前没有 uploadId');
+        }
+        var result = await postJson('/api/files/multipart/' + encodeURIComponent(state.uploadId) + '/abort');
+        logJson('取消分片响应', result);
+        setStatus('已取消', 'warn');
+    }
+
+    async function uploadParts(file, init) {
+        var parts = init.parts || [];
+        if (!parts.length) {
+            throw new Error('后端没有返回分片上传地址');
+        }
+        var uploadedBytes = 0;
+        var concurrency = normalizeConcurrency();
+        setProgress(els.uploadBar, 0);
+        setStatus('上传分片', '');
+        await runPool(parts, concurrency, async function (part) {
+            var start = (part.partNumber - 1) * init.partSize;
+            var end = start + part.expectedSize;
+            var blob = file.slice(start, end);
+            await putObject(part.uploadUrl, blob);
+            uploadedBytes += part.expectedSize;
+            setProgress(els.uploadBar, (uploadedBytes / file.size) * 100);
+            log('分片上传完成：' + part.partNumber + '/' + init.partCount + '，大小：' + formatBytes(part.expectedSize));
+        });
+    }
+
+    async function loadFiles() {
+        var result = await postJson('/api/files/page', {
+            pageNo: 1,
+            pageSize: 10
+        });
+        renderFileTable(result.records || []);
+        log('文件列表已刷新，total=' + result.total);
+    }
+
+    async function runPool(items, concurrency, handler) {
+        var index = 0;
+        var workers = [];
+        for (var i = 0; i < concurrency; i++) {
+            workers.push((async function () {
+                while (index < items.length) {
+                    var current = items[index++];
+                    await handler(current);
+                }
+            })());
+        }
+        await Promise.all(workers);
+    }
+
+    async function ensureMd5(file) {
+        if (state.fileMd5) {
+            return state.fileMd5;
+        }
+        setStatus('计算 MD5', '');
+        state.fileMd5 = await calculateFileMd5(file, function (percent) {
+            setProgress(els.hashBar, percent);
+        });
+        els.md5Text.textContent = state.fileMd5;
+        log('MD5 计算完成：' + state.fileMd5);
+        return state.fileMd5;
+    }
+
+    async function calculateFileMd5(file, onProgress) {
+        var chunkSize = 4 * 1024 * 1024;
+        var offset = 0;
+        var md5 = new Md5();
+        while (offset < file.size) {
+            var chunk = file.slice(offset, Math.min(offset + chunkSize, file.size));
+            var buffer = await readBlob(chunk);
+            md5.update(buffer);
+            offset += chunk.size;
+            onProgress(Math.min(100, (offset / file.size) * 100));
+            await nextFrame();
+        }
+        return md5.digest();
+    }
+
+    function readBlob(blob) {
+        return new Promise(function (resolve, reject) {
+            var reader = new FileReader();
+            reader.onload = function () {
+                resolve(reader.result);
+            };
+            reader.onerror = function () {
+                reject(reader.error || new Error('读取文件失败'));
+            };
+            reader.readAsArrayBuffer(blob);
+        });
+    }
+
+    function nextFrame() {
+        return new Promise(function (resolve) {
+            requestAnimationFrame(resolve);
+        });
+    }
+
+    async function putObject(url, body) {
+        log('PUT MinIO：' + maskUrl(url));
+        var response;
+        try {
+            response = await fetch(url, {
+                method: 'PUT',
+                body: body
+            });
+        } catch (error) {
+            throw new Error('PUT MinIO 网络失败：' + error.message
+                + '。通常是 MinIO CORS 未配置、MinIO 地址浏览器不可访问，或签名地址协议/端口不正确');
+        }
+        if (!response.ok) {
+            throw new Error('PUT MinIO 失败，status=' + response.status + '，请检查签名地址有效期和 MinIO CORS');
+        }
+    }
+
+    async function postJson(path, body) {
+        var options = {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        };
+        if (typeof body !== 'undefined') {
+            options.body = JSON.stringify(body);
+        }
+        return requestJson(path, options);
+    }
+
+    async function getJson(path) {
+        return requestJson(path, {
+            method: 'GET'
+        });
+    }
+
+    async function requestJson(path, options) {
+        var url = baseUrl() + path;
+        log((options && options.method ? options.method : 'GET') + ' 后端：' + url);
+        var response;
+        try {
+            response = await fetch(url, options);
+        } catch (error) {
+            throw new Error('请求后端网络失败：' + error.message
+                + '。请确认页面地址、后端地址和服务端口是否正确');
+        }
+        var text = await response.text();
+        if (!response.ok) {
+            throw new Error(text || ('请求失败，status=' + response.status));
+        }
+        return text ? JSON.parse(text) : {};
+    }
+
+    async function runGuarded(action) {
+        setButtonsDisabled(true);
+        try {
+            await action();
+        } catch (error) {
+            setStatus('失败', 'bad');
+            log('失败：' + error.message);
+        } finally {
+            setButtonsDisabled(false);
+        }
+    }
+
+    function renderFileTable(records) {
+        if (!records.length) {
+            els.fileTableBody.innerHTML = '<tr><td colspan="5">暂无数据</td></tr>';
+            return;
+        }
+        els.fileTableBody.innerHTML = records.map(function (record) {
+            return '<tr>'
+                + '<td><div class="file-name">' + escapeHtml(record.originalName || '-') + '</div></td>'
+                + '<td>' + formatBytes(record.fileSize || 0) + '</td>'
+                + '<td>' + escapeHtml(record.fileMd5 || '-') + '</td>'
+                + '<td>' + escapeHtml(record.createdAt || '-') + '</td>'
+                + '<td><button class="link-button" data-file-id="' + escapeHtml(record.fileId) + '">下载</button></td>'
+                + '</tr>';
+        }).join('');
+        Array.prototype.forEach.call(els.fileTableBody.querySelectorAll('button[data-file-id]'), function (button) {
+            button.addEventListener('click', function () {
+                window.open(baseUrl() + '/api/files/' + encodeURIComponent(button.getAttribute('data-file-id')) + '/download', '_blank');
+            });
+        });
+    }
+
+    function requireFile() {
+        if (!state.file) {
+            throw new Error('请先选择文件');
+        }
+        return state.file;
+    }
+
+    function normalizePartSize() {
+        var mb = parseInt(els.partSizeInput.value, 10);
+        if (!mb || mb < 5) {
+            mb = 5;
+            els.partSizeInput.value = '5';
+        }
+        return mb * 1024 * 1024;
+    }
+
+    function normalizeConcurrency() {
+        var concurrency = parseInt(els.concurrencyInput.value, 10);
+        if (!concurrency || concurrency < 1) {
+            concurrency = 1;
+        }
+        if (concurrency > 8) {
+            concurrency = 8;
+        }
+        els.concurrencyInput.value = String(concurrency);
+        return concurrency;
+    }
+
+    function baseUrl() {
+        var value = els.baseUrlInput.value.replace(/\/+$/, '');
+        if (!/^https?:\/\//.test(value)) {
+            throw new Error('后端地址必须以 http:// 或 https:// 开头');
+        }
+        return value;
+    }
+
+    function maskUrl(url) {
+        var queryIndex = url.indexOf('?');
+        if (queryIndex < 0) {
+            return url;
+        }
+        return url.substring(0, queryIndex) + '?***';
+    }
+
+    function markCompleted(fileId, file) {
+        state.fileId = fileId || (file && file.fileId) || '';
+        renderIds();
+        setProgress(els.uploadBar, 100);
+        setStatus('完成', 'ok');
+    }
+
+    function renderIds() {
+        els.uploadIdText.textContent = state.uploadId || '-';
+        els.fileIdText.textContent = state.fileId || '-';
+    }
+
+    function setProgress(el, value) {
+        el.style.width = Math.max(0, Math.min(100, value || 0)).toFixed(2) + '%';
+    }
+
+    function setStatus(text, type) {
+        els.status.textContent = text;
+        els.status.className = 'status' + (type ? ' ' + type : '');
+    }
+
+    function setButtonsDisabled(disabled) {
+        [
+            els.instantButton,
+            els.uploadButton,
+            els.partsButton,
+            els.abortButton,
+            els.pageButton
+        ].forEach(function (button) {
+            button.disabled = disabled;
+        });
+    }
+
+    function log(message) {
+        var time = new Date().toLocaleTimeString();
+        els.logOutput.value += '[' + time + '] ' + message + '\n';
+        els.logOutput.scrollTop = els.logOutput.scrollHeight;
+    }
+
+    function logJson(title, value) {
+        log(title + '：' + JSON.stringify(value, null, 2));
+    }
+
+    function formatBytes(size) {
+        if (!size) {
+            return '0 B';
+        }
+        var units = ['B', 'KB', 'MB', 'GB', 'TB'];
+        var index = 0;
+        var value = size;
+        while (value >= 1024 && index < units.length - 1) {
+            value = value / 1024;
+            index++;
+        }
+        return value.toFixed(index === 0 ? 0 : 2) + ' ' + units[index];
+    }
+
+    function escapeHtml(value) {
+        return String(value || '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
+    function Md5() {
+        this.state = [1732584193, -271733879, -1732584194, 271733878];
+        this.buffer = new Uint8Array(0);
+        this.length = 0;
+    }
+
+    Md5.prototype.update = function (arrayBuffer) {
+        var input = new Uint8Array(arrayBuffer);
+        var offset = 0;
+        this.length += input.length;
+        if (this.buffer.length) {
+            var needed = 64 - this.buffer.length;
+            if (input.length < needed) {
+                this.buffer = concatBytes(this.buffer, input);
+                return;
+            }
+            processBlock(this.state, concatBytes(this.buffer, input.subarray(0, needed)));
+            this.buffer = new Uint8Array(0);
+            offset = needed;
+        }
+        while (offset + 64 <= input.length) {
+            processBlock(this.state, input.subarray(offset, offset + 64));
+            offset += 64;
+        }
+        this.buffer = input.slice(offset);
+    };
+
+    Md5.prototype.digest = function () {
+        var tailLength = this.buffer.length;
+        var finalLength = tailLength + 9 <= 64 ? 64 : 128;
+        var finalBlock = new Uint8Array(finalLength);
+        finalBlock.set(this.buffer);
+        finalBlock[tailLength] = 0x80;
+        var bitLow = (this.length * 8) >>> 0;
+        var bitHigh = Math.floor(this.length / 0x20000000) >>> 0;
+        for (var i = 0; i < 4; i++) {
+            finalBlock[finalLength - 8 + i] = (bitLow >>> (8 * i)) & 0xff;
+            finalBlock[finalLength - 4 + i] = (bitHigh >>> (8 * i)) & 0xff;
+        }
+        processBlock(this.state, finalBlock.subarray(0, 64));
+        if (finalLength === 128) {
+            processBlock(this.state, finalBlock.subarray(64, 128));
+        }
+        return wordToHex(this.state[0]) + wordToHex(this.state[1]) + wordToHex(this.state[2]) + wordToHex(this.state[3]);
+    };
+
+    function concatBytes(left, right) {
+        var output = new Uint8Array(left.length + right.length);
+        output.set(left, 0);
+        output.set(right, left.length);
+        return output;
+    }
+
+    function processBlock(state, block) {
+        var words = new Array(16);
+        for (var i = 0; i < 16; i++) {
+            var j = i * 4;
+            words[i] = block[j] | (block[j + 1] << 8) | (block[j + 2] << 16) | (block[j + 3] << 24);
+        }
+        md5Cycle(state, words);
+    }
+
+    function md5Cycle(x, k) {
+        var a = x[0];
+        var b = x[1];
+        var c = x[2];
+        var d = x[3];
+
+        a = ff(a, b, c, d, k[0], 7, -680876936);
+        d = ff(d, a, b, c, k[1], 12, -389564586);
+        c = ff(c, d, a, b, k[2], 17, 606105819);
+        b = ff(b, c, d, a, k[3], 22, -1044525330);
+        a = ff(a, b, c, d, k[4], 7, -176418897);
+        d = ff(d, a, b, c, k[5], 12, 1200080426);
+        c = ff(c, d, a, b, k[6], 17, -1473231341);
+        b = ff(b, c, d, a, k[7], 22, -45705983);
+        a = ff(a, b, c, d, k[8], 7, 1770035416);
+        d = ff(d, a, b, c, k[9], 12, -1958414417);
+        c = ff(c, d, a, b, k[10], 17, -42063);
+        b = ff(b, c, d, a, k[11], 22, -1990404162);
+        a = ff(a, b, c, d, k[12], 7, 1804603682);
+        d = ff(d, a, b, c, k[13], 12, -40341101);
+        c = ff(c, d, a, b, k[14], 17, -1502002290);
+        b = ff(b, c, d, a, k[15], 22, 1236535329);
+
+        a = gg(a, b, c, d, k[1], 5, -165796510);
+        d = gg(d, a, b, c, k[6], 9, -1069501632);
+        c = gg(c, d, a, b, k[11], 14, 643717713);
+        b = gg(b, c, d, a, k[0], 20, -373897302);
+        a = gg(a, b, c, d, k[5], 5, -701558691);
+        d = gg(d, a, b, c, k[10], 9, 38016083);
+        c = gg(c, d, a, b, k[15], 14, -660478335);
+        b = gg(b, c, d, a, k[4], 20, -405537848);
+        a = gg(a, b, c, d, k[9], 5, 568446438);
+        d = gg(d, a, b, c, k[14], 9, -1019803690);
+        c = gg(c, d, a, b, k[3], 14, -187363961);
+        b = gg(b, c, d, a, k[8], 20, 1163531501);
+        a = gg(a, b, c, d, k[13], 5, -1444681467);
+        d = gg(d, a, b, c, k[2], 9, -51403784);
+        c = gg(c, d, a, b, k[7], 14, 1735328473);
+        b = gg(b, c, d, a, k[12], 20, -1926607734);
+
+        a = hh(a, b, c, d, k[5], 4, -378558);
+        d = hh(d, a, b, c, k[8], 11, -2022574463);
+        c = hh(c, d, a, b, k[11], 16, 1839030562);
+        b = hh(b, c, d, a, k[14], 23, -35309556);
+        a = hh(a, b, c, d, k[1], 4, -1530992060);
+        d = hh(d, a, b, c, k[4], 11, 1272893353);
+        c = hh(c, d, a, b, k[7], 16, -155497632);
+        b = hh(b, c, d, a, k[10], 23, -1094730640);
+        a = hh(a, b, c, d, k[13], 4, 681279174);
+        d = hh(d, a, b, c, k[0], 11, -358537222);
+        c = hh(c, d, a, b, k[3], 16, -722521979);
+        b = hh(b, c, d, a, k[6], 23, 76029189);
+        a = hh(a, b, c, d, k[9], 4, -640364487);
+        d = hh(d, a, b, c, k[12], 11, -421815835);
+        c = hh(c, d, a, b, k[15], 16, 530742520);
+        b = hh(b, c, d, a, k[2], 23, -995338651);
+
+        a = ii(a, b, c, d, k[0], 6, -198630844);
+        d = ii(d, a, b, c, k[7], 10, 1126891415);
+        c = ii(c, d, a, b, k[14], 15, -1416354905);
+        b = ii(b, c, d, a, k[5], 21, -57434055);
+        a = ii(a, b, c, d, k[12], 6, 1700485571);
+        d = ii(d, a, b, c, k[3], 10, -1894986606);
+        c = ii(c, d, a, b, k[10], 15, -1051523);
+        b = ii(b, c, d, a, k[1], 21, -2054922799);
+        a = ii(a, b, c, d, k[8], 6, 1873313359);
+        d = ii(d, a, b, c, k[15], 10, -30611744);
+        c = ii(c, d, a, b, k[6], 15, -1560198380);
+        b = ii(b, c, d, a, k[13], 21, 1309151649);
+        a = ii(a, b, c, d, k[4], 6, -145523070);
+        d = ii(d, a, b, c, k[11], 10, -1120210379);
+        c = ii(c, d, a, b, k[2], 15, 718787259);
+        b = ii(b, c, d, a, k[9], 21, -343485551);
+
+        x[0] = add32(a, x[0]);
+        x[1] = add32(b, x[1]);
+        x[2] = add32(c, x[2]);
+        x[3] = add32(d, x[3]);
+    }
+
+    function cmn(q, a, b, x, s, t) {
+        a = add32(add32(a, q), add32(x, t));
+        return add32((a << s) | (a >>> (32 - s)), b);
+    }
+
+    function ff(a, b, c, d, x, s, t) {
+        return cmn((b & c) | ((~b) & d), a, b, x, s, t);
+    }
+
+    function gg(a, b, c, d, x, s, t) {
+        return cmn((b & d) | (c & (~d)), a, b, x, s, t);
+    }
+
+    function hh(a, b, c, d, x, s, t) {
+        return cmn(b ^ c ^ d, a, b, x, s, t);
+    }
+
+    function ii(a, b, c, d, x, s, t) {
+        return cmn(c ^ (b | (~d)), a, b, x, s, t);
+    }
+
+    function add32(a, b) {
+        return (a + b) | 0;
+    }
+
+    function wordToHex(word) {
+        var hex = '0123456789abcdef';
+        var result = '';
+        for (var i = 0; i < 4; i++) {
+            result += hex[(word >>> (i * 8 + 4)) & 0x0f] + hex[(word >>> (i * 8)) & 0x0f];
+        }
+        return result;
+    }
+</script>
+</body>
+</html>
