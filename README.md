@@ -241,4 +241,4 @@ python3 scripts/import_load_test.py \
 ```
 
 脚本使用 Python 标准库流式上传，输出成功率、总耗时、请求吞吐和行吞吐。
-完整说明见：[docs/import-load-test.md](docs/import-load-test.md)。功能测试见：[docs/excel-import-export-test.md](docs/excel-import-export-test.md)。
+完整说明见：[docs/import-load-test.md](docs/import-load-test.md)。功能测试见：[docs/excel-import-export-test.md](docs/excel-import-export-test.md)。优化路径与复盘见：[docs/excel-import-export-optimization-review.md](docs/excel-import-export-optimization-review.md)。
