@@ -182,56 +182,288 @@ export SPRING_SERVLET_MULTIPART_MAX_REQUEST_SIZE='200MB'
 | GET | `/template` | 下载导入模板 |
 | POST | `/import` | 上传 Excel，字段名为 `file` |
 
+## 文件上传中心
+
 基础路径：`/api/files`
 
-| 方法 | 路径 | 说明 |
+文件上传中心采用“文件内容放 MinIO、文件元数据放 MySQL”的设计：
+
+```text
+客户端
+   |
+   | 1. 请求后端生成上传任务或签名地址
+   v
+Spring Boot
+   |
+   | 2. 写入上传任务、校验文件、合并对象、写入文件记录
+   v
+MySQL                         MinIO
+file_upload_task              文件内容、临时分片、签名 URL
+file_record
+```
+
+普通上传时，文件字节会经过 Spring Boot；直传和分片上传时，文件字节由客户端直接发送到 MinIO，Spring Boot 只负责初始化、校验和落库。
+
+### 数据表和对象说明
+
+`file_record` 是正式文件记录。只有文件上传完成并通过校验后，才会写入该表，文件列表、详情、下载和秒传都只查询状态为 `NORMAL` 的记录。
+
+`file_upload_task` 是直传或分片上传过程中的任务记录，保存 `uploadId`、预期文件大小、文件 MD5、MinIO 对象 Key、分片大小和分片数量。任务状态包括：
+
+| 状态 | 含义 |
+| --- | --- |
+| `UPLOADING` | 已初始化，文件或分片还未完成 |
+| `SUCCESS` | 已完成校验并生成 `file_record` |
+| `ABORTED` | 已取消，临时分片会被清理 |
+
+分片上传采用“分片对象 + `composeObject` 合并”的方式，而不是让 Spring Boot 接收每个分片。分片对象会写在 `files/multipart/{uploadId}/` 前缀下，合并成功或取消任务后清理。
+
+### 接口总览
+
+| 方法 | 路径 | 用途 |
 | --- | --- | --- |
-| POST | `/upload` | 上传通用文件 |
-| POST | `/instant-check` | 根据 MD5 和文件大小秒传检查 |
-| POST | `/direct/init` | 初始化客户端直传，返回 MinIO PUT 签名地址 |
-| POST | `/direct/{uploadId}/complete` | 客户端直传完成后确认落库 |
-| POST | `/multipart/init` | 初始化客户端分片上传，返回每个分片的 PUT 签名地址 |
-| GET | `/multipart/{uploadId}/parts` | 查询已经上传到 MinIO 的分片序号 |
-| POST | `/multipart/{uploadId}/complete` | 合并分片并生成正式文件记录 |
-| POST | `/multipart/{uploadId}/abort` | 取消分片任务并清理已上传分片 |
-| GET | `/{fileId}` | 查询文件详情 |
-| GET | `/{fileId}/download` | 获取 302 MinIO 签名下载地址 |
-| POST | `/{fileId}/delete` | 逻辑删除文件 |
-| POST | `/page` | 分页查询文件 |
+| `POST` | `/upload` | 文件经过后端上传，适合小文件或后端需要读取文件内容的场景 |
+| `POST` | `/instant-check` | 根据文件 MD5 和文件大小检查是否可以秒传 |
+| `POST` | `/direct/init` | 初始化整文件客户端直传，返回一个 MinIO PUT 签名地址 |
+| `POST` | `/direct/{uploadId}/complete` | 校验直传对象并生成正式文件记录 |
+| `POST` | `/multipart/init` | 初始化分片上传，返回每个分片的 MinIO PUT 签名地址 |
+| `GET` | `/multipart/{uploadId}/parts` | 查询已经上传的分片，支持断点续传 |
+| `POST` | `/multipart/{uploadId}/complete` | 校验所有分片、合并对象并生成正式文件记录 |
+| `POST` | `/multipart/{uploadId}/abort` | 取消分片任务并清理临时分片 |
+| `GET` | `/{fileId}` | 查询正式文件详情 |
+| `GET` | `/{fileId}/download` | 返回 302，跳转到 MinIO 下载签名 URL |
+| `POST` | `/{fileId}/delete` | 逻辑删除文件，并在事务提交后清理 MinIO 对象 |
+| `POST` | `/page` | 分页查询正式文件元数据 |
 
-客户端直传流程：
+### 1. 普通后端上传：`POST /api/files/upload`
 
-```text
-POST /api/files/instant-check
-        |
-        |-- exists=true  直接复用返回的 fileId
-        |
-        |-- exists=false
-             POST /api/files/direct/init
-             PUT uploadUrl 到 MinIO
-             POST /api/files/direct/{uploadId}/complete
+请求格式是 `multipart/form-data`，字段名为 `file`。
+
+处理逻辑：
+
+1. Controller 校验文件不能为空。
+2. Service 生成 `fileId` 和 MinIO 对象 Key。
+3. 文件流经过 Spring Boot 写入 MinIO，同时计算文件 MD5。
+4. 上传成功后，把文件名、大小、MD5、扩展名、桶名和对象 Key 写入 `file_record`。
+5. 如果数据库写入失败，Service 会删除已经上传的 MinIO 对象，避免产生孤立文件。
+
+该方式实现简单，但大文件会占用应用服务器的网络带宽和 Tomcat 请求线程，不建议作为百万级文件上传方案。
+
+### 2. 秒传检查：`POST /api/files/instant-check`
+
+请求示例：
+
+```json
+{
+  "fileMd5": "文件内容的 32 位小写 MD5",
+  "fileSize": 35180354
+}
 ```
 
-客户端分片上传流程：
+处理逻辑：
 
-```text
-POST /api/files/multipart/init
-        |
-        v
-并发 PUT 每个 part 的 uploadUrl 到 MinIO
-        |
-        v
-可用 GET /api/files/multipart/{uploadId}/parts 断点续传
-        |
-        v
-POST /api/files/multipart/{uploadId}/complete 合并分片
+1. 校验 MD5 格式和文件大小。
+2. 使用 `(file_md5, file_size)` 查询 `file_record`。
+3. 只匹配状态为 `NORMAL` 的正式文件。
+4. 如果存在，返回 `exists=true` 和已有文件信息，客户端无需再次上传。
+5. 如果不存在，返回 `exists=false`，客户端继续选择直传或分片上传。
+
+秒传依赖客户端计算真实文件 MD5。当前后端对直传和分片上传会校验对象大小，但不会重新读取整个 MinIO 对象再次计算 MD5，因此生产环境可以进一步增加对象 MD5 校验或可信上传回调。
+
+### 3. 初始化客户端直传：`POST /api/files/direct/init`
+
+请求示例：
+
+```json
+{
+  "originalName": "demo.zip",
+  "contentType": "application/zip",
+  "fileSize": 35180354,
+  "fileMd5": "文件内容的 32 位小写 MD5"
+}
 ```
 
-浏览器测试入口：`http://localhost:${SERVER_PORT}/file-upload-test.html`。
-页面会先计算文件 MD5，再调用后端初始化接口，并把文件或分片直接 PUT 到 MinIO 签名地址。
-如果后端请求报 CORS，可通过 `FILE_CENTER_CORS_ALLOWED_ORIGIN_PATTERNS` 放开测试页面 Origin。
-如果 MinIO 直传报 CORS，需要在 MinIO 上允许应用域名访问 PUT、GET、HEAD 方法。
-Docker Compose 本地测试可在 MinIO 容器环境变量中加入：
+处理逻辑：
+
+1. 校验原始文件名、文件大小和 MD5。
+2. 再次执行秒传检查，避免客户端漏掉前置检查。
+3. 如果文件已存在，直接返回 `instant=true`、`fileId` 和文件信息。
+4. 如果文件不存在，生成 `uploadId`、`fileId` 和正式对象 Key。
+5. 插入一条 `file_upload_task`，状态为 `UPLOADING`。
+6. 使用 MinIO 生成整文件 PUT 签名地址。
+7. 返回 `uploadId`、`fileId`、`uploadUrl` 和签名地址有效期。
+
+此时文件内容还没有进入 MinIO，客户端拿到 `uploadUrl` 后，需要自己发起：
+
+```text
+PUT {uploadUrl}
+请求体：完整文件二进制内容
+```
+
+### 4. 完成客户端直传：`POST /api/files/direct/{uploadId}/complete`
+
+处理逻辑：
+
+1. 根据 `uploadId` 查询 `file_upload_task`，并确认任务类型是 `DIRECT`。
+2. 确认任务状态仍然是 `UPLOADING`。
+3. 调用 MinIO `statObject` 检查正式对象是否存在。
+4. 校验 MinIO 对象实际大小是否等于任务记录中的 `fileSize`。
+5. 写入 `file_record`。
+6. 将 `file_upload_task` 更新为 `SUCCESS`。
+7. 返回正式文件信息。
+
+如果对象不存在、大小不匹配或任务状态不正确，接口不会生成正式文件记录。
+
+### 5. 初始化分片上传：`POST /api/files/multipart/init`
+
+请求示例：
+
+```json
+{
+  "originalName": "large-video.mp4",
+  "contentType": "video/mp4",
+  "fileSize": 104857600,
+  "fileMd5": "文件内容的 32 位小写 MD5",
+  "partSize": 8388608
+}
+```
+
+处理逻辑：
+
+1. 校验文件名、文件大小、MD5 和分片大小。
+2. 分片大小最小为 5 MB，默认值由 `FILE_CENTER_MULTIPART_PART_SIZE` 控制。
+3. 根据 `fileSize / partSize` 计算 `partCount`，超过 `FILE_CENTER_MULTIPART_MAX_PART_COUNT` 时拒绝。
+4. 命中秒传时直接返回已有文件，不创建上传任务。
+5. 未命中时生成 `uploadId`、`fileId` 和临时分片前缀。
+6. 插入一条状态为 `UPLOADING` 的 `file_upload_task`。
+7. 为每个分片生成一个独立的 MinIO PUT 签名地址。
+8. 返回每个分片的 `partNumber`、`uploadUrl`、`objectKey` 和 `expectedSize`。
+
+客户端根据 `partNumber` 切分文件，并发 PUT 到对应的 MinIO 地址。最后一个分片可以小于 `partSize`，其他分片必须等于 `partSize`。
+
+### 6. 查询分片进度：`GET /api/files/multipart/{uploadId}/parts`
+
+处理逻辑：
+
+1. 根据 `uploadId` 查询分片上传任务。
+2. 根据任务保存的临时前缀查询 MinIO 对象列表。
+3. 从对象名解析已上传的分片序号。
+4. 返回总分片数 `partCount` 和已上传序号 `uploadedParts`。
+
+客户端可以在网络中断后调用该接口，只重新上传缺失的分片。当前实现的进度来源是 MinIO 对象列表，不依赖客户端内存中的进度。
+
+### 7. 完成分片上传：`POST /api/files/multipart/{uploadId}/complete`
+
+处理逻辑：
+
+1. 查询分片任务，并确认状态为 `UPLOADING`。
+2. 按 `1..partCount` 顺序检查每个分片对象是否存在。
+3. 校验每个分片的实际大小，防止缺片、错片或大小不一致。
+4. 按分片顺序调用 MinIO `composeObject`，合并为正式对象。
+5. 校验合并对象的总大小。
+6. 写入 `file_record`，并将任务更新为 `SUCCESS`。
+7. 事务提交后删除临时分片对象。
+
+合并失败时会删除已经生成的正式对象；数据库事务失败时不会把任务标记为成功。客户端必须等该接口成功后，才能把文件当成正式文件使用。
+
+### 8. 取消分片上传：`POST /api/files/multipart/{uploadId}/abort`
+
+处理逻辑：
+
+1. 查询分片任务并确认当前状态为 `UPLOADING`。
+2. 将任务状态更新为 `ABORTED`。
+3. 事务提交后删除该任务前缀下的所有临时分片。
+4. 返回 `aborted=true` 和 `uploadId`。
+
+取消后不能继续调用完成接口；如果客户端需要重新上传，应重新初始化任务。
+
+### 9. 文件详情：`GET /api/files/{fileId}`
+
+根据 `fileId` 查询状态为 `NORMAL` 的 `file_record`，返回文件名、大小、MD5、扩展名、内容类型和创建时间等元数据。逻辑删除后的文件不会被查询到。
+
+### 10. 文件下载：`GET /api/files/{fileId}/download`
+
+处理逻辑：
+
+1. 查询正式文件记录。
+2. 使用文件对象 Key 生成 MinIO GET 签名 URL。
+3. Controller 返回 HTTP `302 Found`，通过 `Location` 跳转到 MinIO。
+4. 文件内容不经过 Spring Boot，应用服务器不会代理大文件下载流量。
+
+签名 URL 的有效期由 `FILE_CENTER_DOWNLOAD_URL_EXPIRE_MINUTES` 控制。因为接口返回的是 302，接口测试工具需要跟随重定向，浏览器会自动跳转。
+
+### 11. 逻辑删除：`POST /api/files/{fileId}/delete`
+
+处理逻辑：
+
+1. 查询正式文件是否存在。
+2. 将 `file_record.status` 更新为 `DELETED`。
+3. 数据库事务提交后删除对应 MinIO 对象。
+4. 返回 `deleted=true` 和 `fileId`。
+
+删除接口不会物理删除数据库记录，因此可以保留审计信息；列表、详情和秒传检查都会忽略 `DELETED` 文件。
+
+### 12. 文件分页：`POST /api/files/page`
+
+请求示例：
+
+```json
+{
+  "pageNo": 1,
+  "pageSize": 20,
+  "originalName": "demo",
+  "fileExt": "zip"
+}
+```
+
+处理逻辑：
+
+1. `pageNo` 最小为 1，`pageSize` 会受到 `FILE_CENTER_MAX_PAGE_SIZE` 限制。
+2. 按原始文件名和扩展名进行可选过滤。
+3. 先查询总数，再查询当前页文件元数据。
+4. 只返回状态为 `NORMAL` 的正式文件，不读取文件二进制内容。
+
+### 完整上传流程
+
+小文件可以直接使用后端上传：
+
+```text
+客户端 --multipart/form-data--> Spring Boot --文件流--> MinIO
+                                             |
+                                             v
+                                      写入 file_record
+```
+
+客户端直传适合不希望文件流量经过应用服务器的场景：
+
+```text
+客户端 --初始化请求--> Spring Boot --写入--> file_upload_task
+客户端 <--uploadUrl-- Spring Boot
+客户端 --PUT 完整文件---------------------> MinIO
+客户端 --complete 请求--> Spring Boot
+Spring Boot --statObject 校验--> MinIO
+Spring Boot --写入--> file_record
+```
+
+分片上传适合大文件、弱网络和断点续传：
+
+```text
+客户端 --multipart/init--> Spring Boot
+客户端 <--多个分片 uploadUrl-- Spring Boot
+客户端 --并发 PUT 分片-------------------> MinIO
+客户端 --查询已上传分片------------------> Spring Boot
+客户端 --multipart/complete-------------> Spring Boot
+Spring Boot --校验分片并 composeObject--> MinIO
+Spring Boot --写入正式记录--------------> file_record
+```
+
+### 浏览器测试页面
+
+启动应用后访问：`http://localhost:${SERVER_PORT}/file-upload-test.html`。
+
+测试页面会先计算文件 MD5，再调用秒传检查；未命中时可以选择直传或分片上传。分片上传默认每片 8 MB、并发数为 3，并支持查询分片和取消任务。
+
+页面请求 Spring Boot 时，如果页面来自其他端口或直接从 `file://` 打开，需要确认 `FILE_CENTER_CORS_ALLOWED_ORIGIN_PATTERNS`；页面把文件 PUT 到 MinIO 时，还需要配置 MinIO CORS：
 
 ```yaml
 MINIO_API_CORS_ALLOW_ORIGIN: "http://localhost:${SERVER_PORT}"
