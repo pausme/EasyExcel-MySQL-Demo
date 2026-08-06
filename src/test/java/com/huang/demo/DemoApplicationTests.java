@@ -28,6 +28,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "app.minio.secret-key=test",
         "app.minio.bucket-name=public",
         "app.minio.lifecycle-enabled=false",
+        "app.task.init-enabled=false",
         "app.file.init-enabled=false"
 })
 class DemoApplicationTests {

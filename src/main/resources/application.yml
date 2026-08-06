@@ -27,6 +27,13 @@ mybatis:
     map-underscore-to-camel-case: true
 
 app:
+  task:
+    init-enabled: ${TASK_CENTER_INIT_ENABLED:true}
+    redis-key-prefix: ${TASK_CENTER_REDIS_KEY_PREFIX:task:center:}
+    cache-retention-hours: ${TASK_CENTER_CACHE_RETENTION_HOURS:24}
+    max-page-size: ${TASK_CENTER_MAX_PAGE_SIZE:100}
+    default-owner-id: ${TASK_CENTER_DEFAULT_OWNER_ID:anonymous}
+    max-retry-count: ${TASK_CENTER_MAX_RETRY_COUNT:3}
   excel:
     export-page-size: 5000
     sheet-row-limit: 1048575

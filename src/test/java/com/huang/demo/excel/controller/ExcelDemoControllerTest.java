@@ -5,6 +5,7 @@ import com.huang.demo.excel.domain.model.ExportTask;
 import com.huang.demo.excel.domain.model.ExportTaskStatus;
 import com.huang.demo.excel.service.ExportTaskService;
 import com.huang.demo.excel.service.StudentService;
+import com.huang.demo.task.service.TaskOwnerResolver;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -14,6 +15,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.server.ResponseStatusException;
 
+import javax.servlet.http.HttpServletRequest;
 import java.net.URI;
 import java.util.Optional;
 
@@ -31,17 +33,25 @@ class ExcelDemoControllerTest {
     @Mock
     private ExportTaskService exportTaskService;
 
+    @Mock
+    private TaskOwnerResolver taskOwnerResolver;
+
+    @Mock
+    private HttpServletRequest request;
+
     private ExcelDemoController controller;
 
     @BeforeEach
     void setUp() {
-        controller = new ExcelDemoController(studentService, new ExcelDemoProperties(), exportTaskService);
+        controller = new ExcelDemoController(studentService, new ExcelDemoProperties(), exportTaskService, taskOwnerResolver);
+        when(taskOwnerResolver.resolve(request)).thenReturn("anonymous");
     }
 
     @Test
     void downloadExportReturnsPresignedRedirect() {
         ExportTask task = ExportTask.builder()
                 .taskId("task-1")
+                .ownerId("anonymous")
                 .status(ExportTaskStatus.SUCCESS)
                 .fileName("student-demo.xlsx")
                 .objectKey("excel/student/student-demo.xlsx")
@@ -50,7 +60,7 @@ class ExcelDemoControllerTest {
         when(exportTaskService.findTask("task-1")).thenReturn(Optional.of(task));
         when(exportTaskService.createDownloadUrl(task)).thenReturn(Optional.of(downloadUrl));
 
-        ResponseEntity<Void> response = controller.downloadExport("task-1");
+        ResponseEntity<Void> response = controller.downloadExport("task-1", request);
 
         assertEquals(HttpStatus.FOUND, response.getStatusCode());
         assertEquals(URI.create(downloadUrl), response.getHeaders().getLocation());
@@ -61,13 +71,14 @@ class ExcelDemoControllerTest {
     void downloadExportRejectsUnfinishedTask() {
         ExportTask task = ExportTask.builder()
                 .taskId("task-1")
+                .ownerId("anonymous")
                 .status(ExportTaskStatus.RUNNING)
                 .build();
         when(exportTaskService.findTask("task-1")).thenReturn(Optional.of(task));
 
         ResponseStatusException exception = assertThrows(
                 ResponseStatusException.class,
-                () -> controller.downloadExport("task-1"));
+                () -> controller.downloadExport("task-1", request));
 
         assertEquals(HttpStatus.CONFLICT, exception.getStatus());
     }

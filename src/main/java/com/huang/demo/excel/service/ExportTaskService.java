@@ -6,7 +6,7 @@ import java.util.Optional;
 
 public interface ExportTaskService {
 
-    ExportTask submitExport();
+    ExportTask submitExport(String ownerId);
 
     Optional<ExportTask> findTask(String taskId);
 

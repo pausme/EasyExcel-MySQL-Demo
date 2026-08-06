@@ -7,4 +7,6 @@ public interface MinioObjectStorageService {
     void uploadExcel(Path filePath, String objectKey);
 
     String createDownloadUrl(String objectKey, String fileName);
+
+    void deleteQuietly(String objectKey);
 }

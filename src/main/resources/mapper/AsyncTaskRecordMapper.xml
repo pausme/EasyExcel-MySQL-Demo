@@ -1,0 +1,145 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.huang.demo.task.repository.AsyncTaskRecordMapper">
+
+    <resultMap id="AsyncTaskRecordMap" type="com.huang.demo.task.domain.entity.AsyncTaskRecord">
+        <id property="id" column="id"/>
+        <result property="taskId" column="task_id"/>
+        <result property="ownerId" column="owner_id"/>
+        <result property="taskType" column="task_type"/>
+        <result property="taskName" column="task_name"/>
+        <result property="businessKey" column="business_key"/>
+        <result property="status" column="status"/>
+        <result property="progressPercent" column="progress_percent"/>
+        <result property="totalCount" column="total_count"/>
+        <result property="completedCount" column="completed_count"/>
+        <result property="retryCount" column="retry_count"/>
+        <result property="maxRetryCount" column="max_retry_count"/>
+        <result property="requestPayload" column="request_payload"/>
+        <result property="resultPayload" column="result_payload"/>
+        <result property="errorMessage" column="error_message"/>
+        <result property="createdAt" column="created_at"/>
+        <result property="updatedAt" column="updated_at"/>
+        <result property="startedAt" column="started_at"/>
+        <result property="finishedAt" column="finished_at"/>
+        <result property="expireAt" column="expire_at"/>
+    </resultMap>
+
+    <sql id="BaseColumns">
+        id, task_id, owner_id, task_type, task_name, business_key, status,
+        progress_percent, total_count, completed_count, retry_count, max_retry_count,
+        request_payload, result_payload, error_message, created_at, updated_at,
+        started_at, finished_at, expire_at
+    </sql>
+
+    <update id="createTableIfAbsent">
+        CREATE TABLE IF NOT EXISTS async_task_record (
+            id BIGINT AUTO_INCREMENT PRIMARY KEY,
+            task_id VARCHAR(64) NOT NULL,
+            owner_id VARCHAR(64) NOT NULL,
+            task_type VARCHAR(32) NOT NULL,
+            task_name VARCHAR(128) NOT NULL,
+            business_key VARCHAR(128),
+            status VARCHAR(32) NOT NULL,
+            progress_percent INT NOT NULL,
+            total_count BIGINT NOT NULL,
+            completed_count BIGINT NOT NULL,
+            retry_count INT NOT NULL,
+            max_retry_count INT NOT NULL,
+            request_payload TEXT,
+            result_payload TEXT,
+            error_message VARCHAR(1024),
+            created_at DATETIME NOT NULL,
+            updated_at DATETIME NOT NULL,
+            started_at DATETIME,
+            finished_at DATETIME,
+            expire_at DATETIME NOT NULL,
+            UNIQUE KEY uk_async_task_record_task_id (task_id),
+            KEY idx_async_task_record_owner_created_at (owner_id, created_at),
+            KEY idx_async_task_record_owner_status_created_at (owner_id, status, created_at),
+            KEY idx_async_task_record_type_status_created_at (task_type, status, created_at),
+            KEY idx_async_task_record_expire_at (expire_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    </update>
+
+    <insert id="insert" parameterType="com.huang.demo.task.domain.entity.AsyncTaskRecord">
+        INSERT INTO async_task_record (
+            task_id, owner_id, task_type, task_name, business_key, status,
+            progress_percent, total_count, completed_count, retry_count, max_retry_count,
+            request_payload, result_payload, error_message, created_at, updated_at,
+            started_at, finished_at, expire_at
+        )
+        VALUES (
+            #{taskId}, #{ownerId}, #{taskType}, #{taskName}, #{businessKey}, #{status},
+            #{progressPercent}, #{totalCount}, #{completedCount}, #{retryCount}, #{maxRetryCount},
+            #{requestPayload}, #{resultPayload}, #{errorMessage}, #{createdAt}, #{updatedAt},
+            #{startedAt}, #{finishedAt}, #{expireAt}
+        )
+    </insert>
+
+    <update id="update" parameterType="com.huang.demo.task.domain.entity.AsyncTaskRecord">
+        UPDATE async_task_record
+        SET owner_id = #{ownerId},
+            task_type = #{taskType},
+            task_name = #{taskName},
+            business_key = #{businessKey},
+            status = #{status},
+            progress_percent = #{progressPercent},
+            total_count = #{totalCount},
+            completed_count = #{completedCount},
+            retry_count = #{retryCount},
+            max_retry_count = #{maxRetryCount},
+            request_payload = #{requestPayload},
+            result_payload = #{resultPayload},
+            error_message = #{errorMessage},
+            updated_at = #{updatedAt},
+            started_at = #{startedAt},
+            finished_at = #{finishedAt},
+            expire_at = #{expireAt}
+        WHERE task_id = #{taskId}
+    </update>
+
+    <select id="findByTaskId" resultMap="AsyncTaskRecordMap">
+        SELECT <include refid="BaseColumns"/>
+        FROM async_task_record
+        WHERE task_id = #{taskId}
+        LIMIT 1
+    </select>
+
+    <select id="countByOwner" resultType="long">
+        SELECT COUNT(*)
+        FROM async_task_record
+        WHERE owner_id = #{ownerId}
+        <if test="taskType != null and taskType != ''">
+            AND task_type = #{taskType}
+        </if>
+        <if test="status != null and status != ''">
+            AND status = #{status}
+        </if>
+    </select>
+
+    <select id="listByOwnerPage" resultMap="AsyncTaskRecordMap">
+        SELECT <include refid="BaseColumns"/>
+        FROM async_task_record
+        WHERE owner_id = #{ownerId}
+        <if test="taskType != null and taskType != ''">
+            AND task_type = #{taskType}
+        </if>
+        <if test="status != null and status != ''">
+            AND status = #{status}
+        </if>
+        ORDER BY id DESC
+        LIMIT #{limit} OFFSET #{offset}
+    </select>
+
+    <update id="markExpiredBefore">
+        UPDATE async_task_record
+        SET status = 'EXPIRED',
+            updated_at = NOW(),
+            finished_at = NOW()
+        WHERE expire_at &lt;= #{expireBefore}
+          AND status IN ('CREATED', 'RUNNING')
+    </update>
+</mapper>

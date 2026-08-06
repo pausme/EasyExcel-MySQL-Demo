@@ -7,6 +7,7 @@
 
 - Excel 导入：流式读取 Excel，分批放入有界队列，由多个 worker 批量写入 MySQL。
 - Excel 导出：异步提交任务，使用游标分页读取数据库，生成单 Sheet Excel 后上传 MinIO。
+- 异步任务中心：统一记录任务状态、进度、失败原因和重试次数，状态缓存 Redis，任务记录持久化 MySQL。
 - 文件下载：应用只返回 MinIO 签名地址，不经过应用服务器转发大文件内容。
 - 通用文件中心：支持普通上传、元数据查询、逻辑删除、分页查询和签名下载。
 - 文件中心测试页：启动应用后访问 `/file-upload-test.html`，可测试秒传、客户端直传和分片上传。
@@ -51,7 +52,7 @@ IMPORT_WORKER_COUNT * IMPORT_MAX_CONCURRENT_TASKS <= HIKARI_MAXIMUM_POOL_SIZE
 提交导出请求
         |
         v
-Redis 保存任务状态，线程池异步执行
+任务中心创建 EXPORT 任务，MySQL 持久化记录，Redis 缓存状态
         |
         v
 记录当前 MAX(id)，按 id 游标分页读取
@@ -67,6 +68,7 @@ EasyExcel 写入单 Sheet 临时文件
 ```
 
 导出使用 `id > lastId AND id <= maxId` 的游标条件，避免大 offset 分页越来越慢，且保证一次导出有固定的数据边界。
+导出任务已经接入统一任务中心，进度、失败原因、取消和重试都会同步到 `async_task_record`，并缓存到 Redis。
 为了让导出的文件可以直接作为导入文件使用，当前导出只生成一个 Sheet；超过 Excel 单 Sheet 行数限制时任务失败。
 
 ## 项目结构
@@ -74,7 +76,7 @@ EasyExcel 写入单 Sheet 临时文件
 ```text
 src/main/java/com/huang/demo
 ├── DemoApplication.java
-└── excel
+├── excel
     ├── config        # 配置属性和导入导出线程池
     ├── controller    # Excel HTTP 接口
     ├── listener      # EasyExcel 流式导入监听器
@@ -82,6 +84,8 @@ src/main/java/com/huang/demo
     ├── domain/model  # 领域模型和任务结果
     ├── repository    # MyBatis Mapper
     └── service       # 导入导出业务编排
+├── file              # 通用文件上传中心
+└── task              # 统一异步任务中心
 
 src/main/resources
 ├── mapper            # MyBatis XML
@@ -112,6 +116,14 @@ export REDIS_PORT='<Redis端口>'
 export REDIS_DATABASE='your_redis_database'
 export REDIS_PASSWORD='your_redis_password'
 
+# 异步任务中心
+export TASK_CENTER_INIT_ENABLED='true'
+export TASK_CENTER_REDIS_KEY_PREFIX='task:center:'
+export TASK_CENTER_CACHE_RETENTION_HOURS='24'
+export TASK_CENTER_MAX_PAGE_SIZE='100'
+export TASK_CENTER_DEFAULT_OWNER_ID='anonymous'
+export TASK_CENTER_MAX_RETRY_COUNT='3'
+
 # MinIO
 export MINIO_ENDPOINT='http://<MinIO地址>:<MinIO API端口>'
 export MINIO_ACCESS_KEY='your_minio_access_key'
@@ -139,11 +151,12 @@ export FILE_CENTER_CORS_ALLOWED_ORIGIN_PATTERNS='http://localhost:*,http://127.0
 
 ```text
 create_database.sql  # 创建 demo 数据库
-create_tables.sql    # 创建 student_record 表
+create_tables.sql    # 创建业务表和任务表
 schema.sql            # 完整结构脚本
 ```
 
 如果 SQL 客户端不能稳定执行多语句脚本，建议先执行 `create_database.sql`，再选择 `demo` 数据库执行 `create_tables.sql`。
+`create_tables.sql` 会同时创建 `student_record`、`file_record`、`file_upload_task` 和 `async_task_record`。
 
 ## 启动和测试
 
@@ -181,6 +194,18 @@ export SPRING_SERVLET_MULTIPART_MAX_REQUEST_SIZE='200MB'
 | GET | `/export/{taskId}/download` | 获取 302 MinIO 签名下载地址 |
 | GET | `/template` | 下载导入模板 |
 | POST | `/import` | 上传 Excel，字段名为 `file` |
+
+基础路径：`/api/tasks`
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/{taskId}` | 查询自己的异步任务详情 |
+| POST | `/page` | 分页查询自己的异步任务 |
+| POST | `/{taskId}/cancel` | 取消自己的异步任务 |
+| POST | `/{taskId}/retry` | 重试自己的异步任务 |
+
+任务归属通过请求头 `X-User-Id` 区分；当前项目没有登录系统，不传时使用 `TASK_CENTER_DEFAULT_OWNER_ID`。
+现阶段学生导出任务已接入任务中心，导入任务仍是同步接口，后续可以复用同一任务模型迁移为异步导入。
 
 ## 文件上传中心
 

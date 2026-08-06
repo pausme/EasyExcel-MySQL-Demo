@@ -15,7 +15,11 @@ public class ExportTask {
 
     private String taskId;
 
+    private String ownerId;
+
     private volatile ExportTaskStatus status;
+
+    private volatile int progressPercent;
 
     private Long snapshotMaxId;
 
@@ -24,6 +28,10 @@ public class ExportTask {
     private volatile int exported;
 
     private volatile int sheetCount;
+
+    private volatile int retryCount;
+
+    private volatile int maxRetryCount;
 
     private String fileName;
 

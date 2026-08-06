@@ -10,14 +10,22 @@ import com.huang.demo.excel.config.MinioProperties;
 import com.huang.demo.excel.domain.model.ExportTask;
 import com.huang.demo.excel.domain.model.ExportTaskStatus;
 import com.huang.demo.excel.domain.model.StudentExportRecord;
+import com.huang.demo.excel.domain.model.StudentExportTaskPayload;
+import com.huang.demo.excel.domain.model.StudentExportTaskResult;
 import com.huang.demo.excel.model.StudentExcelRow;
 import com.huang.demo.excel.repository.StudentMapper;
 import com.huang.demo.excel.service.ExportTaskService;
 import com.huang.demo.excel.service.MinioObjectStorageService;
+import com.huang.demo.task.domain.entity.AsyncTaskRecord;
+import com.huang.demo.task.domain.model.AsyncTaskStatus;
+import com.huang.demo.task.domain.model.AsyncTaskType;
+import com.huang.demo.task.domain.model.CreateAsyncTaskCommand;
+import com.huang.demo.task.domain.model.TaskCanceledException;
+import com.huang.demo.task.service.TaskCenterService;
+import com.huang.demo.task.service.TaskRetryHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
@@ -27,7 +35,6 @@ import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -37,18 +44,17 @@ import java.util.UUID;
 import java.util.concurrent.Executor;
 
 @Service
-public class ExportTaskServiceImpl implements ExportTaskService {
+public class ExportTaskServiceImpl implements ExportTaskService, TaskRetryHandler {
 
     private static final Logger log = LoggerFactory.getLogger(ExportTaskServiceImpl.class);
     private static final int MIN_EXPORT_PAGE_SIZE = 1000;
     private static final int MAX_EXPORT_PAGE_SIZE = 10000;
     private static final int MAX_SHEET_DATA_ROWS = 1048575;
-    private static final String EXPORT_TASK_KEY_PREFIX = "excel:student:export:";
 
     private final StudentMapper studentMapper;
     private final ExcelDemoProperties properties;
     private final Executor exportTaskExecutor;
-    private final StringRedisTemplate stringRedisTemplate;
+    private final TaskCenterService taskCenterService;
     private final ObjectMapper objectMapper;
     private final MinioObjectStorageService minioObjectStorageService;
     private final MinioProperties minioProperties;
@@ -56,14 +62,14 @@ public class ExportTaskServiceImpl implements ExportTaskService {
     public ExportTaskServiceImpl(StudentMapper studentMapper,
                                  ExcelDemoProperties properties,
                                  @Qualifier("exportTaskExecutor") Executor exportTaskExecutor,
-                                 StringRedisTemplate stringRedisTemplate,
+                                 TaskCenterService taskCenterService,
                                  ObjectMapper objectMapper,
                                  MinioObjectStorageService minioObjectStorageService,
                                  MinioProperties minioProperties) {
         this.studentMapper = studentMapper;
         this.properties = properties;
         this.exportTaskExecutor = exportTaskExecutor;
-        this.stringRedisTemplate = stringRedisTemplate;
+        this.taskCenterService = taskCenterService;
         this.objectMapper = objectMapper;
         this.minioObjectStorageService = minioObjectStorageService;
         this.minioProperties = minioProperties;
@@ -80,44 +86,36 @@ public class ExportTaskServiceImpl implements ExportTaskService {
     }
 
     @Override
-    public ExportTask submitExport() {
-        String taskId = UUID.randomUUID().toString().replace("-", "");
+    public ExportTask submitExport(String ownerId) {
+        String businessKey = UUID.randomUUID().toString().replace("-", "");
         Long maxId = studentMapper.maxId();
-        String fileName = "student-demo-" + taskId + ".xlsx";
-
-        ExportTask task = ExportTask.builder()
-                .taskId(taskId)
-                .status(ExportTaskStatus.QUEUED)
+        String fileName = "student-demo-" + businessKey + ".xlsx";
+        StudentExportTaskPayload payload = StudentExportTaskPayload.builder()
                 .snapshotMaxId(maxId)
                 .fileName(fileName)
-                .createdAt(LocalDateTime.now())
                 .build();
-        saveTaskRequired(task);
 
+        AsyncTaskRecord task = taskCenterService.createTask(CreateAsyncTaskCommand.builder()
+                .ownerId(ownerId)
+                .taskType(AsyncTaskType.EXPORT)
+                .taskName("学生数据导出")
+                .businessKey(businessKey)
+                .requestPayload(toJson(payload))
+                .build());
         try {
-            exportTaskExecutor.execute(() -> executeExport(task));
+            submitExecution(task.getTaskId());
         } catch (RuntimeException ex) {
-            task.setStatus(ExportTaskStatus.FAILED);
-            task.setErrorMessage("导出任务提交失败");
-            task.setFinishedAt(LocalDateTime.now());
-            saveTaskQuietly(task);
-            log.error("submit export task failed, taskId={}", taskId, ex);
+            task = taskCenterService.markFailed(task.getTaskId(), "导出任务提交失败");
+            log.error("submit export task failed, taskId={}", task.getTaskId(), ex);
         }
-        return task;
+        return toExportTask(task);
     }
 
     @Override
     public Optional<ExportTask> findTask(String taskId) {
-        String json = stringRedisTemplate.opsForValue().get(buildTaskKey(taskId));
-        if (json == null || json.trim().isEmpty()) {
-            return Optional.empty();
-        }
-        try {
-            return Optional.of(objectMapper.readValue(json, ExportTask.class));
-        } catch (IOException ex) {
-            log.warn("parse export task from redis failed, taskId={}", taskId, ex);
-            return Optional.empty();
-        }
+        return taskCenterService.findTask(taskId)
+                .filter(task -> AsyncTaskType.EXPORT.name().equals(task.getTaskType()))
+                .map(this::toExportTask);
     }
 
     @Override
@@ -133,15 +131,40 @@ public class ExportTaskServiceImpl implements ExportTaskService {
         }
     }
 
+    @Override
+    public String taskType() {
+        return AsyncTaskType.EXPORT.name();
+    }
+
+    @Override
+    public AsyncTaskRecord retry(AsyncTaskRecord task, String ownerId) {
+        AsyncTaskRecord retriedTask = taskCenterService.prepareRetry(task.getTaskId(), ownerId);
+        try {
+            submitExecution(retriedTask.getTaskId());
+        } catch (RuntimeException ex) {
+            retriedTask = taskCenterService.markFailed(retriedTask.getTaskId(), "导出任务提交失败");
+            log.error("retry export task submit failed, taskId={}", retriedTask.getTaskId(), ex);
+        }
+        return retriedTask;
+    }
+
     @Scheduled(fixedDelay = 3600000L, initialDelay = 3600000L)
     public void cleanupExpiredExportFiles() {
         cleanupExpiredFiles();
     }
 
-    private void executeExport(ExportTask task) {
+    private void submitExecution(String taskId) {
+        exportTaskExecutor.execute(() -> executeExport(taskId));
+    }
+
+    private void executeExport(String taskId) {
         long start = System.currentTimeMillis();
-        task.setStatus(ExportTaskStatus.RUNNING);
-        saveTaskQuietly(task);
+        AsyncTaskRecord taskRecord = taskCenterService.markRunning(taskId);
+        if (AsyncTaskStatus.CANCELED.name().equals(taskRecord.getStatus())
+                || AsyncTaskStatus.EXPIRED.name().equals(taskRecord.getStatus())) {
+            return;
+        }
+        ExportTask task = toExportTask(taskRecord);
         try {
             Path temporaryFilePath = getTemporaryFilePath(task);
             Long maxId = task.getSnapshotMaxId();
@@ -149,23 +172,32 @@ public class ExportTaskServiceImpl implements ExportTaskService {
             if (task.getTotal() > getSheetRowLimit()) {
                 throw new IllegalStateException("导出数据超过 Excel 单 Sheet 最大行数，请缩小导出范围或改用 CSV");
             }
-            saveTaskQuietly(task);
+            taskCenterService.updateProgress(task.getTaskId(), 0L, task.getTotal(), 0);
             Files.createDirectories(temporaryFilePath.getParent());
             Files.deleteIfExists(temporaryFilePath);
             writeExcel(task, temporaryFilePath);
+            assertTaskCanContinue(task.getTaskId());
             storeExportFile(task, temporaryFilePath);
-            task.setStatus(ExportTaskStatus.SUCCESS);
-            task.setFinishedAt(LocalDateTime.now());
-            saveTaskQuietly(task);
+            AsyncTaskRecord completedTask = taskCenterService.markSuccess(task.getTaskId(), toJson(StudentExportTaskResult.builder()
+                    .fileName(task.getFileName())
+                    .objectKey(task.getObjectKey())
+                    .sheetCount(task.getSheetCount())
+                    .build()));
+            if (!AsyncTaskStatus.SUCCESS.name().equals(completedTask.getStatus())) {
+                minioObjectStorageService.deleteQuietly(task.getObjectKey());
+                throw new TaskCanceledException("任务状态已变更，status=" + completedTask.getStatus());
+            }
             log.info("export task finished, taskId={}, total={}, exported={}, sheetCount={}, elapsedMs={}",
                     task.getTaskId(), task.getTotal(), task.getExported(), task.getSheetCount(),
                     System.currentTimeMillis() - start);
-        } catch (Exception ex) {
-            task.setStatus(ExportTaskStatus.FAILED);
-            task.setErrorMessage(ex.getMessage() == null ? "导出失败，请查看服务端日志" : ex.getMessage());
-            task.setFinishedAt(LocalDateTime.now());
+        } catch (TaskCanceledException ex) {
             deletePartialFile(task);
-            saveTaskQuietly(task);
+            log.info("export task canceled, taskId={}, elapsedMs={}",
+                    task.getTaskId(), System.currentTimeMillis() - start);
+        } catch (Exception ex) {
+            deletePartialFile(task);
+            taskCenterService.markFailed(task.getTaskId(),
+                    ex.getMessage() == null ? "导出失败，请查看服务端日志" : ex.getMessage());
             log.error("export task failed, taskId={}, elapsedMs={}",
                     task.getTaskId(), System.currentTimeMillis() - start, ex);
         } finally {
@@ -188,6 +220,7 @@ public class ExportTaskServiceImpl implements ExportTaskService {
         try (ExcelWriter writer = EasyExcel.write(filePath.toFile(), StudentExcelRow.class).build()) {
             if (maxId != null) {
                 while (true) {
+                    assertTaskCanContinue(task.getTaskId());
                     List<StudentExportRecord> records =
                             studentMapper.listByCursor(lastId, maxId, pageSize);
                     if (records.isEmpty()) {
@@ -198,7 +231,8 @@ public class ExportTaskServiceImpl implements ExportTaskService {
                     writer.write(rows, writeSheet);
                     task.setSheetCount(1);
                     task.setExported(task.getExported() + rows.size());
-                    saveTaskQuietly(task);
+                    taskCenterService.updateProgress(
+                            task.getTaskId(), task.getExported(), task.getTotal(), calculateProgressPercent(task));
 
                     lastId = records.get(records.size() - 1).getId();
                     log.debug("export cursor page finished, taskId={}, lastId={}, pageRows={}, exported={}",
@@ -207,41 +241,115 @@ public class ExportTaskServiceImpl implements ExportTaskService {
             }
 
             if (task.getExported() == 0) {
+                assertTaskCanContinue(task.getTaskId());
                 writer.write(Collections.emptyList(), writeSheet);
                 task.setSheetCount(1);
-                saveTaskQuietly(task);
+                taskCenterService.updateProgress(task.getTaskId(), 0L, 0L, 0);
             }
         }
     }
 
-    private void saveTaskRequired(ExportTask task) {
-        if (!saveTask(task)) {
-            throw new IllegalStateException("导出任务状态写入 Redis 失败");
+    private ExportTask toExportTask(AsyncTaskRecord taskRecord) {
+        StudentExportTaskPayload payload = readPayload(taskRecord.getRequestPayload());
+        StudentExportTaskResult result = readResult(taskRecord.getResultPayload());
+        return ExportTask.builder()
+                .taskId(taskRecord.getTaskId())
+                .ownerId(taskRecord.getOwnerId())
+                .status(toExportTaskStatus(taskRecord.getStatus()))
+                .progressPercent(safeInt(taskRecord.getProgressPercent()))
+                .snapshotMaxId(payload.getSnapshotMaxId())
+                .total(safeLongToInt(taskRecord.getTotalCount()))
+                .exported(safeLongToInt(taskRecord.getCompletedCount()))
+                .sheetCount(result.getSheetCount())
+                .retryCount(safeInt(taskRecord.getRetryCount()))
+                .maxRetryCount(safeInt(taskRecord.getMaxRetryCount()))
+                .fileName(payload.getFileName() == null ? result.getFileName() : payload.getFileName())
+                .objectKey(result.getObjectKey())
+                .errorMessage(taskRecord.getErrorMessage())
+                .createdAt(taskRecord.getCreatedAt())
+                .finishedAt(taskRecord.getFinishedAt())
+                .build();
+    }
+
+    private ExportTaskStatus toExportTaskStatus(String status) {
+        if (AsyncTaskStatus.CREATED.name().equals(status)) {
+            return ExportTaskStatus.QUEUED;
         }
+        if (AsyncTaskStatus.CANCELED.name().equals(status)) {
+            return ExportTaskStatus.CANCELED;
+        }
+        if (AsyncTaskStatus.EXPIRED.name().equals(status)) {
+            return ExportTaskStatus.EXPIRED;
+        }
+        if (AsyncTaskStatus.RUNNING.name().equals(status)) {
+            return ExportTaskStatus.RUNNING;
+        }
+        if (AsyncTaskStatus.SUCCESS.name().equals(status)) {
+            return ExportTaskStatus.SUCCESS;
+        }
+        return ExportTaskStatus.FAILED;
     }
 
-    private void saveTaskQuietly(ExportTask task) {
-        saveTask(task);
-    }
-
-    private boolean saveTask(ExportTask task) {
+    private StudentExportTaskPayload readPayload(String payloadJson) {
+        if (payloadJson == null || payloadJson.trim().isEmpty()) {
+            return new StudentExportTaskPayload();
+        }
         try {
-            stringRedisTemplate.opsForValue().set(
-                    buildTaskKey(task.getTaskId()),
-                    objectMapper.writeValueAsString(task),
-                    Duration.ofHours(Math.max(1, properties.getExportFileRetentionHours())));
-            return true;
-        } catch (JsonProcessingException ex) {
-            log.warn("serialize export task failed, taskId={}", task.getTaskId(), ex);
-            return false;
-        } catch (RuntimeException ex) {
-            log.warn("save export task to redis failed, taskId={}", task.getTaskId(), ex);
-            return false;
+            return objectMapper.readValue(payloadJson, StudentExportTaskPayload.class);
+        } catch (IOException ex) {
+            log.warn("parse student export task payload failed", ex);
+            return new StudentExportTaskPayload();
         }
     }
 
-    private String buildTaskKey(String taskId) {
-        return EXPORT_TASK_KEY_PREFIX + taskId;
+    private StudentExportTaskResult readResult(String resultJson) {
+        if (resultJson == null || resultJson.trim().isEmpty()) {
+            return new StudentExportTaskResult();
+        }
+        try {
+            return objectMapper.readValue(resultJson, StudentExportTaskResult.class);
+        } catch (IOException ex) {
+            log.warn("parse student export task result failed", ex);
+            return new StudentExportTaskResult();
+        }
+    }
+
+    private String toJson(Object value) {
+        try {
+            return objectMapper.writeValueAsString(value);
+        } catch (JsonProcessingException ex) {
+            throw new IllegalStateException("序列化导出任务上下文失败", ex);
+        }
+    }
+
+    private void assertTaskCanContinue(String taskId) {
+        AsyncTaskRecord latestTask = taskCenterService.findTask(taskId)
+                .orElseThrow(() -> new TaskCanceledException("任务不存在"));
+        if (AsyncTaskStatus.CANCELED.name().equals(latestTask.getStatus())) {
+            throw new TaskCanceledException("任务已取消");
+        }
+        if (AsyncTaskStatus.EXPIRED.name().equals(latestTask.getStatus())) {
+            throw new TaskCanceledException("任务已过期");
+        }
+    }
+
+    private int calculateProgressPercent(ExportTask task) {
+        if (task.getTotal() <= 0) {
+            return 0;
+        }
+        long progress = task.getExported() * 100L / task.getTotal();
+        return (int) Math.min(99L, Math.max(0L, progress));
+    }
+
+    private int safeLongToInt(Long value) {
+        if (value == null || value <= 0L) {
+            return 0;
+        }
+        return value > Integer.MAX_VALUE ? Integer.MAX_VALUE : value.intValue();
+    }
+
+    private int safeInt(Integer value) {
+        return value == null ? 0 : value;
     }
 
     private List<StudentExcelRow> toExcelRows(List<StudentExportRecord> records) {

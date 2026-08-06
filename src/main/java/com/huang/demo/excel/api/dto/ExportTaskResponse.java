@@ -17,13 +17,21 @@ public class ExportTaskResponse {
 
     private String taskId;
 
+    private String ownerId;
+
     private ExportTaskStatus status;
+
+    private int progressPercent;
 
     private int total;
 
     private int exported;
 
     private int sheetCount;
+
+    private int retryCount;
+
+    private int maxRetryCount;
 
     private String fileName;
 
@@ -36,10 +44,14 @@ public class ExportTaskResponse {
     public static ExportTaskResponse from(ExportTask task) {
         return ExportTaskResponse.builder()
                 .taskId(task.getTaskId())
+                .ownerId(task.getOwnerId())
                 .status(task.getStatus())
+                .progressPercent(task.getProgressPercent())
                 .total(task.getTotal())
                 .exported(task.getExported())
                 .sheetCount(task.getSheetCount())
+                .retryCount(task.getRetryCount())
+                .maxRetryCount(task.getMaxRetryCount())
                 .fileName(task.getFileName())
                 .errorMessage(task.getErrorMessage())
                 .createdAt(task.getCreatedAt())

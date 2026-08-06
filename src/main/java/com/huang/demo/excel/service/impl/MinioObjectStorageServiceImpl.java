@@ -6,6 +6,7 @@ import io.minio.GetBucketLifecycleArgs;
 import io.minio.GetPresignedObjectUrlArgs;
 import io.minio.MinioClient;
 import io.minio.PutObjectArgs;
+import io.minio.RemoveObjectArgs;
 import io.minio.SetBucketLifecycleArgs;
 import io.minio.errors.ErrorResponseException;
 import io.minio.http.Method;
@@ -109,6 +110,21 @@ public class MinioObjectStorageServiceImpl implements MinioObjectStorageService 
                     .build());
         } catch (Exception ex) {
             throw new IllegalStateException("生成 MinIO 下载地址失败", ex);
+        }
+    }
+
+    @Override
+    public void deleteQuietly(String objectKey) {
+        if (objectKey == null || objectKey.trim().isEmpty()) {
+            return;
+        }
+        try {
+            minioClient.removeObject(RemoveObjectArgs.builder()
+                    .bucket(properties.getBucketName())
+                    .object(objectKey)
+                    .build());
+        } catch (Exception ex) {
+            log.warn("delete minio object failed, objectKey={}", objectKey, ex);
         }
     }
 

@@ -7,6 +7,7 @@ import com.huang.demo.excel.domain.model.ExportTaskStatus;
 import com.huang.demo.excel.domain.model.StudentImportResult;
 import com.huang.demo.excel.service.ExportTaskService;
 import com.huang.demo.excel.service.StudentService;
+import com.huang.demo.task.service.TaskOwnerResolver;
 import io.swagger.annotations.ApiOperation;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -23,6 +24,7 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
 import javax.servlet.http.HttpServletResponse;
+import javax.servlet.http.HttpServletRequest;
 import java.io.IOException;
 import java.net.URI;
 import java.net.URLEncoder;
@@ -39,13 +41,16 @@ public class ExcelDemoController {
     private final StudentService studentService;
     private final ExcelDemoProperties properties;
     private final ExportTaskService exportTaskService;
+    private final TaskOwnerResolver taskOwnerResolver;
 
     public ExcelDemoController(StudentService studentService,
                                ExcelDemoProperties properties,
-                               ExportTaskService exportTaskService) {
+                               ExportTaskService exportTaskService,
+                               TaskOwnerResolver taskOwnerResolver) {
         this.studentService = studentService;
         this.properties = properties;
         this.exportTaskService = exportTaskService;
+        this.taskOwnerResolver = taskOwnerResolver;
     }
 
     @ApiOperation("查询学生数据总数")
@@ -72,25 +77,20 @@ public class ExcelDemoController {
 
     @ApiOperation("提交学生数据导出任务")
     @PostMapping("/export")
-    public ExportTaskResponse submitExport() {
-        return ExportTaskResponse.from(exportTaskService.submitExport());
+    public ExportTaskResponse submitExport(HttpServletRequest request) {
+        return ExportTaskResponse.from(exportTaskService.submitExport(taskOwnerResolver.resolve(request)));
     }
 
     @ApiOperation("查询学生数据导出任务状态")
     @GetMapping("/export/{taskId}")
-    public ExportTaskResponse exportStatus(@PathVariable("taskId") String taskId) {
-        ExportTask task = exportTaskService.findTask(taskId)
-                .orElseThrow(() -> new ResponseStatusException(
-                        org.springframework.http.HttpStatus.NOT_FOUND, "导出任务不存在"));
-        return ExportTaskResponse.from(task);
+    public ExportTaskResponse exportStatus(@PathVariable("taskId") String taskId, HttpServletRequest request) {
+        return ExportTaskResponse.from(findMyExportTask(taskId, request));
     }
 
     @ApiOperation("下载已完成的学生数据导出文件")
     @GetMapping("/export/{taskId}/download")
-    public ResponseEntity<Void> downloadExport(@PathVariable("taskId") String taskId) {
-        ExportTask task = exportTaskService.findTask(taskId)
-                .orElseThrow(() -> new ResponseStatusException(
-                        org.springframework.http.HttpStatus.NOT_FOUND, "导出任务不存在"));
+    public ResponseEntity<Void> downloadExport(@PathVariable("taskId") String taskId, HttpServletRequest request) {
+        ExportTask task = findMyExportTask(taskId, request);
         if (task.getStatus() != ExportTaskStatus.SUCCESS) {
             throw new ResponseStatusException(
                     org.springframework.http.HttpStatus.CONFLICT, "导出任务尚未完成");
@@ -136,5 +136,16 @@ public class ExcelDemoController {
         String downloadFileName = fileName.endsWith(".xlsx") ? fileName : fileName + ".xlsx";
         String encodedFileName = URLEncoder.encode(downloadFileName, StandardCharsets.UTF_8.name()).replace("+", "%20");
         response.setHeader("Content-disposition", "attachment;filename*=UTF-8''" + encodedFileName);
+    }
+
+    private ExportTask findMyExportTask(String taskId, HttpServletRequest request) {
+        String ownerId = taskOwnerResolver.resolve(request);
+        ExportTask task = exportTaskService.findTask(taskId)
+                .orElseThrow(() -> new ResponseStatusException(
+                        org.springframework.http.HttpStatus.NOT_FOUND, "导出任务不存在"));
+        if (!ownerId.equals(task.getOwnerId())) {
+            throw new ResponseStatusException(org.springframework.http.HttpStatus.NOT_FOUND, "导出任务不存在");
+        }
+        return task;
     }
 }
