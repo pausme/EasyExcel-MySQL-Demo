@@ -56,6 +56,22 @@ public class AsyncExportConfig {
         return executor;
     }
 
+    @Bean("importTaskExecutor")
+    public ThreadPoolTaskExecutor importTaskExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        int corePoolSize = Math.max(1, properties.getImportTaskCorePoolSize());
+        int maxPoolSize = Math.max(corePoolSize, properties.getImportTaskMaxPoolSize());
+        executor.setCorePoolSize(corePoolSize);
+        executor.setMaxPoolSize(maxPoolSize);
+        executor.setQueueCapacity(Math.max(0, properties.getImportTaskQueueCapacity()));
+        executor.setRejectedExecutionHandler(new ThreadPoolExecutor.AbortPolicy());
+        executor.setThreadNamePrefix("student-import-task-");
+        executor.setWaitForTasksToCompleteOnShutdown(true);
+        executor.setAwaitTerminationSeconds(Math.max(1, properties.getImportAwaitTerminationSeconds()));
+        executor.initialize();
+        return executor;
+    }
+
     private void validateImportWorkerCapacity(int totalWorkerCapacity) {
         int maximumPoolSize = getDataSourceMaximumPoolSize();
         if (totalWorkerCapacity > maximumPoolSize) {

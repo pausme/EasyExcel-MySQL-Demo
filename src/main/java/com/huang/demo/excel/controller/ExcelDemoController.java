@@ -1,12 +1,15 @@
 package com.huang.demo.excel.controller;
 
 import com.huang.demo.excel.api.dto.ExportTaskResponse;
+import com.huang.demo.excel.api.dto.ImportTaskResponse;
 import com.huang.demo.excel.config.ExcelDemoProperties;
 import com.huang.demo.excel.domain.model.ExportTask;
 import com.huang.demo.excel.domain.model.ExportTaskStatus;
-import com.huang.demo.excel.domain.model.StudentImportResult;
 import com.huang.demo.excel.service.ExportTaskService;
+import com.huang.demo.excel.service.StudentImportTaskService;
 import com.huang.demo.excel.service.StudentService;
+import com.huang.demo.task.api.dto.AsyncTaskResponse;
+import com.huang.demo.task.domain.entity.AsyncTaskRecord;
 import com.huang.demo.task.service.TaskOwnerResolver;
 import io.swagger.annotations.ApiOperation;
 import org.slf4j.Logger;
@@ -41,15 +44,18 @@ public class ExcelDemoController {
     private final StudentService studentService;
     private final ExcelDemoProperties properties;
     private final ExportTaskService exportTaskService;
+    private final StudentImportTaskService studentImportTaskService;
     private final TaskOwnerResolver taskOwnerResolver;
 
     public ExcelDemoController(StudentService studentService,
                                ExcelDemoProperties properties,
                                ExportTaskService exportTaskService,
+                               StudentImportTaskService studentImportTaskService,
                                TaskOwnerResolver taskOwnerResolver) {
         this.studentService = studentService;
         this.properties = properties;
         this.exportTaskService = exportTaskService;
+        this.studentImportTaskService = studentImportTaskService;
         this.taskOwnerResolver = taskOwnerResolver;
     }
 
@@ -113,21 +119,19 @@ public class ExcelDemoController {
         log.info("download import template finished, elapsedMs={}", System.currentTimeMillis() - start);
     }
 
-    @ApiOperation("导入学生数据 Excel")
+    @ApiOperation("提交学生数据异步导入任务")
     @PostMapping(value = "/import", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public Map<String, Object> importExcel(@RequestParam("file") MultipartFile file) throws IOException {
+    public ImportTaskResponse importExcel(@RequestParam("file") MultipartFile file,
+                                          HttpServletRequest request) throws IOException {
         long start = System.currentTimeMillis();
-        StudentImportResult importResult = studentService.importExcel(file.getInputStream(), properties.getImportBatchSize());
-        long elapsed = System.currentTimeMillis() - start;
-
-        Map<String, Object> result = new LinkedHashMap<String, Object>();
-        result.put("imported", importResult.getImportedCount());
-        result.put("batchCount", importResult.getBatchCount());
-        result.put("count", studentService.count());
-        result.put("elapsedMs", elapsed);
-        log.info("import api finished, fileName={}, imported={}, batchCount={}, elapsedMs={}",
-                file.getOriginalFilename(), importResult.getImportedCount(), importResult.getBatchCount(), elapsed);
-        return result;
+        try {
+            AsyncTaskRecord task = studentImportTaskService.submitImport(file, taskOwnerResolver.resolve(request));
+            log.info("import task submitted, taskId={}, fileName={}, elapsedMs={}",
+                    task.getTaskId(), file.getOriginalFilename(), System.currentTimeMillis() - start);
+            return ImportTaskResponse.from(AsyncTaskResponse.from(task));
+        } catch (IllegalArgumentException ex) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, ex.getMessage(), ex);
+        }
     }
 
     private void setExcelDownloadHeaders(HttpServletResponse response, String fileName) throws IOException {

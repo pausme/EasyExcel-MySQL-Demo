@@ -28,6 +28,24 @@
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     </update>
 
+    <update id="createImportStageTableIfAbsent">
+        CREATE TABLE IF NOT EXISTS student_import_stage (
+            id BIGINT AUTO_INCREMENT PRIMARY KEY,
+            import_task_id VARCHAR(64) NOT NULL,
+            row_no INT NOT NULL,
+            student_no VARCHAR(32),
+            name VARCHAR(64),
+            age INT,
+            gender VARCHAR(16),
+            class_name VARCHAR(64),
+            email VARCHAR(128),
+            birthday VARCHAR(32),
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            KEY idx_student_import_stage_task_row (import_task_id, row_no),
+            KEY idx_student_import_stage_task_student_no (import_task_id, student_no)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    </update>
+
     <select id="countStudentNoUniqueIndex" resultType="int">
         SELECT COUNT(*)
         FROM information_schema.statistics
@@ -95,4 +113,63 @@
             email = VALUES(email),
             birthday = VALUES(birthday)
     </insert>
+
+    <insert id="saveImportStageBatch">
+        INSERT INTO student_import_stage
+            (import_task_id, row_no, student_no, name, age, gender, class_name, email, birthday)
+        VALUES
+        <foreach collection="rows" item="row" separator=",">
+            (#{row.importTaskId}, #{row.rowNo}, #{row.studentNo}, #{row.name}, #{row.age},
+             #{row.gender}, #{row.className}, #{row.email}, #{row.birthday})
+        </foreach>
+    </insert>
+
+    <select id="countImportStageRows" resultType="int">
+        SELECT COUNT(*)
+        FROM student_import_stage
+        WHERE import_task_id = #{importTaskId}
+    </select>
+
+    <select id="countInvalidImportStageRows" resultType="int">
+        SELECT COUNT(*)
+        FROM student_import_stage
+        WHERE import_task_id = #{importTaskId}
+          AND (
+              student_no IS NULL OR TRIM(student_no) = ''
+              OR name IS NULL OR TRIM(name) = ''
+          )
+    </select>
+
+    <select id="countDuplicateImportStageStudentNo" resultType="int">
+        SELECT COUNT(*)
+        FROM (
+            SELECT student_no
+            FROM student_import_stage
+            WHERE import_task_id = #{importTaskId}
+              AND student_no IS NOT NULL
+              AND TRIM(student_no) &lt;&gt; ''
+            GROUP BY student_no
+            HAVING COUNT(*) &gt; 1
+        ) duplicate_student_no
+    </select>
+
+    <insert id="mergeImportStageToStudent">
+        INSERT INTO student_record (student_no, name, age, gender, class_name, email, birthday)
+        SELECT student_no, name, age, gender, class_name, email, birthday
+        FROM student_import_stage
+        WHERE import_task_id = #{importTaskId}
+        ORDER BY row_no
+        ON DUPLICATE KEY UPDATE
+            name = VALUES(name),
+            age = VALUES(age),
+            gender = VALUES(gender),
+            class_name = VALUES(class_name),
+            email = VALUES(email),
+            birthday = VALUES(birthday)
+    </insert>
+
+    <delete id="deleteImportStage">
+        DELETE FROM student_import_stage
+        WHERE import_task_id = #{importTaskId}
+    </delete>
 </mapper>

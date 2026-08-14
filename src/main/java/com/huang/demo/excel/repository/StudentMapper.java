@@ -1,6 +1,7 @@
 package com.huang.demo.excel.repository;
 
 import com.huang.demo.excel.domain.model.StudentExportRecord;
+import com.huang.demo.excel.domain.model.StudentImportStageRecord;
 import com.huang.demo.excel.model.StudentExcelRow;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
@@ -11,6 +12,8 @@ import java.util.List;
 public interface StudentMapper {
 
     void createTableIfAbsent();
+
+    void createImportStageTableIfAbsent();
 
     int countStudentNoUniqueIndex();
 
@@ -31,4 +34,16 @@ public interface StudentMapper {
                                            @Param("limit") int limit);
 
     void saveBatch(@Param("rows") List<StudentExcelRow> rows);
+
+    void saveImportStageBatch(@Param("rows") List<StudentImportStageRecord> rows);
+
+    int countImportStageRows(@Param("importTaskId") String importTaskId);
+
+    int countInvalidImportStageRows(@Param("importTaskId") String importTaskId);
+
+    int countDuplicateImportStageStudentNo(@Param("importTaskId") String importTaskId);
+
+    int mergeImportStageToStudent(@Param("importTaskId") String importTaskId);
+
+    int deleteImportStage(@Param("importTaskId") String importTaskId);
 }

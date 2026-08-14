@@ -2,7 +2,10 @@ package com.huang.demo.excel.service.impl;
 
 import com.alibaba.excel.EasyExcel;
 import com.huang.demo.excel.config.ExcelDemoProperties;
+import com.huang.demo.excel.domain.model.StudentImportBatch;
+import com.huang.demo.excel.domain.model.StudentImportProgressCallback;
 import com.huang.demo.excel.domain.model.StudentImportResult;
+import com.huang.demo.excel.domain.model.StudentImportStageRecord;
 import com.huang.demo.excel.listener.StudentImportListener;
 import com.huang.demo.excel.model.StudentExcelRow;
 import com.huang.demo.excel.repository.StudentMapper;
@@ -33,12 +36,14 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.UUID;
 
 @Service
 public class StudentServiceImpl implements StudentService {
 
     private static final Logger log = LoggerFactory.getLogger(StudentServiceImpl.class);
-    private static final List<StudentExcelRow> IMPORT_POISON_BATCH = Collections.emptyList();
+    private static final StudentImportBatch IMPORT_POISON_BATCH =
+            new StudentImportBatch(0, Collections.emptyList());
 
     private final StudentMapper studentMapper;
     private final ExcelDemoProperties properties;
@@ -67,6 +72,7 @@ public class StudentServiceImpl implements StudentService {
         }
         long start = System.currentTimeMillis();
         studentMapper.createTableIfAbsent();
+        studentMapper.createImportStageTableIfAbsent();
         if (studentMapper.countStudentNoUniqueIndex() == 0) {
             int duplicateCount = studentMapper.countDuplicateStudentNo();
             if (duplicateCount > 0) {
@@ -107,37 +113,53 @@ public class StudentServiceImpl implements StudentService {
 
     @Override
     public StudentImportResult importExcel(InputStream inputStream, int batchSize) {
+        return importExcel(inputStream, batchSize, StudentImportProgressCallback.NONE);
+    }
+
+    public StudentImportResult importExcel(InputStream inputStream,
+                                           int batchSize,
+                                           StudentImportProgressCallback progressCallback) {
         long start = System.currentTimeMillis();
         acquireImportPermit();
         try {
+            StudentImportProgressCallback safeProgressCallback =
+                    progressCallback == null ? StudentImportProgressCallback.NONE : progressCallback;
             int importBatchSize = Math.max(1, batchSize);
+            String importTaskId = UUID.randomUUID().toString().replace("-", "");
             int workerCount = Math.max(1, properties.getImportWorkerCount());
             int queueCapacity = Math.max(workerCount, properties.getImportQueueCapacity());
-            BlockingQueue<List<StudentExcelRow>> importQueue =
-                    new ArrayBlockingQueue<List<StudentExcelRow>>(queueCapacity);
-            AtomicInteger importedCount = new AtomicInteger();
-            AtomicInteger importedBatchCount = new AtomicInteger();
+            BlockingQueue<StudentImportBatch> importQueue =
+                    new ArrayBlockingQueue<StudentImportBatch>(queueCapacity);
+            AtomicInteger stagedCount = new AtomicInteger();
+            AtomicInteger stagedBatchCount = new AtomicInteger();
             AtomicReference<Throwable> workerFailure = new AtomicReference<Throwable>();
             CountDownLatch workerLatch = new CountDownLatch(workerCount);
 
             List<ImportWorkerHandle> workerHandles = startImportWorkers(
-                    workerCount, importQueue, importedCount, importedBatchCount, workerFailure, workerLatch);
+                    workerCount, importTaskId, importQueue, stagedCount, stagedBatchCount,
+                    workerFailure, workerLatch, safeProgressCallback);
             StudentImportListener listener = new StudentImportListener(
-                    importBatchSize, importQueue, workerFailure, getImportProgressLogInterval());
+                    importBatchSize, importQueue, workerFailure,
+                    getImportProgressLogInterval(), safeProgressCallback);
             try {
+                safeProgressCallback.checkCanceled();
                 EasyExcel.read(inputStream, StudentExcelRow.class, listener).doReadAll();
+                safeProgressCallback.checkCanceled();
                 stopImportWorkers(importQueue, workerCount);
                 awaitImportWorkers(workerLatch);
                 awaitWorkerFutures(workerHandles);
                 throwIfImportWorkerFailed(workerFailure);
+                mergeImportStageAtomically(importTaskId, stagedCount.get(), safeProgressCallback);
             } catch (RuntimeException ex) {
                 cleanupFailedImportWorkers(importQueue, workerCount, workerHandles, workerLatch);
                 throw ex;
+            } finally {
+                deleteImportStageQuietly(importTaskId);
             }
 
             StudentImportResult result = StudentImportResult.builder()
-                    .importedCount(importedCount.get())
-                    .batchCount(importedBatchCount.get())
+                    .importedCount(stagedCount.get())
+                    .batchCount(stagedBatchCount.get())
                     .build();
             log.info("import students finished, imported={}, batchCount={}, elapsedMs={}",
                     result.getImportedCount(), result.getBatchCount(), System.currentTimeMillis() - start);
@@ -215,13 +237,16 @@ public class StudentServiceImpl implements StudentService {
     }
 
     private void importWorker(int workerNo,
-                              BlockingQueue<List<StudentExcelRow>> importQueue,
-                              AtomicInteger importedCount,
-                              AtomicInteger importedBatchCount,
-                              AtomicReference<Throwable> workerFailure) {
+                              String importTaskId,
+                              BlockingQueue<StudentImportBatch> importQueue,
+                              AtomicInteger stagedCount,
+                              AtomicInteger stagedBatchCount,
+                              AtomicReference<Throwable> workerFailure,
+                              StudentImportProgressCallback progressCallback) {
         try {
             while (true) {
-                List<StudentExcelRow> batch = importQueue.take();
+                progressCallback.checkCanceled();
+                StudentImportBatch batch = importQueue.take();
                 if (batch == IMPORT_POISON_BATCH) {
                     return;
                 }
@@ -230,16 +255,19 @@ public class StudentServiceImpl implements StudentService {
                 }
                 long start = System.currentTimeMillis();
                 try {
-                    int chunkCount = saveBatchInTransactionWithRetry(batch, "import-worker-" + workerNo);
-                    int totalImported = importedCount.addAndGet(batch.size());
-                    int totalBatchCount = importedBatchCount.incrementAndGet();
-                    log.info("import worker batch committed, workerNo={}, batchRows={}, chunkCount={}, totalImported={}, totalBatchCount={}, elapsedMs={}",
-                            workerNo, batch.size(), chunkCount, totalImported, totalBatchCount,
+                    int chunkCount = stageImportBatchInTransactionWithRetry(
+                            importTaskId, batch, "import-worker-" + workerNo);
+                    int batchRows = batch.getRows().size();
+                    int totalStaged = stagedCount.addAndGet(batchRows);
+                    int totalBatchCount = stagedBatchCount.incrementAndGet();
+                    progressCallback.onCommitted(totalStaged, totalBatchCount);
+                    log.info("import worker batch staged, workerNo={}, batchRows={}, chunkCount={}, totalStaged={}, totalBatchCount={}, elapsedMs={}",
+                            workerNo, batchRows, chunkCount, totalStaged, totalBatchCount,
                             System.currentTimeMillis() - start);
                 } catch (RuntimeException ex) {
                     workerFailure.compareAndSet(null, ex);
-                    log.error("import worker batch failed, workerNo={}, batchRows={}, elapsedMs={}",
-                            workerNo, batch.size(), System.currentTimeMillis() - start, ex);
+                    log.error("import worker batch stage failed, workerNo={}, batchRows={}, elapsedMs={}",
+                            workerNo, batch.getRows().size(), System.currentTimeMillis() - start, ex);
                 }
             }
         } catch (InterruptedException ex) {
@@ -249,11 +277,13 @@ public class StudentServiceImpl implements StudentService {
     }
 
     private List<ImportWorkerHandle> startImportWorkers(int workerCount,
-                                                        BlockingQueue<List<StudentExcelRow>> importQueue,
-                                                        AtomicInteger importedCount,
-                                                        AtomicInteger importedBatchCount,
+                                                        String importTaskId,
+                                                        BlockingQueue<StudentImportBatch> importQueue,
+                                                        AtomicInteger stagedCount,
+                                                        AtomicInteger stagedBatchCount,
                                                         AtomicReference<Throwable> workerFailure,
-                                                        CountDownLatch workerLatch) {
+                                                        CountDownLatch workerLatch,
+                                                        StudentImportProgressCallback progressCallback) {
         List<ImportWorkerHandle> workerHandles = new ArrayList<ImportWorkerHandle>(workerCount);
         try {
             for (int workerIndex = 1; workerIndex <= workerCount; workerIndex++) {
@@ -262,7 +292,8 @@ public class StudentServiceImpl implements StudentService {
                 Future<?> future = importWorkerExecutor.submit(() -> {
                     workerHandle.markStarted();
                     try {
-                        importWorker(workerNo, importQueue, importedCount, importedBatchCount, workerFailure);
+                        importWorker(workerNo, importTaskId, importQueue, stagedCount, stagedBatchCount,
+                                workerFailure, progressCallback);
                     } finally {
                         workerHandle.markFinished();
                     }
@@ -283,7 +314,7 @@ public class StudentServiceImpl implements StudentService {
         }
     }
 
-    private void stopImportWorkers(BlockingQueue<List<StudentExcelRow>> importQueue, int workerCount) {
+    private void stopImportWorkers(BlockingQueue<StudentImportBatch> importQueue, int workerCount) {
         for (int i = 0; i < workerCount; i++) {
             try {
                 importQueue.put(IMPORT_POISON_BATCH);
@@ -318,7 +349,7 @@ public class StudentServiceImpl implements StudentService {
         }
     }
 
-    private void cleanupFailedImportWorkers(BlockingQueue<List<StudentExcelRow>> importQueue,
+    private void cleanupFailedImportWorkers(BlockingQueue<StudentImportBatch> importQueue,
                                             int workerCount,
                                             List<ImportWorkerHandle> workerHandles,
                                             CountDownLatch workerLatch) {
@@ -444,6 +475,104 @@ public class StudentServiceImpl implements StudentService {
                         scene, attempt, maxRetryTimes, orderedRows.size(), sleepMillis, ex);
                 sleepQuietly(sleepMillis);
             }
+        }
+    }
+
+    private int stageImportBatchInTransactionWithRetry(String importTaskId, StudentImportBatch batch, String scene) {
+        int maxRetryTimes = Math.max(0, properties.getImportMaxRetryTimes());
+        long retryBackoffMillis = Math.max(0L, properties.getImportRetryBackoffMillis());
+        int attempt = 0;
+        while (true) {
+            try {
+                return stageImportBatchInTransaction(importTaskId, batch, scene);
+            } catch (RuntimeException ex) {
+                if (!isRetryableImportException(ex) || attempt >= maxRetryTimes) {
+                    throw ex;
+                }
+                attempt++;
+                long sleepMillis = retryBackoffMillis * attempt;
+                log.warn("retry import stage batch after transient database error, scene={}, attempt={}, maxRetryTimes={}, rows={}, backoffMs={}",
+                        scene, attempt, maxRetryTimes, batch.getRows().size(), sleepMillis, ex);
+                sleepQuietly(sleepMillis);
+            }
+        }
+    }
+
+    private int stageImportBatchInTransaction(String importTaskId, StudentImportBatch batch, String scene) {
+        return newImportTransactionTemplate().execute(status -> {
+            List<StudentExcelRow> rows = batch.getRows();
+            int batchSize = getInsertBatchSize();
+            int batchCount = 0;
+            for (int from = 0; from < rows.size(); from += batchSize) {
+                int to = Math.min(rows.size(), from + batchSize);
+                List<StudentImportStageRecord> chunk =
+                        toStageRecords(importTaskId, batch.getStartRowNo() + from, rows.subList(from, to));
+                batchCount++;
+                long start = System.currentTimeMillis();
+                studentMapper.saveImportStageBatch(chunk);
+                log.debug("stage student import chunk, scene={}, batchNo={}, rows={}, elapsedMs={}",
+                        scene, batchCount, chunk.size(), System.currentTimeMillis() - start);
+            }
+            return batchCount;
+        });
+    }
+
+    private List<StudentImportStageRecord> toStageRecords(String importTaskId,
+                                                          int startRowNo,
+                                                          List<StudentExcelRow> rows) {
+        List<StudentImportStageRecord> records = new ArrayList<StudentImportStageRecord>(rows.size());
+        for (int i = 0; i < rows.size(); i++) {
+            StudentExcelRow row = rows.get(i);
+            records.add(StudentImportStageRecord.builder()
+                    .importTaskId(importTaskId)
+                    .rowNo(startRowNo + i)
+                    .studentNo(row.getStudentNo())
+                    .name(row.getName())
+                    .age(row.getAge())
+                    .gender(row.getGender())
+                    .className(row.getClassName())
+                    .email(row.getEmail())
+                    .birthday(row.getBirthday())
+                    .build());
+        }
+        return records;
+    }
+
+    private void mergeImportStageAtomically(String importTaskId,
+                                            int expectedRows,
+                                            StudentImportProgressCallback progressCallback) {
+        progressCallback.checkCanceled();
+        long start = System.currentTimeMillis();
+        newImportTransactionTemplate().executeWithoutResult(status -> {
+            int stagedRows = studentMapper.countImportStageRows(importTaskId);
+            if (stagedRows != expectedRows) {
+                throw new IllegalStateException("导入暂存数据数量不一致，expectedRows="
+                        + expectedRows + ", stagedRows=" + stagedRows);
+            }
+            int invalidRows = studentMapper.countInvalidImportStageRows(importTaskId);
+            if (invalidRows > 0) {
+                throw new IllegalStateException("导入文件存在必填字段为空的数据，invalidRows=" + invalidRows);
+            }
+            int duplicateStudentNoCount = studentMapper.countDuplicateImportStageStudentNo(importTaskId);
+            if (duplicateStudentNoCount > 0) {
+                throw new IllegalStateException("导入文件存在重复学号，duplicateStudentNoCount="
+                        + duplicateStudentNoCount);
+            }
+            if (stagedRows > 0) {
+                studentMapper.mergeImportStageToStudent(importTaskId);
+            }
+            studentMapper.deleteImportStage(importTaskId);
+        });
+        progressCallback.onCommitted(expectedRows, expectedRows == 0 ? 0 : Math.max(1, (expectedRows + getInsertBatchSize() - 1) / getInsertBatchSize()));
+        log.info("import stage merged atomically, rows={}, elapsedMs={}",
+                expectedRows, System.currentTimeMillis() - start);
+    }
+
+    private void deleteImportStageQuietly(String importTaskId) {
+        try {
+            studentMapper.deleteImportStage(importTaskId);
+        } catch (RuntimeException ex) {
+            log.warn("delete import stage failed, importTaskId={}", importTaskId, ex);
         }
     }
 

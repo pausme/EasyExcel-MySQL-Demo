@@ -1,22 +1,38 @@
 package com.huang.demo.excel.service.impl;
 
+import com.alibaba.excel.EasyExcel;
 import com.huang.demo.excel.config.ExcelDemoProperties;
+import com.huang.demo.excel.domain.model.StudentImportStageRecord;
+import com.huang.demo.excel.model.StudentExcelRow;
 import com.huang.demo.excel.repository.StudentMapper;
 import org.junit.jupiter.api.Test;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.TransactionStatus;
+import org.springframework.transaction.support.SimpleTransactionStatus;
 
 import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.time.Duration;
+import java.util.Arrays;
+import java.util.List;
 import java.util.concurrent.Future;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 class StudentServiceImplTest {
 
@@ -102,6 +118,46 @@ class StudentServiceImplTest {
         assertTrue(exception.getMessage().contains("IMPORT_TRANSACTION_TIMEOUT_SECONDS"));
     }
 
+    @Test
+    void importExcelDoesNotMergeWhenStageHasDuplicateStudentNo() {
+        ExcelDemoProperties properties = new ExcelDemoProperties();
+        properties.setImportMaxConcurrentTasks(1);
+        properties.setImportWorkerCount(1);
+        properties.setImportQueueCapacity(2);
+        properties.setImportBatchSize(2);
+        properties.setInsertBatchSize(2);
+        properties.setImportWorkerFinishWaitSeconds(5);
+        StudentMapper studentMapper = mock(StudentMapper.class);
+        List<StudentImportStageRecord> stagedRows = new CopyOnWriteArrayList<StudentImportStageRecord>();
+        doAnswer(invocation -> {
+            List<StudentImportStageRecord> rows = invocation.getArgument(0);
+            stagedRows.addAll(rows);
+            return null;
+        }).when(studentMapper).saveImportStageBatch(any());
+        when(studentMapper.countImportStageRows(anyString())).thenAnswer(invocation -> stagedRows.size());
+        when(studentMapper.countInvalidImportStageRows(anyString())).thenReturn(0);
+        when(studentMapper.countDuplicateImportStageStudentNo(anyString())).thenReturn(1);
+
+        ThreadPoolTaskExecutor executor = newImportWorkerExecutor();
+        try {
+            StudentServiceImpl studentService = new StudentServiceImpl(
+                    studentMapper,
+                    properties,
+                    new ImmediateTransactionManager(),
+                    executor);
+
+            IllegalStateException exception = assertThrows(
+                    IllegalStateException.class,
+                    () -> studentService.importExcel(new ByteArrayInputStream(buildDuplicateStudentExcel()), 2));
+
+            assertTrue(exception.getMessage().contains("重复学号"));
+            verify(studentMapper, never()).mergeImportStageToStudent(anyString());
+            verify(studentMapper).deleteImportStage(anyString());
+        } finally {
+            executor.shutdown();
+        }
+    }
+
     private static class RejectingTaskExecutor extends ThreadPoolTaskExecutor {
 
         @Override
@@ -120,6 +176,57 @@ class StudentServiceImplTest {
                 return new FutureTask<Void>(() -> null);
             }
             throw new RejectedExecutionException("test rejection");
+        }
+    }
+
+    private ThreadPoolTaskExecutor newImportWorkerExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(1);
+        executor.setMaxPoolSize(1);
+        executor.setQueueCapacity(1);
+        executor.initialize();
+        return executor;
+    }
+
+    private byte[] buildDuplicateStudentExcel() {
+        ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
+        EasyExcel.write(outputStream, StudentExcelRow.class)
+                .sheet("学生数据")
+                .doWrite(Arrays.asList(
+                        StudentExcelRow.builder()
+                                .studentNo("S001")
+                                .name("张三")
+                                .age(18)
+                                .gender("男")
+                                .className("一班")
+                                .email("s001@example.com")
+                                .birthday("2000-01-01")
+                                .build(),
+                        StudentExcelRow.builder()
+                                .studentNo("S001")
+                                .name("李四")
+                                .age(19)
+                                .gender("女")
+                                .className("二班")
+                                .email("s001-b@example.com")
+                                .birthday("2000-01-02")
+                                .build()));
+        return outputStream.toByteArray();
+    }
+
+    private static class ImmediateTransactionManager implements PlatformTransactionManager {
+
+        @Override
+        public TransactionStatus getTransaction(TransactionDefinition definition) {
+            return new SimpleTransactionStatus();
+        }
+
+        @Override
+        public void commit(TransactionStatus status) {
+        }
+
+        @Override
+        public void rollback(TransactionStatus status) {
         }
     }
 }

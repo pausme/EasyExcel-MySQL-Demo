@@ -42,6 +42,9 @@ app:
     import-max-concurrent-tasks: ${IMPORT_MAX_CONCURRENT_TASKS:1}
     import-queue-capacity: ${IMPORT_QUEUE_CAPACITY:20}
     import-executor-queue-capacity: ${IMPORT_EXECUTOR_QUEUE_CAPACITY:20}
+    import-task-core-pool-size: ${IMPORT_TASK_CORE_POOL_SIZE:1}
+    import-task-max-pool-size: ${IMPORT_TASK_MAX_POOL_SIZE:1}
+    import-task-queue-capacity: ${IMPORT_TASK_QUEUE_CAPACITY:10}
     import-await-termination-seconds: ${IMPORT_AWAIT_TERMINATION_SECONDS:30}
     import-worker-finish-wait-seconds: ${IMPORT_WORKER_FINISH_WAIT_SECONDS:0}
     import-transaction-timeout-seconds: ${IMPORT_TRANSACTION_TIMEOUT_SECONDS:60}
@@ -52,6 +55,7 @@ app:
     insert-batch-size: 2000
     demo-seed-count: 12000
     export-temp-dir: ${EXPORT_TEMP_DIR:${java.io.tmpdir}/student-excel-export}
+    import-temp-dir: ${IMPORT_TEMP_DIR:${java.io.tmpdir}/student-excel-import}
     export-file-retention-hours: 24
     export-core-pool-size: ${EXPORT_CORE_POOL_SIZE:2}
     export-max-pool-size: ${EXPORT_MAX_POOL_SIZE:2}

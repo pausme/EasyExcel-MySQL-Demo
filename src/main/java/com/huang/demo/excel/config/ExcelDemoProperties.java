@@ -25,6 +25,12 @@ public class ExcelDemoProperties {
 
     private int importExecutorQueueCapacity = 20;
 
+    private int importTaskCorePoolSize = 1;
+
+    private int importTaskMaxPoolSize = 1;
+
+    private int importTaskQueueCapacity = 10;
+
     private int importAwaitTerminationSeconds = 30;
 
     private int importWorkerFinishWaitSeconds = 0;
@@ -44,6 +50,8 @@ public class ExcelDemoProperties {
     private int demoSeedCount;
 
     private String exportTempDir;
+
+    private String importTempDir;
 
     private int exportFileRetentionHours = 24;
 

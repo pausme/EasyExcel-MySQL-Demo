@@ -1,11 +1,11 @@
 # EasyExcel MySQL Demo
 
 基于 Spring Boot、EasyExcel、MyBatis、MySQL、Redis 和 MinIO 的 Excel 导入导出演示项目。
-重点演示大文件场景下的流式解析、批量写库、异步导出和对象存储。
+重点演示大文件场景下的流式解析、批量写库、异步导入导出和对象存储。
 
 ## 功能概览
 
-- Excel 导入：流式读取 Excel，分批放入有界队列，由多个 worker 批量写入 MySQL。
+- Excel 导入：上传后先创建 IMPORT 任务，后台流式读取 Excel，分批放入有界队列，由多个 worker 批量写入 MySQL。
 - Excel 导出：异步提交任务，使用游标分页读取数据库，生成单 Sheet Excel 后上传 MinIO。
 - 异步任务中心：统一记录任务状态、进度、失败原因和重试次数，状态缓存 Redis，任务记录持久化 MySQL。
 - 文件下载：应用只返回 MinIO 签名地址，不经过应用服务器转发大文件内容。
@@ -22,20 +22,34 @@
 HTTP 上传 Excel
         |
         v
+保存到本地导入临时目录
+        |
+        v
+任务中心创建 IMPORT 任务，接口立即返回 taskId
+        |
+        v
+后台导入线程读取临时文件
+        |
+        v
 EasyExcel 流式解析
         |
         v
 每 2000 行组成一个批次 -> 有界 BlockingQueue
         |
         v
-多个导入 worker 消费批次
+多个导入 worker 消费批次并写入 student_import_stage
         |
         v
-事务批量 upsert 到 student_record
+校验必填字段和文件内重复 student_no
+        |
+        v
+单个事务从暂存表 upsert 到 student_record
 ```
 
 导入不会把整份 Excel 加载到内存中。解析线程只保留当前批次，队列容量有限，队列满时解析会产生背压。
-每个批次使用独立事务，SQL 使用 `INSERT ... ON DUPLICATE KEY UPDATE`，因此适合吞吐优先的批量回导。
+解析后的批次先写入 `student_import_stage` 暂存表，全部解析和暂存成功后，再通过一个数据库事务合并到 `student_record`。
+如果 Excel 后半段解析失败、暂存失败、必填字段为空、文件内出现重复 `student_no`，正式表都不会被修改。
+导入任务进度会写入统一任务中心：`totalCount` 表示已经解析的行数，`completedCount` 表示已经暂存的行数，任务完成前进度最高到 95%，成功后为 100%。
 
 导入 worker 的数量、导入任务并发数和数据库连接池相互约束：
 
@@ -43,8 +57,9 @@ EasyExcel 流式解析
 IMPORT_WORKER_COUNT * IMPORT_MAX_CONCURRENT_TASKS <= HIKARI_MAXIMUM_POOL_SIZE
 ```
 
-默认只允许一个导入任务执行。导入失败时会清空待处理队列、取消 worker，并等待已经启动的 worker 收尾。
-数据库瞬时异常会按配置进行有限重试，批次写入前可以按 `student_no` 排序以降低死锁概率。
+默认只允许一个导入任务执行。导入失败时会清空待处理队列、取消 worker，并等待已经启动的 worker 收尾，最后清理本次导入的暂存数据。
+数据库瞬时异常会按配置进行有限重试。
+取消导入是尽力而为：解析线程和 worker 会在批次边界检查任务状态；如果取消发生在最终合并事务已经提交之后，正式表变更不会自动撤销。
 
 ### 导出流程
 
@@ -68,7 +83,7 @@ EasyExcel 写入单 Sheet 临时文件
 ```
 
 导出使用 `id > lastId AND id <= maxId` 的游标条件，避免大 offset 分页越来越慢，且保证一次导出有固定的数据边界。
-导出任务已经接入统一任务中心，进度、失败原因、取消和重试都会同步到 `async_task_record`，并缓存到 Redis。
+导入和导出任务都已经接入统一任务中心，进度、失败原因、取消和重试都会同步到 `async_task_record`，并缓存到 Redis。
 为了让导出的文件可以直接作为导入文件使用，当前导出只生成一个 Sheet；超过 Excel 单 Sheet 行数限制时任务失败。
 
 ## 项目结构
@@ -156,7 +171,7 @@ schema.sql            # 完整结构脚本
 ```
 
 如果 SQL 客户端不能稳定执行多语句脚本，建议先执行 `create_database.sql`，再选择 `demo` 数据库执行 `create_tables.sql`。
-`create_tables.sql` 会同时创建 `student_record`、`file_record`、`file_upload_task` 和 `async_task_record`。
+`create_tables.sql` 会同时创建 `student_record`、`student_import_stage`、`file_record`、`file_upload_task` 和 `async_task_record`。
 
 ## 启动和测试
 
@@ -193,7 +208,7 @@ export SPRING_SERVLET_MULTIPART_MAX_REQUEST_SIZE='200MB'
 | GET | `/export/{taskId}` | 查询导出任务状态 |
 | GET | `/export/{taskId}/download` | 获取 302 MinIO 签名下载地址 |
 | GET | `/template` | 下载导入模板 |
-| POST | `/import` | 上传 Excel，字段名为 `file` |
+| POST | `/import` | 上传 Excel 并提交异步导入任务，字段名为 `file` |
 
 基础路径：`/api/tasks`
 
@@ -205,7 +220,8 @@ export SPRING_SERVLET_MULTIPART_MAX_REQUEST_SIZE='200MB'
 | POST | `/{taskId}/retry` | 重试自己的异步任务 |
 
 任务归属通过请求头 `X-User-Id` 区分；当前项目没有登录系统，不传时使用 `TASK_CENTER_DEFAULT_OWNER_ID`。
-现阶段学生导出任务已接入任务中心，导入任务仍是同步接口，后续可以复用同一任务模型迁移为异步导入。
+学生导入和导出任务都可以通过 `/api/tasks` 查询、取消和重试。`/api/excel/export/{taskId}` 仍保留导出专用状态接口，方便直接获取导出下载信息。
+导入接口提交成功后立即返回任务 ID，任务完成后通过 `/api/tasks/{taskId}` 查看最终状态和结果；导出接口同样先返回任务 ID，完成后再调用状态接口和下载接口。
 
 ## 文件上传中心
 
@@ -496,9 +512,6 @@ MINIO_API_CORS_ALLOW_ORIGIN: "http://localhost:${SERVER_PORT}"
 
 如果同一个 MinIO 还要给多个本地域名测试，可以用英文逗号分隔多个 Origin。
 
-导入成功响应包含：`imported`、`batchCount`、`count` 和 `elapsedMs`。
-导出接口先返回任务 ID，任务完成后再调用状态接口和下载接口。
-
 ## 关键配置
 
 导入配置通过 `app.excel` 绑定，常用环境变量如下：
@@ -512,10 +525,15 @@ export IMPORT_MAX_RETRY_TIMES='3'
 export IMPORT_RETRY_BACKOFF_MILLIS='200'
 export IMPORT_PROGRESS_LOG_INTERVAL='50'
 export IMPORT_BATCH_SORT_ENABLED='true'
+export IMPORT_TASK_CORE_POOL_SIZE='1'
+export IMPORT_TASK_MAX_POOL_SIZE='1'
+export IMPORT_TASK_QUEUE_CAPACITY='10'
+export IMPORT_TEMP_DIR='/tmp/student-excel-import'
 ```
 
 `IMPORT_AWAIT_TERMINATION_SECONDS` 只控制应用停机时等待线程池退出。
-`IMPORT_WORKER_FINISH_WAIT_SECONDS` 控制接口等待 worker 收尾，默认 `0` 表示不主动超时。
+`IMPORT_TASK_*` 控制真正执行异步导入任务的外层线程池；每个导入任务内部还会按 `IMPORT_WORKER_COUNT` 启动写库 worker。
+`IMPORT_WORKER_FINISH_WAIT_SECONDS` 控制导入任务等待 worker 收尾，默认 `0` 表示不主动超时。
 如果设置为正数，应用启动时会校验它覆盖单批事务和重试时间窗口。
 
 导出线程池可以通过以下变量调整：
@@ -530,9 +548,9 @@ export EXPORT_REJECTED_EXECUTION_POLICY='abort'
 
 ## 一致性和容量边界
 
-- 导入是批次独立事务，后续批次失败时，已经提交的前序批次不会自动回滚。
-- 如果需要全量原子性、失败行明细和断点续传，应使用“导入任务表 + 暂存表 + 校验后合并”。
-- 同一个 `student_no` 出现在不同导入批次时，最终值取决于批次提交顺序，生产环境建议先校验文件内重复数据。
+- 导入采用“暂存表 + 校验后单事务合并”策略，正式表层面满足全量原子性。
+- 暂存表写入可以分批完成；只要最终校验或合并失败，本次导入不会修改 `student_record`。
+- 同一个文件内出现重复 `student_no` 会直接失败，避免不同批次提交顺序影响最终结果。
 - 当前导出只使用一个 Sheet，单 Sheet 数据行上限为 `1048575`。
 - MinIO 对象由 Bucket 生命周期规则清理，Redis 任务状态过期不会自动删除已经上传的对象。
 - 导入内存主要由当前批次、有限队列和并发任务数量决定；增加 worker 或并发任务会增加数据库连接和内存压力。
@@ -549,7 +567,7 @@ export EXPORT_REJECTED_EXECUTION_POLICY='abort'
 | 导入 | 1,000,000 行 | 16 个 worker、单任务并发、2000 行/批 | 15,671 ms，500 批 | 约 63,812 行/秒 |
 | 导出 | 1,000,000 行 | 单任务、单 Sheet | 63,806 ms | 约 15,672 行/秒 |
 
-四次 100 万条导入均没有出现失败、死锁、重试或超时；8 个 worker 的单次结果略慢于 6 个 worker，说明 worker 数增加不必然带来收益，应在相同环境下重复测试后再确定最优值。16 个 worker 相比 6 个 worker 的耗时减少约 52.5%，但需要数据库连接池至少能够支撑对应的写库线程，并为其他业务连接预留余量。实际收益仍取决于数据库连接池、CPU 和磁盘 IO。导出成功写入 1 个 Sheet。导入结果中的 `imported` 表示处理的 Excel 行数，重复 `student_no` 可能是更新而不是新增。
+四次 100 万条导入均没有出现失败、死锁、重试或超时；8 个 worker 的单次结果略慢于 6 个 worker，说明 worker 数增加不必然带来收益，应在相同环境下重复测试后再确定最优值。16 个 worker 相比 6 个 worker 的耗时减少约 52.5%，但需要数据库连接池至少能够支撑对应的写库线程，并为其他业务连接预留余量。实际收益仍取决于数据库连接池、CPU 和磁盘 IO。导出成功写入 1 个 Sheet。导入结果中的 `imported` 表示处理的 Excel 行数；如果这些学号已存在于正式表，会更新已有记录而不是新增重复记录。
 
 历史基线：
 
