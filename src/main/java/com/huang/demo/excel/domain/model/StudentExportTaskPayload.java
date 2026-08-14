@@ -14,4 +14,6 @@ public class StudentExportTaskPayload {
     private Long snapshotMaxId;
 
     private String fileName;
+
+    private StudentExportQuery query;
 }

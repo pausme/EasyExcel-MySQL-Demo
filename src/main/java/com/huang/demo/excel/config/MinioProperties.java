@@ -21,9 +21,15 @@ public class MinioProperties {
 
     private String exportObjectPrefix = "excel/student";
 
+    private String importSourceObjectPrefix = "excel/student/import-source";
+
+    private String importErrorObjectPrefix = "excel/student/import-error";
+
     private int downloadUrlExpireMinutes = 30;
 
     private boolean lifecycleEnabled = true;
 
     private int lifecycleExpireDays = 1;
+
+    private int importSourceRetentionDays = 1;
 }

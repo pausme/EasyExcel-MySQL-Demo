@@ -33,17 +33,27 @@
             id BIGINT AUTO_INCREMENT PRIMARY KEY,
             import_task_id VARCHAR(64) NOT NULL,
             row_no INT NOT NULL,
-            student_no VARCHAR(32),
-            name VARCHAR(64),
+            student_no VARCHAR(256),
+            name VARCHAR(256),
             age INT,
-            gender VARCHAR(16),
-            class_name VARCHAR(64),
-            email VARCHAR(128),
-            birthday VARCHAR(32),
+            gender VARCHAR(64),
+            class_name VARCHAR(256),
+            email VARCHAR(512),
+            birthday VARCHAR(128),
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
             KEY idx_student_import_stage_task_row (import_task_id, row_no),
             KEY idx_student_import_stage_task_student_no (import_task_id, student_no)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    </update>
+
+    <update id="updateImportStageColumnCapacity">
+        ALTER TABLE student_import_stage
+            MODIFY student_no VARCHAR(256),
+            MODIFY name VARCHAR(256),
+            MODIFY gender VARCHAR(64),
+            MODIFY class_name VARCHAR(256),
+            MODIFY email VARCHAR(512),
+            MODIFY birthday VARCHAR(128)
     </update>
 
     <select id="countStudentNoUniqueIndex" resultType="int">
@@ -84,10 +94,45 @@
         SELECT MAX(id) FROM student_record
     </select>
 
+    <sql id="StudentExportQueryCondition">
+        <if test="query != null and query.studentNo != null and query.studentNo != ''">
+            AND student_no = #{query.studentNo}
+        </if>
+        <if test="query != null and query.nameKeyword != null and query.nameKeyword != ''">
+            AND name LIKE CONCAT('%', #{query.nameKeyword}, '%')
+        </if>
+        <if test="query != null and query.className != null and query.className != ''">
+            AND class_name = #{query.className}
+        </if>
+        <if test="query != null and query.gender != null and query.gender != ''">
+            AND gender = #{query.gender}
+        </if>
+        <if test="query != null and query.minAge != null">
+            AND age &gt;= #{query.minAge}
+        </if>
+        <if test="query != null and query.maxAge != null">
+            AND age &lt;= #{query.maxAge}
+        </if>
+    </sql>
+
+    <select id="maxIdByQuery" resultType="long">
+        SELECT MAX(id)
+        FROM student_record
+        WHERE 1 = 1
+        <include refid="StudentExportQueryCondition"/>
+    </select>
+
     <select id="countByMaxId" resultType="int">
         SELECT COUNT(*)
         FROM student_record
         WHERE id &lt;= #{maxId}
+    </select>
+
+    <select id="countByMaxIdAndQuery" resultType="int">
+        SELECT COUNT(*)
+        FROM student_record
+        WHERE id &lt;= #{maxId}
+        <include refid="StudentExportQueryCondition"/>
     </select>
 
     <select id="listByCursor" resultType="com.huang.demo.excel.domain.model.StudentExportRecord">
@@ -95,6 +140,16 @@
         FROM student_record
         WHERE id &gt; #{lastId}
           AND id &lt;= #{maxId}
+        ORDER BY id
+        LIMIT #{limit}
+    </select>
+
+    <select id="listByCursorAndQuery" resultType="com.huang.demo.excel.domain.model.StudentExportRecord">
+        SELECT id, student_no, name, age, gender, class_name, email, birthday
+        FROM student_record
+        WHERE id &gt; #{lastId}
+          AND id &lt;= #{maxId}
+        <include refid="StudentExportQueryCondition"/>
         ORDER BY id
         LIMIT #{limit}
     </select>
@@ -136,7 +191,15 @@
         WHERE import_task_id = #{importTaskId}
           AND (
               student_no IS NULL OR TRIM(student_no) = ''
+              OR CHAR_LENGTH(student_no) &gt; 32
               OR name IS NULL OR TRIM(name) = ''
+              OR CHAR_LENGTH(name) &gt; 64
+              OR age &lt; 0 OR age &gt; 150
+              OR CHAR_LENGTH(gender) &gt; 16
+              OR CHAR_LENGTH(class_name) &gt; 64
+              OR CHAR_LENGTH(email) &gt; 128
+              OR CHAR_LENGTH(birthday) &gt; 32
+              OR (email IS NOT NULL AND TRIM(email) &lt;&gt; '' AND email NOT LIKE '%_@_%._%')
           )
     </select>
 
@@ -151,6 +214,43 @@
             GROUP BY student_no
             HAVING COUNT(*) &gt; 1
         ) duplicate_student_no
+    </select>
+
+    <select id="listInvalidImportStageRows" resultType="com.huang.demo.excel.domain.model.StudentImportStageRecord">
+        SELECT import_task_id, row_no, student_no, name, age, gender, class_name, email, birthday
+        FROM student_import_stage
+        WHERE import_task_id = #{importTaskId}
+          AND (
+              student_no IS NULL OR TRIM(student_no) = ''
+              OR CHAR_LENGTH(student_no) &gt; 32
+              OR name IS NULL OR TRIM(name) = ''
+              OR CHAR_LENGTH(name) &gt; 64
+              OR age &lt; 0 OR age &gt; 150
+              OR CHAR_LENGTH(gender) &gt; 16
+              OR CHAR_LENGTH(class_name) &gt; 64
+              OR CHAR_LENGTH(email) &gt; 128
+              OR CHAR_LENGTH(birthday) &gt; 32
+              OR (email IS NOT NULL AND TRIM(email) &lt;&gt; '' AND email NOT LIKE '%_@_%._%')
+          )
+        ORDER BY row_no
+    </select>
+
+    <select id="listDuplicateImportStageStudentNoRows" resultType="com.huang.demo.excel.domain.model.StudentImportStageRecord">
+        SELECT stage.import_task_id, stage.row_no, stage.student_no, stage.name, stage.age,
+               stage.gender, stage.class_name, stage.email, stage.birthday
+        FROM student_import_stage stage
+        INNER JOIN (
+            SELECT student_no
+            FROM student_import_stage
+            WHERE import_task_id = #{importTaskId}
+              AND student_no IS NOT NULL
+              AND TRIM(student_no) &lt;&gt; ''
+            GROUP BY student_no
+            HAVING COUNT(*) &gt; 1
+        ) duplicate_student_no
+            ON stage.student_no = duplicate_student_no.student_no
+        WHERE stage.import_task_id = #{importTaskId}
+        ORDER BY stage.student_no, stage.row_no
     </select>
 
     <insert id="mergeImportStageToStudent">

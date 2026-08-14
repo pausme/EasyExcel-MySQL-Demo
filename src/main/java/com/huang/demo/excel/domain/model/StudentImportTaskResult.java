@@ -14,4 +14,10 @@ public class StudentImportTaskResult {
     private int importedCount;
 
     private int batchCount;
+
+    private int errorCount;
+
+    private String errorFileName;
+
+    private String errorObjectKey;
 }

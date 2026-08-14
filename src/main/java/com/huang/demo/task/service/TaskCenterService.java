@@ -21,9 +21,16 @@ public interface TaskCenterService {
 
     AsyncTaskRecord markFailed(String taskId, String errorMessage);
 
+    AsyncTaskRecord markFailed(String taskId, String errorMessage, String resultPayload);
+
     boolean cancelTask(String taskId, String ownerId);
 
     AsyncTaskRecord prepareRetry(String taskId, String ownerId);
 
     AsyncTaskPageResponse pageMyTasks(String ownerId, AsyncTaskPageQueryRequest request);
+
+    AsyncTaskPageResponse pageMyTasksByBusinessKey(String ownerId,
+                                                   String taskType,
+                                                   String businessKey,
+                                                   AsyncTaskPageQueryRequest request);
 }

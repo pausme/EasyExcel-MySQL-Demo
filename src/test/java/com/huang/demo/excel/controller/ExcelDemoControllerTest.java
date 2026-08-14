@@ -124,4 +124,34 @@ class ExcelDemoControllerTest {
         assertEquals("CREATED", response.getStatus());
         verify(studentImportTaskService).submitImport(file, "anonymous");
     }
+
+    @Test
+    void importStatusReturnsMyImportTask() {
+        ImportTaskResponse expected = ImportTaskResponse.builder()
+                .taskId("task-1")
+                .ownerId("anonymous")
+                .status("FAILED")
+                .errorCount(1)
+                .errorFileName("student-import-error-task-1.xlsx")
+                .hasErrorFile(true)
+                .build();
+        when(studentImportTaskService.findImportTask("task-1", "anonymous")).thenReturn(Optional.of(expected));
+
+        ImportTaskResponse response = controller.importStatus("task-1", request);
+
+        assertEquals("task-1", response.getTaskId());
+        assertEquals("student-import-error-task-1.xlsx", response.getErrorFileName());
+    }
+
+    @Test
+    void downloadImportErrorFileReturnsPresignedRedirect() {
+        String downloadUrl = "http://minio.example.com/student-import-error-task-1.xlsx";
+        when(studentImportTaskService.createErrorFileDownloadUrl("task-1", "anonymous"))
+                .thenReturn(Optional.of(downloadUrl));
+
+        ResponseEntity<Void> response = controller.downloadImportErrorFile("task-1", request);
+
+        assertEquals(HttpStatus.FOUND, response.getStatusCode());
+        assertEquals(URI.create(downloadUrl), response.getHeaders().getLocation());
+    }
 }

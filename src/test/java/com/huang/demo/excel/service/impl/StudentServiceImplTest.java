@@ -3,6 +3,7 @@ package com.huang.demo.excel.service.impl;
 import com.alibaba.excel.EasyExcel;
 import com.huang.demo.excel.config.ExcelDemoProperties;
 import com.huang.demo.excel.domain.model.StudentImportStageRecord;
+import com.huang.demo.excel.domain.model.StudentImportValidationException;
 import com.huang.demo.excel.model.StudentExcelRow;
 import com.huang.demo.excel.repository.StudentMapper;
 import org.junit.jupiter.api.Test;
@@ -16,6 +17,7 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.time.Duration;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.Future;
 import java.util.concurrent.FutureTask;
@@ -135,8 +137,9 @@ class StudentServiceImplTest {
             return null;
         }).when(studentMapper).saveImportStageBatch(any());
         when(studentMapper.countImportStageRows(anyString())).thenAnswer(invocation -> stagedRows.size());
-        when(studentMapper.countInvalidImportStageRows(anyString())).thenReturn(0);
         when(studentMapper.countDuplicateImportStageStudentNo(anyString())).thenReturn(1);
+        when(studentMapper.listInvalidImportStageRows(anyString())).thenReturn(Collections.emptyList());
+        when(studentMapper.listDuplicateImportStageStudentNoRows(anyString())).thenAnswer(invocation -> stagedRows);
 
         ThreadPoolTaskExecutor executor = newImportWorkerExecutor();
         try {
@@ -146,11 +149,11 @@ class StudentServiceImplTest {
                     new ImmediateTransactionManager(),
                     executor);
 
-            IllegalStateException exception = assertThrows(
-                    IllegalStateException.class,
+            StudentImportValidationException exception = assertThrows(
+                    StudentImportValidationException.class,
                     () -> studentService.importExcel(new ByteArrayInputStream(buildDuplicateStudentExcel()), 2));
 
-            assertTrue(exception.getMessage().contains("重复学号"));
+            assertTrue(exception.getErrorRows().get(0).getErrorMessage().contains("重复"));
             verify(studentMapper, never()).mergeImportStageToStudent(anyString());
             verify(studentMapper).deleteImportStage(anyString());
         } finally {

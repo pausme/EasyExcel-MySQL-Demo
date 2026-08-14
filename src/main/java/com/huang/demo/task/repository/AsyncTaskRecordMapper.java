@@ -29,5 +29,17 @@ public interface AsyncTaskRecordMapper {
                                           @Param("offset") int offset,
                                           @Param("limit") int limit);
 
+    long countByOwnerAndBusinessKey(@Param("ownerId") String ownerId,
+                                    @Param("taskType") String taskType,
+                                    @Param("businessKey") String businessKey,
+                                    @Param("status") String status);
+
+    List<AsyncTaskRecord> listByOwnerAndBusinessKeyPage(@Param("ownerId") String ownerId,
+                                                        @Param("taskType") String taskType,
+                                                        @Param("businessKey") String businessKey,
+                                                        @Param("status") String status,
+                                                        @Param("offset") int offset,
+                                                        @Param("limit") int limit);
+
     int markExpiredBefore(@Param("expireBefore") LocalDateTime expireBefore);
 }

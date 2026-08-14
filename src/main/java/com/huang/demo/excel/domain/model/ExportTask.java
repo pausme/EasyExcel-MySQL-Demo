@@ -35,6 +35,8 @@ public class ExportTask {
 
     private String fileName;
 
+    private StudentExportQuery query;
+
     private String objectKey;
 
     private volatile String errorMessage;

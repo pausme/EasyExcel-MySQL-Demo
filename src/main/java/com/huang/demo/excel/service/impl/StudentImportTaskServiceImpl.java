@@ -1,14 +1,21 @@
 package com.huang.demo.excel.service.impl;
 
+import com.alibaba.excel.EasyExcel;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.huang.demo.excel.api.dto.ImportTaskResponse;
 import com.huang.demo.excel.config.ExcelDemoProperties;
+import com.huang.demo.excel.config.MinioProperties;
 import com.huang.demo.excel.domain.model.StudentImportProgressCallback;
 import com.huang.demo.excel.domain.model.StudentImportResult;
 import com.huang.demo.excel.domain.model.StudentImportTaskPayload;
 import com.huang.demo.excel.domain.model.StudentImportTaskResult;
+import com.huang.demo.excel.domain.model.StudentImportValidationException;
+import com.huang.demo.excel.model.StudentImportErrorRow;
+import com.huang.demo.excel.service.MinioObjectStorageService;
 import com.huang.demo.excel.service.StudentImportTaskService;
 import com.huang.demo.excel.service.StudentService;
+import com.huang.demo.task.api.dto.AsyncTaskResponse;
 import com.huang.demo.task.domain.entity.AsyncTaskRecord;
 import com.huang.demo.task.domain.model.AsyncTaskStatus;
 import com.huang.demo.task.domain.model.AsyncTaskType;
@@ -31,8 +38,9 @@ import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.nio.file.StandardCopyOption;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -47,17 +55,23 @@ public class StudentImportTaskServiceImpl implements StudentImportTaskService, T
     private final ThreadPoolTaskExecutor importTaskExecutor;
     private final TaskCenterService taskCenterService;
     private final ObjectMapper objectMapper;
+    private final MinioObjectStorageService minioObjectStorageService;
+    private final MinioProperties minioProperties;
 
     public StudentImportTaskServiceImpl(StudentService studentService,
                                         ExcelDemoProperties properties,
                                         @Qualifier("importTaskExecutor") ThreadPoolTaskExecutor importTaskExecutor,
                                         TaskCenterService taskCenterService,
-                                        ObjectMapper objectMapper) {
+                                        ObjectMapper objectMapper,
+                                        MinioObjectStorageService minioObjectStorageService,
+                                        MinioProperties minioProperties) {
         this.studentService = studentService;
         this.properties = properties;
         this.importTaskExecutor = importTaskExecutor;
         this.taskCenterService = taskCenterService;
         this.objectMapper = objectMapper;
+        this.minioObjectStorageService = minioObjectStorageService;
+        this.minioProperties = minioProperties;
     }
 
     @PostConstruct
@@ -74,10 +88,15 @@ public class StudentImportTaskServiceImpl implements StudentImportTaskService, T
     public AsyncTaskRecord submitImport(MultipartFile file, String ownerId) throws IOException {
         validateFile(file);
         String businessKey = UUID.randomUUID().toString().replace("-", "");
-        Path temporaryFilePath = saveTemporaryFile(file, businessKey);
+        String originalName = normalizeOriginalName(file.getOriginalFilename());
+        String sourceObjectKey = buildImportSourceObjectKey(businessKey, resolveSuffix(originalName));
+        try (InputStream inputStream = file.getInputStream()) {
+            minioObjectStorageService.uploadExcel(inputStream, file.getSize(), sourceObjectKey);
+        }
         StudentImportTaskPayload payload = StudentImportTaskPayload.builder()
-                .originalName(normalizeOriginalName(file.getOriginalFilename()))
-                .temporaryFilePath(temporaryFilePath.toString())
+                .originalName(originalName)
+                .sourceObjectKey(sourceObjectKey)
+                .fileSize(file.getSize())
                 .batchSize(Math.max(1, properties.getImportBatchSize()))
                 .build();
         AsyncTaskRecord task;
@@ -90,7 +109,7 @@ public class StudentImportTaskServiceImpl implements StudentImportTaskService, T
                     .requestPayload(toJson(payload))
                     .build());
         } catch (RuntimeException ex) {
-            deleteTemporaryFileQuietly(temporaryFilePath);
+            minioObjectStorageService.deleteQuietly(sourceObjectKey);
             throw ex;
         }
         try {
@@ -119,6 +138,31 @@ public class StudentImportTaskServiceImpl implements StudentImportTaskService, T
         return retriedTask;
     }
 
+    @Override
+    public Optional<ImportTaskResponse> findImportTask(String taskId, String ownerId) {
+        return taskCenterService.findTask(taskId)
+                .filter(task -> AsyncTaskType.IMPORT.name().equals(task.getTaskType()))
+                .filter(task -> normalizeOwnerId(ownerId).equals(task.getOwnerId()))
+                .map(task -> ImportTaskResponse.from(
+                        AsyncTaskResponse.from(task), readResult(task.getResultPayload())));
+    }
+
+    @Override
+    public Optional<String> createErrorFileDownloadUrl(String taskId, String ownerId) {
+        Optional<AsyncTaskRecord> taskOptional = taskCenterService.findTask(taskId)
+                .filter(task -> AsyncTaskType.IMPORT.name().equals(task.getTaskType()))
+                .filter(task -> normalizeOwnerId(ownerId).equals(task.getOwnerId()));
+        if (!taskOptional.isPresent()) {
+            return Optional.empty();
+        }
+        StudentImportTaskResult result = readResult(taskOptional.get().getResultPayload());
+        if (result.getErrorObjectKey() == null || result.getErrorObjectKey().trim().isEmpty()) {
+            return Optional.empty();
+        }
+        return Optional.of(minioObjectStorageService.createDownloadUrl(
+                result.getErrorObjectKey(), result.getErrorFileName()));
+    }
+
     @Scheduled(fixedDelay = 3600000L, initialDelay = 3600000L)
     public void cleanupExpiredImportTemporaryFiles() {
         cleanupExpiredTemporaryFiles();
@@ -135,8 +179,7 @@ public class StudentImportTaskServiceImpl implements StudentImportTaskService, T
             return;
         }
         StudentImportTaskPayload payload = readPayload(task.getRequestPayload());
-        Path temporaryFilePath = Paths.get(payload.getTemporaryFilePath());
-        try (InputStream inputStream = Files.newInputStream(temporaryFilePath)) {
+        try (InputStream inputStream = openImportInputStream(payload)) {
             ImportTaskProgressCallback callback = new ImportTaskProgressCallback(taskId);
             StudentImportResult result = studentService.importExcel(inputStream, payload.getBatchSize(), callback);
             AsyncTaskRecord completedTask = taskCenterService.markSuccess(taskId, toJson(StudentImportTaskResult.builder()
@@ -144,12 +187,16 @@ public class StudentImportTaskServiceImpl implements StudentImportTaskService, T
                     .batchCount(result.getBatchCount())
                     .build()));
             if (AsyncTaskStatus.SUCCESS.name().equals(completedTask.getStatus())) {
-                Files.deleteIfExists(temporaryFilePath);
+                deleteLegacyTemporaryFile(payload);
             }
             log.info("import task finished, taskId={}, imported={}, batchCount={}, elapsedMs={}",
                     taskId, result.getImportedCount(), result.getBatchCount(), System.currentTimeMillis() - start);
         } catch (TaskCanceledException ex) {
             log.info("import task canceled, taskId={}, elapsedMs={}", taskId, System.currentTimeMillis() - start);
+        } catch (StudentImportValidationException ex) {
+            markValidationFailed(taskId, ex);
+            log.info("import task validation failed, taskId={}, errorRows={}, elapsedMs={}",
+                    taskId, ex.getErrorRows().size(), System.currentTimeMillis() - start);
         } catch (Exception ex) {
             taskCenterService.markFailed(taskId,
                     ex.getMessage() == null ? "导入失败，请查看服务端日志" : ex.getMessage());
@@ -157,15 +204,36 @@ public class StudentImportTaskServiceImpl implements StudentImportTaskService, T
         }
     }
 
-    private Path saveTemporaryFile(MultipartFile file, String businessKey) throws IOException {
-        Files.createDirectories(getImportDirectory());
-        String originalName = normalizeOriginalName(file.getOriginalFilename());
-        String suffix = resolveSuffix(originalName);
-        Path temporaryFilePath = getImportDirectory().resolve("student-import-" + businessKey + suffix);
-        try (InputStream inputStream = file.getInputStream()) {
-            Files.copy(inputStream, temporaryFilePath, StandardCopyOption.REPLACE_EXISTING);
+    private void markValidationFailed(String taskId, StudentImportValidationException exception) {
+        try {
+            StudentImportTaskResult result = writeAndUploadErrorFile(taskId, exception.getErrorRows());
+            taskCenterService.markFailed(taskId, exception.getMessage(), toJson(result));
+        } catch (RuntimeException ex) {
+            taskCenterService.markFailed(taskId, exception.getMessage());
+            log.error("write import validation error file failed, taskId={}", taskId, ex);
         }
-        return temporaryFilePath;
+    }
+
+    private StudentImportTaskResult writeAndUploadErrorFile(String taskId, java.util.List<StudentImportErrorRow> errorRows) {
+        String errorFileName = "student-import-error-" + taskId + ".xlsx";
+        String errorObjectKey = buildImportErrorObjectKey(errorFileName);
+        Path errorFilePath = getImportDirectory().resolve(errorFileName);
+        try {
+            Files.createDirectories(errorFilePath.getParent());
+            EasyExcel.write(errorFilePath.toFile(), StudentImportErrorRow.class)
+                    .sheet("错误明细")
+                    .doWrite(errorRows);
+            minioObjectStorageService.uploadExcel(errorFilePath, errorObjectKey);
+            return StudentImportTaskResult.builder()
+                    .errorCount(errorRows == null ? 0 : errorRows.size())
+                    .errorFileName(errorFileName)
+                    .errorObjectKey(errorObjectKey)
+                    .build();
+        } catch (IOException ex) {
+            throw new IllegalStateException("创建导入错误文件失败", ex);
+        } finally {
+            deleteTemporaryFileQuietly(errorFilePath);
+        }
     }
 
     private void validateFile(MultipartFile file) {
@@ -177,6 +245,20 @@ public class StudentImportTaskServiceImpl implements StudentImportTaskService, T
         }
     }
 
+    private InputStream openImportInputStream(StudentImportTaskPayload payload) throws IOException {
+        if (hasText(payload.getSourceObjectKey())) {
+            try {
+                return minioObjectStorageService.openObject(payload.getSourceObjectKey());
+            } catch (RuntimeException ex) {
+                throw new IllegalStateException("导入源文件不存在或已过期", ex);
+            }
+        }
+        if (hasText(payload.getTemporaryFilePath())) {
+            return Files.newInputStream(Paths.get(payload.getTemporaryFilePath()));
+        }
+        throw new IllegalStateException("导入源文件不存在或已过期");
+    }
+
     private StudentImportTaskPayload readPayload(String payloadJson) {
         if (payloadJson == null || payloadJson.trim().isEmpty()) {
             throw new IllegalStateException("导入任务上下文不存在");
@@ -185,6 +267,18 @@ public class StudentImportTaskServiceImpl implements StudentImportTaskService, T
             return objectMapper.readValue(payloadJson, StudentImportTaskPayload.class);
         } catch (IOException ex) {
             throw new IllegalStateException("解析导入任务上下文失败", ex);
+        }
+    }
+
+    private StudentImportTaskResult readResult(String resultJson) {
+        if (resultJson == null || resultJson.trim().isEmpty()) {
+            return new StudentImportTaskResult();
+        }
+        try {
+            return objectMapper.readValue(resultJson, StudentImportTaskResult.class);
+        } catch (IOException ex) {
+            log.warn("parse student import task result failed", ex);
+            return new StudentImportTaskResult();
         }
     }
 
@@ -239,6 +333,13 @@ public class StudentImportTaskServiceImpl implements StudentImportTaskService, T
         }
     }
 
+    private void deleteLegacyTemporaryFile(StudentImportTaskPayload payload) {
+        if (payload == null || !hasText(payload.getTemporaryFilePath())) {
+            return;
+        }
+        deleteTemporaryFileQuietly(Paths.get(payload.getTemporaryFilePath()));
+    }
+
     private String normalizeOriginalName(String originalName) {
         if (originalName == null || originalName.trim().isEmpty()) {
             return "unknown.xlsx";
@@ -262,6 +363,35 @@ public class StudentImportTaskServiceImpl implements StudentImportTaskService, T
             return ".xlsx";
         }
         return suffix;
+    }
+
+    private String buildImportErrorObjectKey(String fileName) {
+        return normalizeObjectPrefix(
+                minioProperties.getImportErrorObjectPrefix(), "excel/student/import-error") + "/" + fileName;
+    }
+
+    private String buildImportSourceObjectKey(String businessKey, String suffix) {
+        return normalizeObjectPrefix(minioProperties.getImportSourceObjectPrefix(), "excel/student/import-source")
+                + "/" + LocalDate.now().format(DateTimeFormatter.BASIC_ISO_DATE)
+                + "/student-import-" + businessKey + suffix;
+    }
+
+    private String normalizeObjectPrefix(String prefix, String defaultPrefix) {
+        if (prefix == null || prefix.trim().isEmpty()) {
+            return defaultPrefix;
+        }
+        return prefix.trim().replaceAll("^/+", "").replaceAll("/+$", "");
+    }
+
+    private boolean hasText(String value) {
+        return value != null && !value.trim().isEmpty();
+    }
+
+    private String normalizeOwnerId(String ownerId) {
+        if (ownerId == null || ownerId.trim().isEmpty()) {
+            return "anonymous";
+        }
+        return ownerId.trim().length() > 64 ? ownerId.trim().substring(0, 64) : ownerId.trim();
     }
 
     private class ImportTaskProgressCallback implements StudentImportProgressCallback {

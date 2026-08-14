@@ -10,6 +10,7 @@ import com.huang.demo.excel.config.MinioProperties;
 import com.huang.demo.excel.domain.model.ExportTask;
 import com.huang.demo.excel.domain.model.ExportTaskStatus;
 import com.huang.demo.excel.domain.model.StudentExportRecord;
+import com.huang.demo.excel.domain.model.StudentExportQuery;
 import com.huang.demo.excel.domain.model.StudentExportTaskPayload;
 import com.huang.demo.excel.domain.model.StudentExportTaskResult;
 import com.huang.demo.excel.model.StudentExcelRow;
@@ -87,19 +88,28 @@ public class ExportTaskServiceImpl implements ExportTaskService, TaskRetryHandle
 
     @Override
     public ExportTask submitExport(String ownerId) {
-        String businessKey = UUID.randomUUID().toString().replace("-", "");
-        Long maxId = studentMapper.maxId();
-        String fileName = "student-demo-" + businessKey + ".xlsx";
+        return submitExport(ownerId, UUID.randomUUID().toString().replace("-", ""),
+                "学生数据导出", new StudentExportQuery());
+    }
+
+    @Override
+    public ExportTask submitExport(String ownerId, String businessKey, String taskName, StudentExportQuery query) {
+        String normalizedBusinessKey = normalizeBusinessKey(businessKey);
+        StudentExportQuery normalizedQuery = normalizeQuery(query);
+        String normalizedTaskName = normalizeTaskName(taskName);
+        Long maxId = studentMapper.maxIdByQuery(normalizedQuery);
+        String fileName = "student-demo-" + normalizedBusinessKey + ".xlsx";
         StudentExportTaskPayload payload = StudentExportTaskPayload.builder()
                 .snapshotMaxId(maxId)
                 .fileName(fileName)
+                .query(normalizedQuery)
                 .build();
 
         AsyncTaskRecord task = taskCenterService.createTask(CreateAsyncTaskCommand.builder()
                 .ownerId(ownerId)
                 .taskType(AsyncTaskType.EXPORT)
-                .taskName("学生数据导出")
-                .businessKey(businessKey)
+                .taskName(normalizedTaskName)
+                .businessKey(normalizedBusinessKey)
                 .requestPayload(toJson(payload))
                 .build());
         try {
@@ -168,7 +178,7 @@ public class ExportTaskServiceImpl implements ExportTaskService, TaskRetryHandle
         try {
             Path temporaryFilePath = getTemporaryFilePath(task);
             Long maxId = task.getSnapshotMaxId();
-            task.setTotal(maxId == null ? 0 : studentMapper.countByMaxId(maxId));
+            task.setTotal(maxId == null ? 0 : studentMapper.countByMaxIdAndQuery(maxId, task.getQuery()));
             if (task.getTotal() > getSheetRowLimit()) {
                 throw new IllegalStateException("导出数据超过 Excel 单 Sheet 最大行数，请缩小导出范围或改用 CSV");
             }
@@ -222,7 +232,7 @@ public class ExportTaskServiceImpl implements ExportTaskService, TaskRetryHandle
                 while (true) {
                     assertTaskCanContinue(task.getTaskId());
                     List<StudentExportRecord> records =
-                            studentMapper.listByCursor(lastId, maxId, pageSize);
+                            studentMapper.listByCursorAndQuery(lastId, maxId, pageSize, task.getQuery());
                     if (records.isEmpty()) {
                         break;
                     }
@@ -258,6 +268,7 @@ public class ExportTaskServiceImpl implements ExportTaskService, TaskRetryHandle
                 .status(toExportTaskStatus(taskRecord.getStatus()))
                 .progressPercent(safeInt(taskRecord.getProgressPercent()))
                 .snapshotMaxId(payload.getSnapshotMaxId())
+                .query(normalizeQuery(payload.getQuery()))
                 .total(safeLongToInt(taskRecord.getTotalCount()))
                 .exported(safeLongToInt(taskRecord.getCompletedCount()))
                 .sheetCount(result.getSheetCount())
@@ -366,6 +377,47 @@ public class ExportTaskServiceImpl implements ExportTaskService, TaskRetryHandle
                     .build());
         }
         return rows;
+    }
+
+    private StudentExportQuery normalizeQuery(StudentExportQuery query) {
+        StudentExportQuery safeQuery = query == null ? new StudentExportQuery() : query;
+        Integer minAge = safeQuery.getMinAge();
+        Integer maxAge = safeQuery.getMaxAge();
+        if (minAge != null && maxAge != null && minAge > maxAge) {
+            throw new IllegalArgumentException("最小年龄不能大于最大年龄");
+        }
+        return StudentExportQuery.builder()
+                .studentNo(normalizeOptionalText(safeQuery.getStudentNo(), 32))
+                .nameKeyword(normalizeOptionalText(safeQuery.getNameKeyword(), 64))
+                .className(normalizeOptionalText(safeQuery.getClassName(), 64))
+                .gender(normalizeOptionalText(safeQuery.getGender(), 16))
+                .minAge(minAge)
+                .maxAge(maxAge)
+                .build();
+    }
+
+    private String normalizeBusinessKey(String businessKey) {
+        if (businessKey == null || businessKey.trim().isEmpty()) {
+            return UUID.randomUUID().toString().replace("-", "");
+        }
+        String normalized = businessKey.trim();
+        return normalized.length() > 64 ? normalized.substring(0, 64) : normalized;
+    }
+
+    private String normalizeTaskName(String taskName) {
+        if (taskName == null || taskName.trim().isEmpty()) {
+            return "学生数据导出";
+        }
+        String normalized = taskName.trim();
+        return normalized.length() > 128 ? normalized.substring(0, 128) : normalized;
+    }
+
+    private String normalizeOptionalText(String value, int maxLength) {
+        if (value == null || value.trim().isEmpty()) {
+            return null;
+        }
+        String normalized = value.trim();
+        return normalized.length() > maxLength ? normalized.substring(0, maxLength) : normalized;
     }
 
     private int getSheetRowLimit() {

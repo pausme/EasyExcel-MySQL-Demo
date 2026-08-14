@@ -3,6 +3,7 @@ package com.huang.demo.excel.service.impl;
 import com.huang.demo.excel.config.MinioProperties;
 import com.huang.demo.excel.service.MinioObjectStorageService;
 import io.minio.GetBucketLifecycleArgs;
+import io.minio.GetObjectArgs;
 import io.minio.GetPresignedObjectUrlArgs;
 import io.minio.MinioClient;
 import io.minio.PutObjectArgs;
@@ -37,6 +38,8 @@ public class MinioObjectStorageServiceImpl implements MinioObjectStorageService 
     private static final String EXCEL_CONTENT_TYPE =
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
     private static final String EXPORT_LIFECYCLE_RULE_ID = "student-excel-export-retention";
+    private static final String IMPORT_SOURCE_LIFECYCLE_RULE_ID = "student-excel-import-source-retention";
+    private static final String IMPORT_ERROR_LIFECYCLE_RULE_ID = "student-excel-import-error-retention";
 
     private final MinioClient minioClient;
     private final MinioProperties properties;
@@ -55,44 +58,81 @@ public class MinioObjectStorageServiceImpl implements MinioObjectStorageService 
             List<LifecycleRule> rules = loadExistingLifecycleRules();
             for (Iterator<LifecycleRule> iterator = rules.iterator(); iterator.hasNext(); ) {
                 LifecycleRule rule = iterator.next();
-                if (EXPORT_LIFECYCLE_RULE_ID.equals(rule.id())) {
+                if (EXPORT_LIFECYCLE_RULE_ID.equals(rule.id())
+                        || IMPORT_SOURCE_LIFECYCLE_RULE_ID.equals(rule.id())
+                        || IMPORT_ERROR_LIFECYCLE_RULE_ID.equals(rule.id())) {
                     iterator.remove();
                 }
             }
-            int expireDays = Math.max(1, properties.getLifecycleExpireDays());
-            String prefix = normalizePrefix(properties.getExportObjectPrefix()) + "/";
-            rules.add(new LifecycleRule(
-                    Status.ENABLED,
-                    null,
-                    new Expiration((ResponseDate) null, expireDays, null),
-                    new RuleFilter(prefix),
+            int exportExpireDays = Math.max(1, properties.getLifecycleExpireDays());
+            int importSourceExpireDays = Math.max(1, properties.getImportSourceRetentionDays());
+            rules.add(buildLifecycleRule(
                     EXPORT_LIFECYCLE_RULE_ID,
-                    null,
-                    null,
-                    null));
+                    normalizePrefix(properties.getExportObjectPrefix()) + "/",
+                    exportExpireDays));
+            rules.add(buildLifecycleRule(
+                    IMPORT_SOURCE_LIFECYCLE_RULE_ID,
+                    normalizePrefix(properties.getImportSourceObjectPrefix()) + "/",
+                    importSourceExpireDays));
+            rules.add(buildLifecycleRule(
+                    IMPORT_ERROR_LIFECYCLE_RULE_ID,
+                    normalizePrefix(properties.getImportErrorObjectPrefix()) + "/",
+                    exportExpireDays));
             minioClient.setBucketLifecycle(SetBucketLifecycleArgs.builder()
                     .bucket(properties.getBucketName())
                     .config(new LifecycleConfiguration(rules))
                     .build());
-            log.info("minio lifecycle configured, bucket={}, prefix={}, expireDays={}",
-                    properties.getBucketName(), prefix, expireDays);
+            log.info("minio lifecycle configured, bucket={}, exportPrefix={}, exportExpireDays={}, "
+                            + "importSourcePrefix={}, importSourceExpireDays={}, importErrorPrefix={}",
+                    properties.getBucketName(),
+                    normalizePrefix(properties.getExportObjectPrefix()) + "/",
+                    exportExpireDays,
+                    normalizePrefix(properties.getImportSourceObjectPrefix()) + "/",
+                    importSourceExpireDays,
+                    normalizePrefix(properties.getImportErrorObjectPrefix()) + "/");
         } catch (Exception ex) {
-            log.warn("configure minio lifecycle failed, bucket={}, prefix={}",
-                    properties.getBucketName(), properties.getExportObjectPrefix(), ex);
+            log.warn("configure minio lifecycle failed, bucket={}", properties.getBucketName(), ex);
         }
     }
 
     @Override
     public void uploadExcel(Path filePath, String objectKey) {
         try (InputStream inputStream = Files.newInputStream(filePath)) {
+            uploadExcel(inputStream, Files.size(filePath), objectKey);
+        } catch (Exception ex) {
+            throw new IllegalStateException("上传 Excel 文件到 MinIO 失败", ex);
+        }
+    }
+
+    @Override
+    public void uploadExcel(InputStream inputStream, long fileSize, String objectKey) {
+        if (inputStream == null) {
+            throw new IllegalArgumentException("上传文件流不能为空");
+        }
+        if (fileSize <= 0L) {
+            throw new IllegalArgumentException("上传文件大小必须大于 0");
+        }
+        try {
             minioClient.putObject(PutObjectArgs.builder()
                     .bucket(properties.getBucketName())
                     .object(objectKey)
-                    .stream(inputStream, Files.size(filePath), -1)
+                    .stream(inputStream, fileSize, -1)
                     .contentType(EXCEL_CONTENT_TYPE)
                     .build());
         } catch (Exception ex) {
-            throw new IllegalStateException("上传导出文件到 MinIO 失败", ex);
+            throw new IllegalStateException("上传 Excel 文件到 MinIO 失败", ex);
+        }
+    }
+
+    @Override
+    public InputStream openObject(String objectKey) {
+        try {
+            return minioClient.getObject(GetObjectArgs.builder()
+                    .bucket(properties.getBucketName())
+                    .object(objectKey)
+                    .build());
+        } catch (Exception ex) {
+            throw new IllegalStateException("读取 MinIO 文件失败", ex);
         }
     }
 
@@ -146,6 +186,18 @@ public class MinioObjectStorageServiceImpl implements MinioObjectStorageService 
         } catch (Exception ex) {
             throw new IllegalStateException("读取 MinIO 生命周期配置失败", ex);
         }
+    }
+
+    private LifecycleRule buildLifecycleRule(String id, String prefix, int expireDays) {
+        return new LifecycleRule(
+                Status.ENABLED,
+                null,
+                new Expiration((ResponseDate) null, expireDays, null),
+                new RuleFilter(prefix),
+                id,
+                null,
+                null,
+                null);
     }
 
     private String normalizePrefix(String prefix) {

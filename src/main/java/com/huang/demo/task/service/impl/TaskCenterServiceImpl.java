@@ -159,6 +159,12 @@ public class TaskCenterServiceImpl implements TaskCenterService {
     @Override
     @Transactional(rollbackFor = Exception.class)
     public AsyncTaskRecord markFailed(String taskId, String errorMessage) {
+        return markFailed(taskId, errorMessage, null);
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public AsyncTaskRecord markFailed(String taskId, String errorMessage, String resultPayload) {
         AsyncTaskRecord record = findTaskRequired(taskId);
         record = refreshExpiredIfNecessary(record);
         if (isTerminalStatus(record.getStatus())) {
@@ -167,6 +173,7 @@ public class TaskCenterServiceImpl implements TaskCenterService {
         LocalDateTime now = LocalDateTime.now();
         record.setStatus(AsyncTaskStatus.FAILED.name());
         record.setErrorMessage(normalizeErrorMessage(errorMessage));
+        record.setResultPayload(resultPayload);
         record.setUpdatedAt(now);
         record.setFinishedAt(now);
         updateRequired(record);
@@ -238,6 +245,36 @@ public class TaskCenterServiceImpl implements TaskCenterService {
         long total = taskRecordMapper.countByOwner(normalizedOwnerId, taskType, status);
         List<AsyncTaskRecord> records = taskRecordMapper.listByOwnerPage(
                 normalizedOwnerId, taskType, status, offset, pageSize);
+        List<AsyncTaskResponse> responses = new ArrayList<AsyncTaskResponse>(records.size());
+        for (AsyncTaskRecord record : records) {
+            responses.add(AsyncTaskResponse.from(refreshExpiredIfNecessary(record)));
+        }
+        return AsyncTaskPageResponse.builder()
+                .total(total)
+                .pageNo(pageNo)
+                .pageSize(pageSize)
+                .records(responses)
+                .build();
+    }
+
+    @Override
+    public AsyncTaskPageResponse pageMyTasksByBusinessKey(String ownerId,
+                                                          String taskType,
+                                                          String businessKey,
+                                                          AsyncTaskPageQueryRequest request) {
+        AsyncTaskPageQueryRequest safeRequest = request == null ? new AsyncTaskPageQueryRequest() : request;
+        String normalizedOwnerId = normalizeOwnerId(ownerId);
+        String normalizedBusinessKey = normalizeBusinessKeyRequired(businessKey);
+        int pageNo = normalizePageNo(safeRequest.getPageNo());
+        int pageSize = normalizePageSize(safeRequest.getPageSize());
+        String normalizedTaskType = normalizeOptionalTaskType(taskType);
+        String status = normalizeOptionalStatus(safeRequest.getStatus());
+        int offset = (pageNo - 1) * pageSize;
+
+        long total = taskRecordMapper.countByOwnerAndBusinessKey(
+                normalizedOwnerId, normalizedTaskType, normalizedBusinessKey, status);
+        List<AsyncTaskRecord> records = taskRecordMapper.listByOwnerAndBusinessKeyPage(
+                normalizedOwnerId, normalizedTaskType, normalizedBusinessKey, status, offset, pageSize);
         List<AsyncTaskResponse> responses = new ArrayList<AsyncTaskResponse>(records.size());
         for (AsyncTaskRecord record : records) {
             responses.add(AsyncTaskResponse.from(refreshExpiredIfNecessary(record)));
@@ -408,6 +445,14 @@ public class TaskCenterServiceImpl implements TaskCenterService {
         }
         String normalized = businessKey.trim();
         return normalized.length() > 128 ? normalized.substring(0, 128) : normalized;
+    }
+
+    private String normalizeBusinessKeyRequired(String businessKey) {
+        String normalized = normalizeBusinessKey(businessKey);
+        if (normalized == null) {
+            throw new IllegalArgumentException("业务标识不能为空");
+        }
+        return normalized;
     }
 
     private int normalizeMaxRetryCount(Integer maxRetryCount) {

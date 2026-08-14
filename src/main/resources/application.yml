@@ -68,9 +68,12 @@ app:
     secret-key: ${MINIO_SECRET_KEY}
     bucket-name: ${MINIO_BUCKET_NAME:student-excel}
     export-object-prefix: ${MINIO_EXPORT_OBJECT_PREFIX:excel/student}
+    import-source-object-prefix: ${MINIO_IMPORT_SOURCE_OBJECT_PREFIX:excel/student/import-source}
+    import-error-object-prefix: ${MINIO_IMPORT_ERROR_OBJECT_PREFIX:excel/student/import-error}
     download-url-expire-minutes: ${MINIO_DOWNLOAD_URL_EXPIRE_MINUTES:30}
     lifecycle-enabled: ${MINIO_LIFECYCLE_ENABLED:true}
     lifecycle-expire-days: ${MINIO_LIFECYCLE_EXPIRE_DAYS:1}
+    import-source-retention-days: ${MINIO_IMPORT_SOURCE_RETENTION_DAYS:1}
   file:
     init-enabled: ${FILE_CENTER_INIT_ENABLED:true}
     object-prefix: ${FILE_CENTER_OBJECT_PREFIX:files/general}

@@ -9,15 +9,17 @@ import lombok.NoArgsConstructor;
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
-public class StudentImportTaskPayload {
+public class StudentExportQuery {
 
-    private String originalName;
+    private String studentNo;
 
-    private String sourceObjectKey;
+    private String nameKeyword;
 
-    private Long fileSize;
+    private String className;
 
-    private String temporaryFilePath;
+    private String gender;
 
-    private int batchSize;
+    private Integer minAge;
+
+    private Integer maxAge;
 }

@@ -58,6 +58,7 @@
             expire_at DATETIME NOT NULL,
             UNIQUE KEY uk_async_task_record_task_id (task_id),
             KEY idx_async_task_record_owner_created_at (owner_id, created_at),
+            KEY idx_async_task_record_owner_business_key_created_at (owner_id, business_key, created_at),
             KEY idx_async_task_record_owner_status_created_at (owner_id, status, created_at),
             KEY idx_async_task_record_type_status_created_at (task_type, status, created_at),
             KEY idx_async_task_record_expire_at (expire_at)
@@ -124,6 +125,34 @@
         SELECT <include refid="BaseColumns"/>
         FROM async_task_record
         WHERE owner_id = #{ownerId}
+        <if test="taskType != null and taskType != ''">
+            AND task_type = #{taskType}
+        </if>
+        <if test="status != null and status != ''">
+            AND status = #{status}
+        </if>
+        ORDER BY id DESC
+        LIMIT #{limit} OFFSET #{offset}
+    </select>
+
+    <select id="countByOwnerAndBusinessKey" resultType="long">
+        SELECT COUNT(*)
+        FROM async_task_record
+        WHERE owner_id = #{ownerId}
+          AND business_key = #{businessKey}
+        <if test="taskType != null and taskType != ''">
+            AND task_type = #{taskType}
+        </if>
+        <if test="status != null and status != ''">
+            AND status = #{status}
+        </if>
+    </select>
+
+    <select id="listByOwnerAndBusinessKeyPage" resultMap="AsyncTaskRecordMap">
+        SELECT <include refid="BaseColumns"/>
+        FROM async_task_record
+        WHERE owner_id = #{ownerId}
+          AND business_key = #{businessKey}
         <if test="taskType != null and taskType != ''">
             AND task_type = #{taskType}
         </if>

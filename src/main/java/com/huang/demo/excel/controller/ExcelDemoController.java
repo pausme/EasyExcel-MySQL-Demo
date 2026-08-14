@@ -134,6 +134,27 @@ public class ExcelDemoController {
         }
     }
 
+    @ApiOperation("查询学生数据导入任务状态")
+    @GetMapping("/import/{taskId}")
+    public ImportTaskResponse importStatus(@PathVariable("taskId") String taskId, HttpServletRequest request) {
+        return studentImportTaskService.findImportTask(taskId, taskOwnerResolver.resolve(request))
+                .orElseThrow(() -> new ResponseStatusException(
+                        org.springframework.http.HttpStatus.NOT_FOUND, "导入任务不存在"));
+    }
+
+    @ApiOperation("下载学生数据导入错误明细文件")
+    @GetMapping("/import/{taskId}/error-file")
+    public ResponseEntity<Void> downloadImportErrorFile(@PathVariable("taskId") String taskId,
+                                                        HttpServletRequest request) {
+        String downloadUrl = studentImportTaskService.createErrorFileDownloadUrl(
+                        taskId, taskOwnerResolver.resolve(request))
+                .orElseThrow(() -> new ResponseStatusException(
+                        org.springframework.http.HttpStatus.NOT_FOUND, "导入错误明细文件不存在"));
+        return ResponseEntity.status(HttpStatus.FOUND)
+                .location(URI.create(downloadUrl))
+                .build();
+    }
+
     private void setExcelDownloadHeaders(HttpServletResponse response, String fileName) throws IOException {
         response.setContentType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
         response.setCharacterEncoding(StandardCharsets.UTF_8.name());

@@ -8,6 +8,7 @@
 - Excel 导入：上传后先创建 IMPORT 任务，后台流式读取 Excel，分批放入有界队列，由多个 worker 批量写入 MySQL。
 - Excel 导出：异步提交任务，使用游标分页读取数据库，生成单 Sheet Excel 后上传 MinIO。
 - 异步任务中心：统一记录任务状态、进度、失败原因和重试次数，状态缓存 Redis，任务记录持久化 MySQL。
+- 报表运行控制：支持保存学生报表查询条件，基于运行控制创建导出任务，并查询运行历史。
 - 文件下载：应用只返回 MinIO 签名地址，不经过应用服务器转发大文件内容。
 - 通用文件中心：支持普通上传、元数据查询、逻辑删除、分页查询和签名下载。
 - 文件中心测试页：启动应用后访问 `/file-upload-test.html`，可测试秒传、客户端直传和分片上传。
@@ -22,13 +23,13 @@
 HTTP 上传 Excel
         |
         v
-保存到本地导入临时目录
+上传原始导入文件到 MinIO
         |
         v
 任务中心创建 IMPORT 任务，接口立即返回 taskId
         |
         v
-后台导入线程读取临时文件
+后台导入线程从 MinIO 读取源文件
         |
         v
 EasyExcel 流式解析
@@ -46,9 +47,12 @@ EasyExcel 流式解析
 单个事务从暂存表 upsert 到 student_record
 ```
 
+导入任务的原始 Excel 会先保存到 MinIO 的 `excel/student/import-source/` 前缀，任务 payload 记录 `sourceObjectKey`、原始文件名和文件大小。
+后台执行和任务重试都从 MinIO 读取源文件，不依赖本机临时目录；如果源文件生命周期过期或被删除，重试会明确失败并提示源文件不存在或已过期。
 导入不会把整份 Excel 加载到内存中。解析线程只保留当前批次，队列容量有限，队列满时解析会产生背压。
 解析后的批次先写入 `student_import_stage` 暂存表，全部解析和暂存成功后，再通过一个数据库事务合并到 `student_record`。
 如果 Excel 后半段解析失败、暂存失败、必填字段为空、文件内出现重复 `student_no`，正式表都不会被修改。
+如果导入校验失败，系统会生成错误明细 Excel 上传到 MinIO，用户可以通过导入任务状态接口查看错误文件信息，并通过签名地址下载。
 导入任务进度会写入统一任务中心：`totalCount` 表示已经解析的行数，`completedCount` 表示已经暂存的行数，任务完成前进度最高到 95%，成功后为 100%。
 
 导入 worker 的数量、导入任务并发数和数据库连接池相互约束：
@@ -64,13 +68,13 @@ IMPORT_WORKER_COUNT * IMPORT_MAX_CONCURRENT_TASKS <= HIKARI_MAXIMUM_POOL_SIZE
 ### 导出流程
 
 ```text
-提交导出请求
+提交导出请求或运行报表控制
         |
         v
 任务中心创建 EXPORT 任务，MySQL 持久化记录，Redis 缓存状态
         |
         v
-记录当前 MAX(id)，按 id 游标分页读取
+记录当前 MAX(id)，按运行条件和 id 游标分页读取
         |
         v
 EasyExcel 写入单 Sheet 临时文件
@@ -83,6 +87,7 @@ EasyExcel 写入单 Sheet 临时文件
 ```
 
 导出使用 `id > lastId AND id <= maxId` 的游标条件，避免大 offset 分页越来越慢，且保证一次导出有固定的数据边界。
+学生报表运行控制会保存 `studentNo`、`nameKeyword`、`className`、`gender`、`minAge`、`maxAge` 等查询条件；点击运行时，运行控制的 `runId` 会作为导出任务 `businessKey`，因此可以按运行控制查看历史导出任务。
 导入和导出任务都已经接入统一任务中心，进度、失败原因、取消和重试都会同步到 `async_task_record`，并缓存到 Redis。
 为了让导出的文件可以直接作为导入文件使用，当前导出只生成一个 Sheet；超过 Excel 单 Sheet 行数限制时任务失败。
 
@@ -109,6 +114,7 @@ src/main/resources
 scripts/import_load_test.py       # 导入压测脚本
 docs/excel-import-export-test.md  # 功能测试文档
 docs/import-load-test.md          # 压测使用说明
+docs/project-roadmap-todo.md      # 后续优化 TODO
 ```
 
 ## 环境变量
@@ -144,6 +150,9 @@ export MINIO_ENDPOINT='http://<MinIO地址>:<MinIO API端口>'
 export MINIO_ACCESS_KEY='your_minio_access_key'
 export MINIO_SECRET_KEY='your_minio_secret_key'
 export MINIO_BUCKET_NAME='public'
+export MINIO_IMPORT_SOURCE_OBJECT_PREFIX='excel/student/import-source'
+export MINIO_IMPORT_ERROR_OBJECT_PREFIX='excel/student/import-error'
+export MINIO_IMPORT_SOURCE_RETENTION_DAYS='1'
 export FILE_CENTER_INIT_ENABLED='true'
 export FILE_CENTER_OBJECT_PREFIX='files/general'
 export FILE_CENTER_MULTIPART_OBJECT_PREFIX='files/multipart'
@@ -158,6 +167,7 @@ export FILE_CENTER_CORS_ALLOWED_ORIGIN_PATTERNS='http://localhost:*,http://127.0
 
 建议将 MinIO Bucket 设置为私有。导出下载接口返回有效期默认 30 分钟的签名地址，避免大文件流量经过应用服务器。
 导出对象默认写入 `excel/student/` 前缀，生命周期规则默认在 1 天后清理对象。
+导入源文件默认写入 `excel/student/import-source/` 前缀，生命周期规则默认在 1 天后清理对象，用于失败任务重试和多实例部署下的任务恢复。
 通用文件中心默认写入 `files/general/` 前缀，可通过 `FILE_CENTER_OBJECT_PREFIX` 调整。
 
 ## 数据库初始化
@@ -171,7 +181,7 @@ schema.sql            # 完整结构脚本
 ```
 
 如果 SQL 客户端不能稳定执行多语句脚本，建议先执行 `create_database.sql`，再选择 `demo` 数据库执行 `create_tables.sql`。
-`create_tables.sql` 会同时创建 `student_record`、`student_import_stage`、`file_record`、`file_upload_task` 和 `async_task_record`。
+`create_tables.sql` 会同时创建 `student_record`、`student_import_stage`、`student_report_run`、`file_record`、`file_upload_task` 和 `async_task_record`。
 
 ## 启动和测试
 
@@ -209,6 +219,8 @@ export SPRING_SERVLET_MULTIPART_MAX_REQUEST_SIZE='200MB'
 | GET | `/export/{taskId}/download` | 获取 302 MinIO 签名下载地址 |
 | GET | `/template` | 下载导入模板 |
 | POST | `/import` | 上传 Excel 并提交异步导入任务，字段名为 `file` |
+| GET | `/import/{taskId}` | 查询导入任务状态和错误文件信息 |
+| GET | `/import/{taskId}/error-file` | 获取 302 MinIO 导入错误明细签名下载地址 |
 
 基础路径：`/api/tasks`
 
@@ -222,6 +234,20 @@ export SPRING_SERVLET_MULTIPART_MAX_REQUEST_SIZE='200MB'
 任务归属通过请求头 `X-User-Id` 区分；当前项目没有登录系统，不传时使用 `TASK_CENTER_DEFAULT_OWNER_ID`。
 学生导入和导出任务都可以通过 `/api/tasks` 查询、取消和重试。`/api/excel/export/{taskId}` 仍保留导出专用状态接口，方便直接获取导出下载信息。
 导入接口提交成功后立即返回任务 ID，任务完成后通过 `/api/tasks/{taskId}` 查看最终状态和结果；导出接口同样先返回任务 ID，完成后再调用状态接口和下载接口。
+
+基础路径：`/api/report/student-runs`
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| POST | `/page` | 分页查询自己的学生报表运行控制 |
+| POST | `/create` | 创建学生报表运行控制 |
+| GET | `/{runId}` | 查询运行控制详情 |
+| POST | `/{runId}/update` | 修改运行控制查询条件 |
+| POST | `/{runId}/delete` | 逻辑删除运行控制 |
+| POST | `/{runId}/run` | 基于运行控制创建学生导出任务 |
+| POST | `/{runId}/tasks` | 分页查询该运行控制的历史导出任务 |
+
+运行控制的 `ownerId + runControlCode` 在未删除数据中唯一。删除后 `deleted` 会写入本行 id，因此同一用户可以重新创建相同编码。
 
 ## 文件上传中心
 
@@ -551,6 +577,8 @@ export EXPORT_REJECTED_EXECUTION_POLICY='abort'
 - 导入采用“暂存表 + 校验后单事务合并”策略，正式表层面满足全量原子性。
 - 暂存表写入可以分批完成；只要最终校验或合并失败，本次导入不会修改 `student_record`。
 - 同一个文件内出现重复 `student_no` 会直接失败，避免不同批次提交顺序影响最终结果。
+- 导入源文件会持久化到 MinIO，任务执行和重试不依赖本机临时目录。
+- 导入校验失败会生成错误明细文件，错误文件通过 MinIO 私有对象和签名 URL 下载。
 - 当前导出只使用一个 Sheet，单 Sheet 数据行上限为 `1048575`。
 - MinIO 对象由 Bucket 生命周期规则清理，Redis 任务状态过期不会自动删除已经上传的对象。
 - 导入内存主要由当前批次、有限队列和并发任务数量决定；增加 worker 或并发任务会增加数据库连接和内存压力。

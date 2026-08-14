@@ -6,7 +6,9 @@ import com.huang.demo.excel.domain.model.StudentImportBatch;
 import com.huang.demo.excel.domain.model.StudentImportProgressCallback;
 import com.huang.demo.excel.domain.model.StudentImportResult;
 import com.huang.demo.excel.domain.model.StudentImportStageRecord;
+import com.huang.demo.excel.domain.model.StudentImportValidationException;
 import com.huang.demo.excel.listener.StudentImportListener;
+import com.huang.demo.excel.model.StudentImportErrorRow;
 import com.huang.demo.excel.model.StudentExcelRow;
 import com.huang.demo.excel.repository.StudentMapper;
 import com.huang.demo.excel.service.StudentService;
@@ -25,7 +27,10 @@ import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.StringJoiner;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CountDownLatch;
@@ -73,6 +78,11 @@ public class StudentServiceImpl implements StudentService {
         long start = System.currentTimeMillis();
         studentMapper.createTableIfAbsent();
         studentMapper.createImportStageTableIfAbsent();
+        try {
+            studentMapper.updateImportStageColumnCapacity();
+        } catch (RuntimeException ex) {
+            log.warn("update student import stage column capacity failed", ex);
+        }
         if (studentMapper.countStudentNoUniqueIndex() == 0) {
             int duplicateCount = studentMapper.countDuplicateStudentNo();
             if (duplicateCount > 0) {
@@ -555,8 +565,14 @@ public class StudentServiceImpl implements StudentService {
             }
             int duplicateStudentNoCount = studentMapper.countDuplicateImportStageStudentNo(importTaskId);
             if (duplicateStudentNoCount > 0) {
-                throw new IllegalStateException("导入文件存在重复学号，duplicateStudentNoCount="
-                        + duplicateStudentNoCount);
+                throw new StudentImportValidationException(
+                        "导入文件校验失败，errorRows=" + duplicateStudentNoCount,
+                        buildImportValidationErrors(importTaskId));
+            }
+            List<StudentImportErrorRow> errorRows = buildImportValidationErrors(importTaskId);
+            if (!errorRows.isEmpty()) {
+                throw new StudentImportValidationException(
+                        "导入文件校验失败，errorRows=" + errorRows.size(), errorRows);
             }
             if (stagedRows > 0) {
                 studentMapper.mergeImportStageToStudent(importTaskId);
@@ -573,6 +589,103 @@ public class StudentServiceImpl implements StudentService {
             studentMapper.deleteImportStage(importTaskId);
         } catch (RuntimeException ex) {
             log.warn("delete import stage failed, importTaskId={}", importTaskId, ex);
+        }
+    }
+
+    private List<StudentImportErrorRow> buildImportValidationErrors(String importTaskId) {
+        Map<Integer, ImportErrorAccumulator> errorMap = new LinkedHashMap<Integer, ImportErrorAccumulator>();
+        for (StudentImportStageRecord row : studentMapper.listInvalidImportStageRows(importTaskId)) {
+            appendRowValidationErrors(errorMap, row);
+        }
+        for (StudentImportStageRecord row : studentMapper.listDuplicateImportStageStudentNoRows(importTaskId)) {
+            addImportError(errorMap, row, "文件内学号重复");
+        }
+        List<StudentImportErrorRow> errorRows = new ArrayList<StudentImportErrorRow>(errorMap.size());
+        for (ImportErrorAccumulator accumulator : errorMap.values()) {
+            errorRows.add(accumulator.toErrorRow());
+        }
+        return errorRows;
+    }
+
+    private void appendRowValidationErrors(Map<Integer, ImportErrorAccumulator> errorMap,
+                                           StudentImportStageRecord row) {
+        if (isBlank(row.getStudentNo())) {
+            addImportError(errorMap, row, "学号不能为空");
+        } else if (row.getStudentNo().length() > 32) {
+            addImportError(errorMap, row, "学号长度不能超过32");
+        }
+        if (isBlank(row.getName())) {
+            addImportError(errorMap, row, "姓名不能为空");
+        } else if (row.getName().length() > 64) {
+            addImportError(errorMap, row, "姓名长度不能超过64");
+        }
+        if (row.getAge() != null && (row.getAge() < 0 || row.getAge() > 150)) {
+            addImportError(errorMap, row, "年龄必须在0到150之间");
+        }
+        if (row.getGender() != null && row.getGender().length() > 16) {
+            addImportError(errorMap, row, "性别长度不能超过16");
+        }
+        if (row.getClassName() != null && row.getClassName().length() > 64) {
+            addImportError(errorMap, row, "班级长度不能超过64");
+        }
+        if (row.getEmail() != null && row.getEmail().length() > 128) {
+            addImportError(errorMap, row, "邮箱长度不能超过128");
+        } else if (!isBlank(row.getEmail()) && !isSimpleEmail(row.getEmail())) {
+            addImportError(errorMap, row, "邮箱格式不正确");
+        }
+        if (row.getBirthday() != null && row.getBirthday().length() > 32) {
+            addImportError(errorMap, row, "生日长度不能超过32");
+        }
+    }
+
+    private void addImportError(Map<Integer, ImportErrorAccumulator> errorMap,
+                                StudentImportStageRecord row,
+                                String errorMessage) {
+        Integer rowNo = row.getRowNo();
+        ImportErrorAccumulator accumulator = errorMap.get(rowNo);
+        if (accumulator == null) {
+            accumulator = new ImportErrorAccumulator(row);
+            errorMap.put(rowNo, accumulator);
+        }
+        accumulator.addError(errorMessage);
+    }
+
+    private boolean isBlank(String value) {
+        return value == null || value.trim().isEmpty();
+    }
+
+    private boolean isSimpleEmail(String value) {
+        String trimmed = value == null ? "" : value.trim();
+        int atIndex = trimmed.indexOf('@');
+        int dotIndex = trimmed.lastIndexOf('.');
+        return atIndex > 0 && dotIndex > atIndex + 1 && dotIndex < trimmed.length() - 1;
+    }
+
+    private static class ImportErrorAccumulator {
+
+        private final StudentImportStageRecord row;
+        private final StringJoiner errorMessages = new StringJoiner("; ");
+
+        private ImportErrorAccumulator(StudentImportStageRecord row) {
+            this.row = row;
+        }
+
+        private void addError(String errorMessage) {
+            errorMessages.add(errorMessage);
+        }
+
+        private StudentImportErrorRow toErrorRow() {
+            return StudentImportErrorRow.builder()
+                    .rowNo(row.getRowNo())
+                    .studentNo(row.getStudentNo())
+                    .name(row.getName())
+                    .age(row.getAge())
+                    .gender(row.getGender())
+                    .className(row.getClassName())
+                    .email(row.getEmail())
+                    .birthday(row.getBirthday())
+                    .errorMessage(errorMessages.toString())
+                    .build();
         }
     }
 
