@@ -1,20 +1,19 @@
 package com.huang.demo.excel.service.impl;
 
-import com.alibaba.excel.EasyExcel;
-import com.alibaba.excel.ExcelWriter;
-import com.alibaba.excel.write.metadata.WriteSheet;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huang.demo.excel.config.ExcelDemoProperties;
 import com.huang.demo.excel.config.MinioProperties;
 import com.huang.demo.excel.domain.model.ExportTask;
 import com.huang.demo.excel.domain.model.ExportTaskStatus;
-import com.huang.demo.excel.domain.model.StudentExportRecord;
 import com.huang.demo.excel.domain.model.StudentExportQuery;
 import com.huang.demo.excel.domain.model.StudentExportTaskPayload;
 import com.huang.demo.excel.domain.model.StudentExportTaskResult;
-import com.huang.demo.excel.model.StudentExcelRow;
-import com.huang.demo.excel.repository.StudentMapper;
+import com.huang.demo.excel.report.ReportCancelChecker;
+import com.huang.demo.excel.report.ReportExportCommand;
+import com.huang.demo.excel.report.ReportExportEngine;
+import com.huang.demo.excel.report.ReportExportResult;
+import com.huang.demo.excel.report.ReportProgressUpdater;
 import com.huang.demo.excel.service.ExportTaskService;
 import com.huang.demo.excel.service.MinioObjectStorageService;
 import com.huang.demo.task.domain.entity.AsyncTaskRecord;
@@ -37,9 +36,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.LocalDateTime;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.Executor;
@@ -52,28 +48,31 @@ public class ExportTaskServiceImpl implements ExportTaskService, TaskRetryHandle
     private static final int MAX_EXPORT_PAGE_SIZE = 10000;
     private static final int MAX_SHEET_DATA_ROWS = 1048575;
 
-    private final StudentMapper studentMapper;
     private final ExcelDemoProperties properties;
     private final Executor exportTaskExecutor;
     private final TaskCenterService taskCenterService;
     private final ObjectMapper objectMapper;
     private final MinioObjectStorageService minioObjectStorageService;
     private final MinioProperties minioProperties;
+    private final ReportExportEngine reportExportEngine;
+    private final StudentReportExportJob studentReportExportJob;
 
-    public ExportTaskServiceImpl(StudentMapper studentMapper,
-                                 ExcelDemoProperties properties,
+    public ExportTaskServiceImpl(ExcelDemoProperties properties,
                                  @Qualifier("exportTaskExecutor") Executor exportTaskExecutor,
                                  TaskCenterService taskCenterService,
                                  ObjectMapper objectMapper,
                                  MinioObjectStorageService minioObjectStorageService,
-                                 MinioProperties minioProperties) {
-        this.studentMapper = studentMapper;
+                                 MinioProperties minioProperties,
+                                 ReportExportEngine reportExportEngine,
+                                 StudentReportExportJob studentReportExportJob) {
         this.properties = properties;
         this.exportTaskExecutor = exportTaskExecutor;
         this.taskCenterService = taskCenterService;
         this.objectMapper = objectMapper;
         this.minioObjectStorageService = minioObjectStorageService;
         this.minioProperties = minioProperties;
+        this.reportExportEngine = reportExportEngine;
+        this.studentReportExportJob = studentReportExportJob;
     }
 
     @PostConstruct
@@ -97,8 +96,8 @@ public class ExportTaskServiceImpl implements ExportTaskService, TaskRetryHandle
         String normalizedBusinessKey = normalizeBusinessKey(businessKey);
         StudentExportQuery normalizedQuery = normalizeQuery(query);
         String normalizedTaskName = normalizeTaskName(taskName);
-        Long maxId = studentMapper.maxIdByQuery(normalizedQuery);
-        String fileName = "student-demo-" + normalizedBusinessKey + ".xlsx";
+        Long maxId = studentReportExportJob.resolveSnapshotMaxId(normalizedQuery);
+        String fileName = studentReportExportJob.buildFileName(normalizedBusinessKey, normalizedQuery);
         StudentExportTaskPayload payload = StudentExportTaskPayload.builder()
                 .snapshotMaxId(maxId)
                 .fileName(fileName)
@@ -177,15 +176,12 @@ public class ExportTaskServiceImpl implements ExportTaskService, TaskRetryHandle
         ExportTask task = toExportTask(taskRecord);
         try {
             Path temporaryFilePath = getTemporaryFilePath(task);
-            Long maxId = task.getSnapshotMaxId();
-            task.setTotal(maxId == null ? 0 : studentMapper.countByMaxIdAndQuery(maxId, task.getQuery()));
-            if (task.getTotal() > getSheetRowLimit()) {
-                throw new IllegalStateException("导出数据超过 Excel 单 Sheet 最大行数，请缩小导出范围或改用 CSV");
-            }
-            taskCenterService.updateProgress(task.getTaskId(), 0L, task.getTotal(), 0);
             Files.createDirectories(temporaryFilePath.getParent());
             Files.deleteIfExists(temporaryFilePath);
-            writeExcel(task, temporaryFilePath);
+            ReportExportResult exportResult = writeReport(task, temporaryFilePath);
+            task.setTotal(safeLongToInt(exportResult.getTotal()));
+            task.setExported(safeLongToInt(exportResult.getExported()));
+            task.setSheetCount(exportResult.getSheetCount());
             assertTaskCanContinue(task.getTaskId());
             storeExportFile(task, temporaryFilePath);
             AsyncTaskRecord completedTask = taskCenterService.markSuccess(task.getTaskId(), toJson(StudentExportTaskResult.builder()
@@ -221,42 +217,28 @@ public class ExportTaskServiceImpl implements ExportTaskService, TaskRetryHandle
         task.setObjectKey(objectKey);
     }
 
-    private void writeExcel(ExportTask task, Path filePath) {
-        int pageSize = getExportPageSize();
-        Long maxId = task.getSnapshotMaxId();
-        long lastId = 0L;
-        WriteSheet writeSheet = EasyExcel.writerSheet(0, "学生数据").build();
-
-        try (ExcelWriter writer = EasyExcel.write(filePath.toFile(), StudentExcelRow.class).build()) {
-            if (maxId != null) {
-                while (true) {
-                    assertTaskCanContinue(task.getTaskId());
-                    List<StudentExportRecord> records =
-                            studentMapper.listByCursorAndQuery(lastId, maxId, pageSize, task.getQuery());
-                    if (records.isEmpty()) {
-                        break;
+    private ReportExportResult writeReport(ExportTask task, Path filePath) {
+        return reportExportEngine.write(studentReportExportJob, ReportExportCommand.<StudentExportQuery>builder()
+                .taskId(task.getTaskId())
+                .params(task.getQuery())
+                .snapshotMaxId(task.getSnapshotMaxId())
+                .pageSize(getExportPageSize())
+                .sheetRowLimit(getSheetRowLimit())
+                .filePath(filePath)
+                .cancelChecker(new ReportCancelChecker() {
+                    @Override
+                    public void checkCanceled() {
+                        assertTaskCanContinue(task.getTaskId());
                     }
-
-                    List<StudentExcelRow> rows = toExcelRows(records);
-                    writer.write(rows, writeSheet);
-                    task.setSheetCount(1);
-                    task.setExported(task.getExported() + rows.size());
-                    taskCenterService.updateProgress(
-                            task.getTaskId(), task.getExported(), task.getTotal(), calculateProgressPercent(task));
-
-                    lastId = records.get(records.size() - 1).getId();
-                    log.debug("export cursor page finished, taskId={}, lastId={}, pageRows={}, exported={}",
-                            task.getTaskId(), lastId, records.size(), task.getExported());
-                }
-            }
-
-            if (task.getExported() == 0) {
-                assertTaskCanContinue(task.getTaskId());
-                writer.write(Collections.emptyList(), writeSheet);
-                task.setSheetCount(1);
-                taskCenterService.updateProgress(task.getTaskId(), 0L, 0L, 0);
-            }
-        }
+                })
+                .progressUpdater(new ReportProgressUpdater() {
+                    @Override
+                    public void update(long completedCount, long totalCount, int progressPercent) {
+                        taskCenterService.updateProgress(
+                                task.getTaskId(), completedCount, totalCount, progressPercent);
+                    }
+                })
+                .build());
     }
 
     private ExportTask toExportTask(AsyncTaskRecord taskRecord) {
@@ -344,14 +326,6 @@ public class ExportTaskServiceImpl implements ExportTaskService, TaskRetryHandle
         }
     }
 
-    private int calculateProgressPercent(ExportTask task) {
-        if (task.getTotal() <= 0) {
-            return 0;
-        }
-        long progress = task.getExported() * 100L / task.getTotal();
-        return (int) Math.min(99L, Math.max(0L, progress));
-    }
-
     private int safeLongToInt(Long value) {
         if (value == null || value <= 0L) {
             return 0;
@@ -361,22 +335,6 @@ public class ExportTaskServiceImpl implements ExportTaskService, TaskRetryHandle
 
     private int safeInt(Integer value) {
         return value == null ? 0 : value;
-    }
-
-    private List<StudentExcelRow> toExcelRows(List<StudentExportRecord> records) {
-        List<StudentExcelRow> rows = new ArrayList<StudentExcelRow>(records.size());
-        for (StudentExportRecord record : records) {
-            rows.add(StudentExcelRow.builder()
-                    .studentNo(record.getStudentNo())
-                    .name(record.getName())
-                    .age(record.getAge())
-                    .gender(record.getGender())
-                    .className(record.getClassName())
-                    .email(record.getEmail())
-                    .birthday(record.getBirthday())
-                    .build());
-        }
-        return rows;
     }
 
     private StudentExportQuery normalizeQuery(StudentExportQuery query) {

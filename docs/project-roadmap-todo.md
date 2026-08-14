@@ -17,8 +17,15 @@
 | DONE | P0 | 导入错误明细文件 | 全量原子导入失败后，用户需要知道具体哪几行错了 |
 | DONE | P0 | 导入文件持久化到 MinIO | 解决本地临时文件丢失后无法重试的问题 |
 | DONE | P1 | 报表运行控制中心 | 向企业级调度报表规范靠拢，支持保存查询条件和历史运行 |
-| TODO | P1 | 通用报表导出引擎 | 将学生导出抽象成可复用框架，支持多报表扩展 |
+| DONE | P1 | 通用报表导出引擎 | 将学生导出抽象成可复用框架，支持多报表扩展 |
 | TODO | P1 | 任务监控和指标 | 让系统具备生产排障能力 |
+| TODO | P1 | 任务恢复与补偿调度 | 解决应用重启后 CREATED/RUNNING 任务悬挂的问题 |
+| TODO | P1 | 统一响应和异常处理 | 让接口返回、错误码和异常日志更像企业项目 |
+| TODO | P1 | API 权限和用户体系 | 解决当前 `X-User-Id` 可伪造、缺少登录鉴权的问题 |
+| TODO | P1 | 数据库迁移版本管理 | 替换启动时自动建表和重复 SQL 脚本，降低生产变更风险 |
+| TODO | P2 | 文件安全治理 | 补齐文件类型校验、内容嗅探、病毒扫描和敏感文件管控 |
+| TODO | P2 | 集成测试和回归数据集 | 用真实 MySQL、Redis、MinIO 覆盖核心链路，减少 H2 差异风险 |
+| TODO | P2 | 数据归档和清理策略 | 清理过期任务、文件记录和对象元数据，控制表体积 |
 | TODO | P2 | 性能压测和调优报告 | 固化百万级导入导出的性能结论 |
 
 ## 已完成历史任务
@@ -39,6 +46,7 @@
 | DONE | 导入错误明细文件 | 导入校验失败时生成错误 Excel，上传 MinIO，并提供签名下载入口 |
 | DONE | 导入文件持久化到 MinIO | 提交导入任务时保存源 Excel 到 MinIO，后台执行和重试从对象存储读取 |
 | DONE | 报表运行控制中心 | 保存学生报表查询条件，基于运行控制创建导出任务并查看历史运行 |
+| DONE | 通用报表导出引擎 | 抽象 Sheet 配置、快照计数、游标分页、Excel 写入、进度更新和取消检查 |
 
 ---
 
@@ -275,6 +283,8 @@ CREATE TABLE student_report_run (
 
 ## 4. 通用报表导出引擎
 
+状态：DONE
+
 ### 目标
 
 把当前学生导出中的任务提交、分页查询、Excel 写入、MinIO 上传、任务状态更新抽象成通用报表引擎。后续新增一个报表时，只需要实现查询参数、Sheet 配置和分页查询逻辑。
@@ -291,57 +301,65 @@ CREATE TABLE student_report_run (
 
 如果后续继续加报表，会复制很多代码。
 
-### 设计建议
+### 实现设计
 
-1. 抽象基类
+1. 通用 Job 接口
 
 ```java
-public abstract class AbstractReportExportJob<R> {
+public interface ReportExportJob<P> {
 
-    protected abstract R fetchRunParams(String runId, String ownerId);
+    String buildFileName(String businessKey, P params);
 
-    protected abstract List<SheetConfig> getSheetConfigs(R runParams);
+    Long resolveSnapshotMaxId(P params);
 
-    protected abstract List<?> querySheetData(R runParams, SheetConfig sheetConfig, ReportPageCursor cursor);
+    List<ReportSheetConfig> getSheetConfigs(P params);
 
-    protected abstract String getDirectory();
+    long count(P params, ReportSheetConfig sheetConfig, Long snapshotMaxId);
 
-    protected String getReportFileName(R runParams) {
-        return "report-" + System.currentTimeMillis() + ".xlsx";
-    }
+    ReportPage queryPage(P params, ReportSheetConfig sheetConfig, ReportPageCursor cursor);
 }
 ```
 
 2. Sheet 配置
 
 ```java
-public class SheetConfig {
+public class ReportSheetConfig {
     private int sheetIndex;
     private String sheetName;
     private Class<?> headClass;
-    private List<ReportConditionField> conditionFields;
-    private Map<Integer, Integer> columnWidths;
-    private int conditionSeparatorRows;
 }
 ```
 
 3. 支持能力
    - 单 Sheet
-   - 多 Sheet
-   - 条件行
-   - 自定义列宽
-   - 多级表头
+   - 多 Sheet 配置入口
    - 空数据导出表头
    - 导出取消检查
    - 导出进度更新
+   - 单 Sheet 行数上限校验
+   - 游标必须推进的保护校验
+
+4. 后续增强
+   - 条件行
+   - 自定义列宽
+   - 多级表头
+   - CSV 报表输出
 
 ### 验收标准
 
 - 学生导出迁移为 `StudentReportExportJob`。
-- 新增一个简单报表时，不需要复制任务状态、MinIO 上传、下载 URL 逻辑。
-- 多 Sheet 报表可以正常生成。
-- 条件行显示在表头上方。
+- 新增一个简单报表时，不需要复制快照计数、游标分页、Excel 写入、进度更新和取消检查逻辑。
+- 多 Sheet 报表可以通过多个 `ReportSheetConfig` 复用同一写入引擎。
+- 空数据报表仍能生成表头。
 - 任务取消后不继续上传最终文件。
+
+### 完成记录
+
+- 新增 `ReportExportEngine`，统一处理 Sheet 遍历、行数上限、游标分页、Excel 写入、进度更新和取消检查。
+- 新增 `ReportExportJob`、`ReportSheetConfig`、`ReportPageCursor`、`ReportPage`、`ReportExportCommand`、`ReportExportResult` 等报表模型。
+- 新增 `StudentReportExportJob`，将学生报表的文件名、Sheet 配置、快照边界、分页查询和 Excel 行转换从 `ExportTaskServiceImpl` 中拆出。
+- `ExportTaskServiceImpl` 保留任务创建、任务状态转换、临时文件、MinIO 上传和下载 URL 逻辑。
+- 新增 `ReportExportEngineTest`，覆盖分页写入、空数据表头和单 Sheet 行数超限失败。
 
 ---
 
@@ -451,6 +469,343 @@ public class SheetConfig {
 
 ---
 
+## 7. 任务恢复与补偿调度
+
+状态：TODO
+
+### 目标
+
+应用重启、线程池拒绝、进程异常退出后，系统能够识别并处理悬挂任务，避免 `CREATED` 或 `RUNNING` 状态长期停留。
+
+### 背景
+
+当前任务中心已经有 MySQL 持久化和 Redis 缓存，但真正的执行线程仍在应用进程内。应用突然退出时，数据库中可能保留：
+
+- 已创建但还没被线程池执行的 `CREATED` 任务
+- 已经开始但进程中断的 `RUNNING` 任务
+- Redis 状态过期但 MySQL 仍未终态的任务
+
+这些任务需要通过补偿机制统一处理。
+
+### 需求范围
+
+1. 任务执行心跳
+   - 任务开始后定期更新 `last_heartbeat_at`
+   - 记录执行节点标识，例如 `worker_id` 或 `instance_id`
+   - 导入、导出任务都接入心跳
+
+2. 启动恢复
+   - 应用启动时扫描本实例或无实例归属的可恢复任务
+   - `CREATED` 任务可重新投递执行
+   - 超过心跳超时时间的 `RUNNING` 任务标记为失败或重新投递
+
+3. 并发控制
+   - 多实例下通过 Redis 分布式锁或数据库状态 CAS 抢占任务
+   - 保证同一任务不会被两个节点同时执行
+
+4. 状态处理
+   - 不可恢复任务标记为 `FAILED`，失败原因写明“任务执行节点异常退出”
+   - 可恢复任务重试次数受 `maxRetryCount` 限制
+
+### 验收标准
+
+- 人为杀掉应用后，重启能处理遗留 `CREATED` 任务。
+- 人为杀掉导入/导出中的应用后，超时任务不会长期停留在 `RUNNING`。
+- 多实例同时启动时，同一个任务只会被一个实例恢复执行。
+- 恢复行为有清晰日志，可以通过 `taskId` 追踪。
+
+---
+
+## 8. 统一响应和异常处理
+
+状态：TODO
+
+### 目标
+
+统一所有 Controller 的成功响应、错误响应、错误码和异常日志格式，避免不同接口返回结构不一致。
+
+### 背景
+
+当前接口返回形式混合存在：
+
+- DTO 对象
+- `Map<String, Object>`
+- `ResponseEntity<Void>`
+- `ResponseStatusException`
+- `IllegalArgumentException`
+
+Demo 阶段可以接受，但企业项目需要稳定的响应契约，便于前端统一处理。
+
+### 需求范围
+
+1. 统一响应对象
+   - 新增 `ApiResponse<T>`
+   - 字段建议：`success`、`code`、`message`、`data`、`traceId`、`timestamp`
+   - 文件下载和 302 跳转接口可保留 `ResponseEntity`
+
+2. 统一异常体系
+   - 新增 `BusinessException`
+   - 新增错误码枚举，例如 `CommonErrorCode`
+   - 参数错误、资源不存在、状态冲突、外部依赖失败分开定义
+
+3. 全局异常处理
+   - 新增 `GlobalExceptionHandler`
+   - 不向前端返回堆栈、SQL、MinIO 详细异常
+   - 日志中保留 `taskId`、`fileId`、`runId` 等关键标识
+
+4. 接口迁移
+   - Excel、任务中心、文件中心、报表运行控制逐步迁移
+   - README 同步响应结构示例
+
+### 验收标准
+
+- 常规 JSON 接口都返回统一结构。
+- 参数错误返回稳定错误码和 HTTP 400。
+- 资源不存在返回稳定错误码和 HTTP 404。
+- 任务状态冲突返回稳定错误码和 HTTP 409。
+- 服务端日志包含异常堆栈，但响应体不暴露内部细节。
+
+---
+
+## 9. API 权限和用户体系
+
+状态：TODO
+
+### 目标
+
+把当前基于 `X-User-Id` 的模拟归属改造成更真实的登录用户上下文，避免用户伪造请求头访问别人的任务、文件或报表运行控制。
+
+### 背景
+
+当前项目没有登录系统，任务归属通过请求头区分。这个方式适合本地演示，但生产环境存在明显风险：
+
+- 用户可以伪造 `X-User-Id`
+- 缺少登录态校验
+- 缺少接口权限标识
+- 文件、任务、运行控制只做弱隔离
+
+### 需求范围
+
+1. 用户上下文
+   - 新增统一 `CurrentUser`
+   - `TaskOwnerResolver` 改为从认证上下文读取用户 ID
+   - 保留本地 demo 模式，方便无登录测试
+
+2. 认证机制
+   - 可选 Spring Security + JWT
+   - 本地提供简单登录接口或固定测试用户
+   - 敏感接口必须认证后访问
+
+3. 权限控制
+   - 给导入、导出、文件中心、报表运行控制增加权限点
+   - 管理员可查看全量任务，普通用户只能查看自己的任务
+
+4. 数据隔离
+   - 所有基于 `ownerId` 的查询统一从认证上下文获得
+   - 下载签名 URL 前必须校验资源归属
+
+### 验收标准
+
+- 未登录访问受保护接口返回 401。
+- 普通用户无法通过伪造请求头访问其他用户任务。
+- 管理员接口和普通用户接口边界清晰。
+- 本地 demo 模式仍可一键启动测试。
+
+---
+
+## 10. 数据库迁移版本管理
+
+状态：TODO
+
+### 目标
+
+引入 Flyway 或 Liquibase 管理表结构变更，替换启动时自动建表和多份 SQL 手工同步，降低生产环境 DDL 风险。
+
+### 背景
+
+当前项目同时存在：
+
+- Mapper XML 中的 `CREATE TABLE IF NOT EXISTS`
+- `create_tables.sql`
+- `schema.sql`
+- 应用启动时自动初始化表
+
+这种方式在 Demo 中很方便，但后续表结构变更容易出现脚本不一致、线上 DDL 不可控、索引重复创建等问题。
+
+### 需求范围
+
+1. 引入迁移工具
+   - 优先选择 Flyway
+   - 脚本目录建议：`src/main/resources/db/migration`
+   - 版本命名：`V1__init_schema.sql`、`V2__add_report_run.sql`
+
+2. 拆分初始化逻辑
+   - 生产模式关闭 Mapper 自动建表
+   - 本地 demo 可保留一键初始化开关
+   - README 说明两种模式差异
+
+3. 迁移脚本管理
+   - 所有新增表、字段、索引走版本脚本
+   - 历史脚本不可修改，只能新增版本
+   - 补充回滚或降级说明
+
+4. 兼容已有环境
+   - 对已存在的表支持 baseline
+   - 避免重复创建唯一索引导致启动失败
+
+### 验收标准
+
+- 空库启动时能通过 Flyway 初始化所有表。
+- 已有库接入时可 baseline，不破坏已有数据。
+- 删除 Mapper XML 中生产不需要的 DDL 初始化职责。
+- README 清楚说明本地和生产的数据库初始化方式。
+
+---
+
+## 11. 文件安全治理
+
+状态：TODO
+
+### 目标
+
+为导入 Excel、导出文件、通用文件中心增加安全校验和治理能力，避免任意文件上传、伪造类型、恶意内容和敏感文件长期保留。
+
+### 背景
+
+当前文件中心重点实现了上传能力，包括普通上传、直传、秒传和分片上传。但生产环境还需要关注安全：
+
+- 文件扩展名和真实内容可能不一致
+- 客户端传入的 `contentType` 不可信
+- Excel 文件可能包含异常压缩包结构
+- 文件下载 URL 需要严格归属校验和有效期控制
+- 恶意文件可能长期停留在对象存储
+
+### 需求范围
+
+1. 文件类型校验
+   - Excel 导入只允许 `.xlsx`
+   - 通用文件中心配置允许的扩展名和 MIME 类型
+   - 使用文件头或解析器做内容嗅探，不只信任后缀
+
+2. 文件安全扫描
+   - 抽象 `FileSecurityScanner`
+   - Demo 先实现 no-op 或规则扫描
+   - 后续可接 ClamAV、对象存储事件扫描或第三方服务
+
+3. 下载安全
+   - 所有下载 URL 生成前校验文件归属、状态、过期时间
+   - 签名 URL 有效期可按文件类型配置
+
+4. 审计记录
+   - 记录上传人、下载人、IP、文件大小、文件 hash
+   - 可查询异常上传记录
+
+### 验收标准
+
+- 上传 `.exe` 改名 `.xlsx` 不能通过 Excel 导入。
+- 文件中心可配置允许上传类型。
+- 下载别人的文件返回 404 或 403。
+- 安全扫描失败时文件不会变成 `NORMAL` 状态。
+
+---
+
+## 12. 集成测试和回归数据集
+
+状态：TODO
+
+### 目标
+
+使用真实 MySQL、Redis、MinIO 环境验证核心链路，降低 H2、Mock 和真实依赖之间的行为差异。
+
+### 背景
+
+当前单元测试已经覆盖了不少核心分支，但仍有一些真实环境差异无法靠 Mock 或 H2 完整覆盖：
+
+- MySQL `INSERT ... ON DUPLICATE KEY UPDATE`
+- MySQL 事务、锁等待、唯一索引冲突
+- MinIO 生命周期、签名 URL、对象不存在
+- Redis 缓存过期和短暂不可用
+- 大文件流式解析和上传
+
+### 需求范围
+
+1. 测试环境
+   - 提供 `docker-compose-test.yml`
+   - 启动 MySQL、Redis、MinIO
+   - 支持本地一键执行集成测试
+
+2. 测试用例
+   - 导入成功
+   - 导入校验失败并生成错误文件
+   - 导入源文件过期后重试失败
+   - 导出成功并生成签名下载 URL
+   - 报表运行控制创建、运行、查询历史
+   - 文件中心直传、分片上传、秒传
+
+3. 回归数据集
+   - 准备小数据 Excel
+   - 准备错误数据 Excel
+   - 准备重复学号 Excel
+   - 准备较大数据量生成脚本
+
+### 验收标准
+
+- 一条命令可以启动依赖并跑完集成测试。
+- 集成测试不依赖个人本机路径和真实服务器地址。
+- 测试结束后能清理容器和临时对象。
+- README 有清晰的集成测试执行说明。
+
+---
+
+## 13. 数据归档和清理策略
+
+状态：TODO
+
+### 目标
+
+为任务记录、文件记录、上传任务、导入暂存数据和对象存储元数据设计统一保留策略，防止表和对象无限增长。
+
+### 背景
+
+当前 MinIO 已经配置部分生命周期规则，但 MySQL 中的任务记录、文件记录、上传任务和导入暂存数据仍需要治理。长期运行后可能出现：
+
+- `async_task_record` 表越来越大
+- `file_upload_task` 中失败或中断任务长期保留
+- `file_record` 逻辑删除后没有归档
+- MinIO 对象被生命周期删除，但 MySQL 元数据仍显示可下载
+- 导入暂存表异常情况下存在残留数据
+
+### 需求范围
+
+1. 保留策略配置
+   - 任务记录保留天数
+   - 上传任务保留天数
+   - 逻辑删除文件保留天数
+   - 导入暂存数据保留天数
+
+2. 定时清理
+   - 清理过期 `async_task_record`
+   - 清理过期 `file_upload_task`
+   - 清理逻辑删除文件及对应 MinIO 对象
+   - 清理异常残留 `student_import_stage`
+
+3. 元数据修复
+   - MinIO 对象不存在时，文件记录标记为不可下载或异常
+   - 支持手动触发一致性检查
+
+4. 归档方案
+   - 重要任务可归档到历史表
+   - 普通 Demo 数据可直接物理删除
+
+### 验收标准
+
+- 定时任务可以按配置清理过期记录。
+- 清理行为不会删除仍在运行中的任务或正在上传的分片。
+- 对象已过期时，下载接口返回明确错误。
+- 清理日志包含数量和耗时，便于审计。
+
+---
+
 ## 建议实施顺序
 
 1. `P0` 导入错误明细文件
@@ -458,6 +813,13 @@ public class SheetConfig {
 3. `P1` 报表运行控制中心
 4. `P1` 通用报表导出引擎
 5. `P1` 任务监控和指标
-6. `P2` 性能压测和调优报告
+6. `P1` 任务恢复与补偿调度
+7. `P1` 统一响应和异常处理
+8. `P1` API 权限和用户体系
+9. `P1` 数据库迁移版本管理
+10. `P2` 文件安全治理
+11. `P2` 集成测试和回归数据集
+12. `P2` 数据归档和清理策略
+13. `P2` 性能压测和调优报告
 
 这个顺序的原因是：先补齐用户可用性和失败恢复，再做架构抽象，最后做运维和性能报告。这样每一步都能在当前能力上自然增长，不会一下子把项目改散。

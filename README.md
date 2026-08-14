@@ -9,6 +9,7 @@
 - Excel 导出：异步提交任务，使用游标分页读取数据库，生成单 Sheet Excel 后上传 MinIO。
 - 异步任务中心：统一记录任务状态、进度、失败原因和重试次数，状态缓存 Redis，任务记录持久化 MySQL。
 - 报表运行控制：支持保存学生报表查询条件，基于运行控制创建导出任务，并查询运行历史。
+- 通用报表导出引擎：抽象 Sheet 配置、快照计数、游标分页、Excel 写入、进度更新和取消检查。
 - 文件下载：应用只返回 MinIO 签名地址，不经过应用服务器转发大文件内容。
 - 通用文件中心：支持普通上传、元数据查询、逻辑删除、分页查询和签名下载。
 - 文件中心测试页：启动应用后访问 `/file-upload-test.html`，可测试秒传、客户端直传和分片上传。
@@ -77,7 +78,7 @@ IMPORT_WORKER_COUNT * IMPORT_MAX_CONCURRENT_TASKS <= HIKARI_MAXIMUM_POOL_SIZE
 记录当前 MAX(id)，按运行条件和 id 游标分页读取
         |
         v
-EasyExcel 写入单 Sheet 临时文件
+通用报表导出引擎调用具体 Job 查询并写入 Excel
         |
         v
 上传 MinIO，删除本地临时文件
@@ -88,6 +89,7 @@ EasyExcel 写入单 Sheet 临时文件
 
 导出使用 `id > lastId AND id <= maxId` 的游标条件，避免大 offset 分页越来越慢，且保证一次导出有固定的数据边界。
 学生报表运行控制会保存 `studentNo`、`nameKeyword`、`className`、`gender`、`minAge`、`maxAge` 等查询条件；点击运行时，运行控制的 `runId` 会作为导出任务 `businessKey`，因此可以按运行控制查看历史导出任务。
+`ReportExportEngine` 负责通用写文件流程，`StudentReportExportJob` 只负责学生报表的文件名、Sheet 配置、快照边界、分页查询和 Excel 行转换。
 导入和导出任务都已经接入统一任务中心，进度、失败原因、取消和重试都会同步到 `async_task_record`，并缓存到 Redis。
 为了让导出的文件可以直接作为导入文件使用，当前导出只生成一个 Sheet；超过 Excel 单 Sheet 行数限制时任务失败。
 
@@ -101,6 +103,7 @@ src/main/java/com/huang/demo
     ├── controller    # Excel HTTP 接口
     ├── listener      # EasyExcel 流式导入监听器
     ├── model         # Excel 行模型
+    ├── report        # 通用报表导出引擎
     ├── domain/model  # 领域模型和任务结果
     ├── repository    # MyBatis Mapper
     └── service       # 导入导出业务编排
