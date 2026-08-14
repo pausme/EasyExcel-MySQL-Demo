@@ -22,4 +22,12 @@ public class TaskCenterProperties {
     private String defaultOwnerId = "anonymous";
 
     private int maxRetryCount = 3;
+
+    private boolean recoveryEnabled = true;
+
+    private String workerId;
+
+    private int recoveryHeartbeatTimeoutSeconds = 120;
+
+    private int recoveryBatchSize = 20;
 }

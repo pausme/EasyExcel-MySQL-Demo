@@ -8,6 +8,9 @@
 - Excel 导入：上传后先创建 IMPORT 任务，后台流式读取 Excel，分批放入有界队列，由多个 worker 批量写入 MySQL。
 - Excel 导出：异步提交任务，使用游标分页读取数据库，生成单 Sheet Excel 后上传 MinIO。
 - 异步任务中心：统一记录任务状态、进度、失败原因和重试次数，状态缓存 Redis，任务记录持久化 MySQL。
+- 任务恢复和监控：任务执行写入 worker 心跳，应用定时恢复悬挂任务，并暴露 Actuator/Micrometer 指标。
+- 统一 API 响应：常规 JSON 接口返回 `ApiResponse`，异常由全局处理器转换为稳定错误码。
+- 用户上下文：默认 demo 模式兼容本地调试，关闭 demo 后必须使用 Bearer token，任务、报表和文件按 owner 隔离。
 - 报表运行控制：支持保存学生报表查询条件，基于运行控制创建导出任务，并查询运行历史。
 - 通用报表导出引擎：抽象 Sheet 配置、快照计数、游标分页、Excel 写入、进度更新和取消检查。
 - 文件下载：应用只返回 MinIO 签名地址，不经过应用服务器转发大文件内容。
@@ -98,6 +101,7 @@ IMPORT_WORKER_COUNT * IMPORT_MAX_CONCURRENT_TASKS <= HIKARI_MAXIMUM_POOL_SIZE
 ```text
 src/main/java/com/huang/demo
 ├── DemoApplication.java
+├── common           # 统一响应、异常和请求 traceId
 ├── excel
     ├── config        # 配置属性和导入导出线程池
     ├── controller    # Excel HTTP 接口
@@ -108,9 +112,11 @@ src/main/java/com/huang/demo
     ├── repository    # MyBatis Mapper
     └── service       # 导入导出业务编排
 ├── file              # 通用文件上传中心
+├── security          # 轻量用户上下文和 API 访问拦截
 └── task              # 统一异步任务中心
 
 src/main/resources
+├── db/migration      # Flyway 版本化迁移脚本
 ├── mapper            # MyBatis XML
 └── db/mysql          # 数据库初始化脚本
 
@@ -147,6 +153,19 @@ export TASK_CENTER_CACHE_RETENTION_HOURS='24'
 export TASK_CENTER_MAX_PAGE_SIZE='100'
 export TASK_CENTER_DEFAULT_OWNER_ID='anonymous'
 export TASK_CENTER_MAX_RETRY_COUNT='3'
+export TASK_RECOVERY_ENABLED='true'
+export TASK_WORKER_ID=''
+export TASK_RECOVERY_HEARTBEAT_TIMEOUT_SECONDS='120'
+export TASK_RECOVERY_BATCH_SIZE='20'
+
+# API 权限
+export API_SECURITY_DEMO_MODE='true'
+export API_SECURITY_DEMO_USER_TOKEN='demo-user-token'
+export API_SECURITY_DEMO_ADMIN_TOKEN='demo-admin-token'
+
+# Flyway，默认关闭；开启后建议关闭各模块 INIT_ENABLED
+export FLYWAY_ENABLED='false'
+export FLYWAY_BASELINE_ON_MIGRATE='true'
 
 # MinIO
 export MINIO_ENDPOINT='http://<MinIO地址>:<MinIO API端口>'
@@ -185,6 +204,17 @@ schema.sql            # 完整结构脚本
 
 如果 SQL 客户端不能稳定执行多语句脚本，建议先执行 `create_database.sql`，再选择 `demo` 数据库执行 `create_tables.sql`。
 `create_tables.sql` 会同时创建 `student_record`、`student_import_stage`、`student_report_run`、`file_record`、`file_upload_task` 和 `async_task_record`。
+
+项目也提供 Flyway 版本化迁移脚本，位于 `src/main/resources/db/migration`。生产环境建议设置：
+
+```bash
+export FLYWAY_ENABLED='true'
+export TASK_CENTER_INIT_ENABLED='false'
+export FILE_CENTER_INIT_ENABLED='false'
+export EXCEL_INIT_ENABLED='false'
+```
+
+已有数据库接入时可以通过 `FLYWAY_BASELINE_ON_MIGRATE=true` 建立基线，后续表结构变更只新增迁移版本，不直接修改历史脚本。
 
 ## 启动和测试
 
@@ -234,9 +264,30 @@ export SPRING_SERVLET_MULTIPART_MAX_REQUEST_SIZE='200MB'
 | POST | `/{taskId}/cancel` | 取消自己的异步任务 |
 | POST | `/{taskId}/retry` | 重试自己的异步任务 |
 
-任务归属通过请求头 `X-User-Id` 区分；当前项目没有登录系统，不传时使用 `TASK_CENTER_DEFAULT_OWNER_ID`。
+常规 JSON 接口会统一包装为：
+
+```json
+{
+  "success": true,
+  "code": "SUCCESS",
+  "message": "success",
+  "data": {},
+  "traceId": "请求追踪 ID",
+  "timestamp": "2026-08-14T11:00:00"
+}
+```
+
+demo 模式下仍兼容请求头 `X-User-Id`，不传时使用 `TASK_CENTER_DEFAULT_OWNER_ID`。关闭 demo 模式后，请使用 `Authorization: Bearer demo-user-token` 或按实际系统替换 `DemoTokenService`。文件、任务和报表运行控制都会按当前用户隔离。
 学生导入和导出任务都可以通过 `/api/tasks` 查询、取消和重试。`/api/excel/export/{taskId}` 仍保留导出专用状态接口，方便直接获取导出下载信息。
 导入接口提交成功后立即返回任务 ID，任务完成后通过 `/api/tasks/{taskId}` 查看最终状态和结果；导出接口同样先返回任务 ID，完成后再调用状态接口和下载接口。
+
+任务中心还提供：
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/metrics/thread-pools` | 查询导入、导出线程池活跃线程、队列长度和完成任务数 |
+
+Actuator 指标默认暴露 `health`、`info` 和 `metrics`，可通过 `/actuator/metrics/demo.async.task.total`、`/actuator/metrics/demo.async.task.duration` 和 JVM executor 指标查看任务计数、耗时和线程池状态。
 
 基础路径：`/api/report/student-runs`
 

@@ -22,6 +22,7 @@ import com.huang.demo.task.domain.model.AsyncTaskType;
 import com.huang.demo.task.domain.model.CreateAsyncTaskCommand;
 import com.huang.demo.task.domain.model.TaskCanceledException;
 import com.huang.demo.task.service.TaskCenterService;
+import com.huang.demo.task.service.TaskRecoveryHandler;
 import com.huang.demo.task.service.TaskRetryHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -46,7 +47,7 @@ import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 
 @Service
-public class StudentImportTaskServiceImpl implements StudentImportTaskService, TaskRetryHandler {
+public class StudentImportTaskServiceImpl implements StudentImportTaskService, TaskRetryHandler, TaskRecoveryHandler {
 
     private static final Logger log = LoggerFactory.getLogger(StudentImportTaskServiceImpl.class);
 
@@ -139,6 +140,11 @@ public class StudentImportTaskServiceImpl implements StudentImportTaskService, T
     }
 
     @Override
+    public void recover(AsyncTaskRecord task) {
+        submitExecution(task.getTaskId());
+    }
+
+    @Override
     public Optional<ImportTaskResponse> findImportTask(String taskId, String ownerId) {
         return taskCenterService.findTask(taskId)
                 .filter(task -> AsyncTaskType.IMPORT.name().equals(task.getTaskType()))
@@ -174,7 +180,7 @@ public class StudentImportTaskServiceImpl implements StudentImportTaskService, T
 
     private void executeImport(String taskId) {
         long start = System.currentTimeMillis();
-        AsyncTaskRecord task = taskCenterService.markRunning(taskId);
+        AsyncTaskRecord task = taskCenterService.markRunning(taskId, taskCenterService.currentWorkerId());
         if (isCanceledOrExpired(task)) {
             return;
         }

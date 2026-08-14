@@ -13,9 +13,12 @@ public interface FileUploadTaskMapper {
 
     int insert(FileUploadTask task);
 
-    Optional<FileUploadTask> findByUploadId(@Param("uploadId") String uploadId);
+    Optional<FileUploadTask> findByUploadId(@Param("ownerId") String ownerId,
+                                            @Param("uploadId") String uploadId);
 
-    int markSuccess(@Param("uploadId") String uploadId);
+    int markSuccess(@Param("ownerId") String ownerId,
+                    @Param("uploadId") String uploadId);
 
-    int markAborted(@Param("uploadId") String uploadId);
+    int markAborted(@Param("ownerId") String ownerId,
+                    @Param("uploadId") String uploadId);
 }

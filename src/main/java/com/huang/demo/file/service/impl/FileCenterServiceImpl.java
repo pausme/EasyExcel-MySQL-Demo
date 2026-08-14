@@ -24,6 +24,8 @@ import com.huang.demo.file.repository.FileRecordMapper;
 import com.huang.demo.file.repository.FileUploadTaskMapper;
 import com.huang.demo.file.service.FileCenterService;
 import com.huang.demo.file.service.FileObjectStorageService;
+import com.huang.demo.security.domain.CurrentUser;
+import com.huang.demo.security.domain.UserContextHolder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -107,7 +109,7 @@ public class FileCenterServiceImpl implements FileCenterService {
     public InstantUploadCheckResponse instantCheck(InstantUploadCheckRequest request) {
         String fileMd5 = normalizeFileMd5(request == null ? null : request.getFileMd5());
         long fileSize = normalizePositiveFileSize(request == null ? null : request.getFileSize());
-        Optional<FileRecord> recordOptional = fileRecordMapper.findNormalByMd5AndSize(fileMd5, fileSize);
+        Optional<FileRecord> recordOptional = fileRecordMapper.findNormalByMd5AndSize(currentOwnerId(), fileMd5, fileSize);
         return InstantUploadCheckResponse.builder()
                 .exists(recordOptional.isPresent())
                 .file(recordOptional.map(FileResponse::from).orElse(null))
@@ -120,7 +122,7 @@ public class FileCenterServiceImpl implements FileCenterService {
         validateDirectUploadInitRequest(request);
         String fileMd5 = normalizeFileMd5(request.getFileMd5());
         long fileSize = normalizePositiveFileSize(request.getFileSize());
-        Optional<FileRecord> existingRecord = fileRecordMapper.findNormalByMd5AndSize(fileMd5, fileSize);
+        Optional<FileRecord> existingRecord = fileRecordMapper.findNormalByMd5AndSize(currentOwnerId(), fileMd5, fileSize);
         if (existingRecord.isPresent()) {
             return DirectUploadInitResponse.builder()
                     .instant(true)
@@ -168,7 +170,7 @@ public class FileCenterServiceImpl implements FileCenterService {
         validateMultipartUploadInitRequest(request);
         String fileMd5 = normalizeFileMd5(request.getFileMd5());
         long fileSize = normalizePositiveFileSize(request.getFileSize());
-        Optional<FileRecord> existingRecord = fileRecordMapper.findNormalByMd5AndSize(fileMd5, fileSize);
+        Optional<FileRecord> existingRecord = fileRecordMapper.findNormalByMd5AndSize(currentOwnerId(), fileMd5, fileSize);
         if (existingRecord.isPresent()) {
             return MultipartUploadInitResponse.builder()
                     .instant(true)
@@ -282,7 +284,7 @@ public class FileCenterServiceImpl implements FileCenterService {
         if (fileId == null || fileId.trim().isEmpty()) {
             return Optional.empty();
         }
-        return fileRecordMapper.findNormalByFileId(fileId.trim());
+        return fileRecordMapper.findNormalByFileId(currentOwnerId(), fileId.trim());
     }
 
     @Override
@@ -300,7 +302,7 @@ public class FileCenterServiceImpl implements FileCenterService {
     public void delete(String fileId) {
         FileRecord record = findNormalFile(fileId)
                 .orElseThrow(() -> new IllegalArgumentException("文件不存在"));
-        int updated = fileRecordMapper.markDeleted(record.getFileId());
+        int updated = fileRecordMapper.markDeleted(currentOwnerId(), record.getFileId());
         if (updated == 0) {
             throw new IllegalArgumentException("文件不存在");
         }
@@ -317,8 +319,9 @@ public class FileCenterServiceImpl implements FileCenterService {
         String fileExt = normalizeFileExt(safeRequest.getFileExt());
         int offset = (pageNo - 1) * pageSize;
 
-        long total = fileRecordMapper.countNormal(originalName, fileExt);
-        List<FileRecord> records = fileRecordMapper.listNormalPage(originalName, fileExt, offset, pageSize);
+        String ownerId = currentOwnerId();
+        long total = fileRecordMapper.countNormal(ownerId, originalName, fileExt);
+        List<FileRecord> records = fileRecordMapper.listNormalPage(ownerId, originalName, fileExt, offset, pageSize);
         List<FileResponse> responseRecords = new ArrayList<FileResponse>(records.size());
         for (FileRecord record : records) {
             responseRecords.add(FileResponse.from(record));
@@ -339,6 +342,7 @@ public class FileCenterServiceImpl implements FileCenterService {
         LocalDateTime now = LocalDateTime.now();
         return FileRecord.builder()
                 .fileId(fileId)
+                .ownerId(currentOwnerId())
                 .originalName(originalName)
                 .objectKey(storedFile.getObjectKey())
                 .bucketName(storedFile.getBucketName())
@@ -357,6 +361,7 @@ public class FileCenterServiceImpl implements FileCenterService {
         LocalDateTime now = LocalDateTime.now();
         return FileRecord.builder()
                 .fileId(task.getFileId())
+                .ownerId(task.getOwnerId())
                 .originalName(task.getOriginalName())
                 .objectKey(task.getObjectKey())
                 .bucketName(task.getBucketName())
@@ -389,6 +394,7 @@ public class FileCenterServiceImpl implements FileCenterService {
         return FileUploadTask.builder()
                 .uploadId(uploadId)
                 .fileId(fileId)
+                .ownerId(currentOwnerId())
                 .uploadType(uploadType.name())
                 .originalName(originalName)
                 .objectKey(objectKey)
@@ -410,7 +416,7 @@ public class FileCenterServiceImpl implements FileCenterService {
         if (uploadId == null || uploadId.trim().isEmpty()) {
             throw new IllegalArgumentException("上传任务不存在");
         }
-        FileUploadTask task = fileUploadTaskMapper.findByUploadId(uploadId.trim())
+        FileUploadTask task = fileUploadTaskMapper.findByUploadId(currentOwnerId(), uploadId.trim())
                 .orElseThrow(() -> new IllegalArgumentException("上传任务不存在"));
         if (!expectedUploadType.name().equals(task.getUploadType())) {
             throw new IllegalArgumentException("上传任务类型不匹配");
@@ -427,14 +433,14 @@ public class FileCenterServiceImpl implements FileCenterService {
     }
 
     private void markTaskSuccess(String uploadId) {
-        int updated = fileUploadTaskMapper.markSuccess(uploadId);
+        int updated = fileUploadTaskMapper.markSuccess(currentOwnerId(), uploadId);
         if (updated == 0) {
             throw new IllegalStateException("上传任务状态更新失败");
         }
     }
 
     private void markTaskAborted(String uploadId) {
-        int updated = fileUploadTaskMapper.markAborted(uploadId);
+        int updated = fileUploadTaskMapper.markAborted(currentOwnerId(), uploadId);
         if (updated == 0) {
             throw new IllegalStateException("上传任务状态更新失败");
         }
@@ -608,6 +614,23 @@ public class FileCenterServiceImpl implements FileCenterService {
             return null;
         }
         return text.trim();
+    }
+
+    private String currentOwnerId() {
+        return UserContextHolder.get()
+                .map(CurrentUser::getUserId)
+                .filter(this::hasText)
+                .map(this::normalizeOwnerId)
+                .orElse("anonymous");
+    }
+
+    private String normalizeOwnerId(String ownerId) {
+        String normalized = ownerId == null ? "anonymous" : ownerId.trim();
+        return normalized.length() > 64 ? normalized.substring(0, 64) : normalized;
+    }
+
+    private boolean hasText(String value) {
+        return value != null && !value.trim().isEmpty();
     }
 
     private int normalizePageNo(Integer pageNo) {

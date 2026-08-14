@@ -8,6 +8,7 @@
         <id property="id" column="id"/>
         <result property="uploadId" column="upload_id"/>
         <result property="fileId" column="file_id"/>
+        <result property="ownerId" column="owner_id"/>
         <result property="uploadType" column="upload_type"/>
         <result property="originalName" column="original_name"/>
         <result property="objectKey" column="object_key"/>
@@ -30,6 +31,7 @@
             id BIGINT AUTO_INCREMENT PRIMARY KEY,
             upload_id VARCHAR(64) NOT NULL,
             file_id VARCHAR(64) NOT NULL,
+            owner_id VARCHAR(64) NOT NULL,
             upload_type VARCHAR(32) NOT NULL,
             original_name VARCHAR(255) NOT NULL,
             object_key VARCHAR(512) NOT NULL,
@@ -46,29 +48,31 @@
             updated_at DATETIME NOT NULL,
             completed_at DATETIME,
             UNIQUE KEY uk_file_upload_task_upload_id (upload_id),
+            KEY idx_file_upload_task_owner_status_created_at (owner_id, status, created_at),
             KEY idx_file_upload_task_status_created_at (status, created_at)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     </update>
 
     <insert id="insert" parameterType="com.huang.demo.file.domain.entity.FileUploadTask">
         INSERT INTO file_upload_task (
-            upload_id, file_id, upload_type, original_name, object_key, part_object_prefix,
+            upload_id, file_id, owner_id, upload_type, original_name, object_key, part_object_prefix,
             bucket_name, content_type, file_size, file_md5, file_ext, status,
             part_size, part_count, created_at, updated_at, completed_at
         )
         VALUES (
-            #{uploadId}, #{fileId}, #{uploadType}, #{originalName}, #{objectKey}, #{partObjectPrefix},
+            #{uploadId}, #{fileId}, #{ownerId}, #{uploadType}, #{originalName}, #{objectKey}, #{partObjectPrefix},
             #{bucketName}, #{contentType}, #{fileSize}, #{fileMd5}, #{fileExt}, #{status},
             #{partSize}, #{partCount}, #{createdAt}, #{updatedAt}, #{completedAt}
         )
     </insert>
 
     <select id="findByUploadId" resultMap="FileUploadTaskMap">
-        SELECT id, upload_id, file_id, upload_type, original_name, object_key, part_object_prefix,
+        SELECT id, upload_id, file_id, owner_id, upload_type, original_name, object_key, part_object_prefix,
                bucket_name, content_type, file_size, file_md5, file_ext, status,
                part_size, part_count, created_at, updated_at, completed_at
         FROM file_upload_task
-        WHERE upload_id = #{uploadId}
+        WHERE owner_id = #{ownerId}
+          AND upload_id = #{uploadId}
         LIMIT 1
     </select>
 
@@ -77,7 +81,8 @@
         SET status = 'SUCCESS',
             updated_at = NOW(),
             completed_at = NOW()
-        WHERE upload_id = #{uploadId}
+        WHERE owner_id = #{ownerId}
+          AND upload_id = #{uploadId}
           AND status = 'UPLOADING'
     </update>
 
@@ -86,7 +91,8 @@
         SET status = 'ABORTED',
             updated_at = NOW(),
             completed_at = NOW()
-        WHERE upload_id = #{uploadId}
+        WHERE owner_id = #{ownerId}
+          AND upload_id = #{uploadId}
           AND status = 'UPLOADING'
     </update>
 </mapper>

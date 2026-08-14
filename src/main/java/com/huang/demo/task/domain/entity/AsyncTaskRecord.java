@@ -43,6 +43,10 @@ public class AsyncTaskRecord {
 
     private String errorMessage;
 
+    private String workerId;
+
+    private LocalDateTime lastHeartbeatAt;
+
     private LocalDateTime createdAt;
 
     private LocalDateTime updatedAt;

@@ -42,4 +42,15 @@ public interface AsyncTaskRecordMapper {
                                                         @Param("limit") int limit);
 
     int markExpiredBefore(@Param("expireBefore") LocalDateTime expireBefore);
+
+    int updateHeartbeat(@Param("taskId") String taskId,
+                        @Param("workerId") String workerId,
+                        @Param("heartbeatAt") LocalDateTime heartbeatAt);
+
+    List<AsyncTaskRecord> listRecoverable(@Param("heartbeatBefore") LocalDateTime heartbeatBefore,
+                                          @Param("limit") int limit);
+
+    int claimRecoverable(@Param("taskId") String taskId,
+                         @Param("workerId") String workerId,
+                         @Param("heartbeatBefore") LocalDateTime heartbeatBefore);
 }

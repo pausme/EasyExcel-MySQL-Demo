@@ -20,6 +20,8 @@
         <result property="requestPayload" column="request_payload"/>
         <result property="resultPayload" column="result_payload"/>
         <result property="errorMessage" column="error_message"/>
+        <result property="workerId" column="worker_id"/>
+        <result property="lastHeartbeatAt" column="last_heartbeat_at"/>
         <result property="createdAt" column="created_at"/>
         <result property="updatedAt" column="updated_at"/>
         <result property="startedAt" column="started_at"/>
@@ -30,7 +32,7 @@
     <sql id="BaseColumns">
         id, task_id, owner_id, task_type, task_name, business_key, status,
         progress_percent, total_count, completed_count, retry_count, max_retry_count,
-        request_payload, result_payload, error_message, created_at, updated_at,
+        request_payload, result_payload, error_message, worker_id, last_heartbeat_at, created_at, updated_at,
         started_at, finished_at, expire_at
     </sql>
 
@@ -51,6 +53,8 @@
             request_payload TEXT,
             result_payload TEXT,
             error_message VARCHAR(1024),
+            worker_id VARCHAR(128),
+            last_heartbeat_at DATETIME,
             created_at DATETIME NOT NULL,
             updated_at DATETIME NOT NULL,
             started_at DATETIME,
@@ -61,6 +65,7 @@
             KEY idx_async_task_record_owner_business_key_created_at (owner_id, business_key, created_at),
             KEY idx_async_task_record_owner_status_created_at (owner_id, status, created_at),
             KEY idx_async_task_record_type_status_created_at (task_type, status, created_at),
+            KEY idx_async_task_record_status_heartbeat (status, last_heartbeat_at),
             KEY idx_async_task_record_expire_at (expire_at)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     </update>
@@ -69,13 +74,13 @@
         INSERT INTO async_task_record (
             task_id, owner_id, task_type, task_name, business_key, status,
             progress_percent, total_count, completed_count, retry_count, max_retry_count,
-            request_payload, result_payload, error_message, created_at, updated_at,
+            request_payload, result_payload, error_message, worker_id, last_heartbeat_at, created_at, updated_at,
             started_at, finished_at, expire_at
         )
         VALUES (
             #{taskId}, #{ownerId}, #{taskType}, #{taskName}, #{businessKey}, #{status},
             #{progressPercent}, #{totalCount}, #{completedCount}, #{retryCount}, #{maxRetryCount},
-            #{requestPayload}, #{resultPayload}, #{errorMessage}, #{createdAt}, #{updatedAt},
+            #{requestPayload}, #{resultPayload}, #{errorMessage}, #{workerId}, #{lastHeartbeatAt}, #{createdAt}, #{updatedAt},
             #{startedAt}, #{finishedAt}, #{expireAt}
         )
     </insert>
@@ -95,6 +100,8 @@
             request_payload = #{requestPayload},
             result_payload = #{resultPayload},
             error_message = #{errorMessage},
+            worker_id = #{workerId},
+            last_heartbeat_at = #{lastHeartbeatAt},
             updated_at = #{updatedAt},
             started_at = #{startedAt},
             finished_at = #{finishedAt},
@@ -170,5 +177,49 @@
             finished_at = NOW()
         WHERE expire_at &lt;= #{expireBefore}
           AND status IN ('CREATED', 'RUNNING')
+    </update>
+
+    <update id="updateHeartbeat">
+        UPDATE async_task_record
+        SET worker_id = #{workerId},
+            last_heartbeat_at = #{heartbeatAt},
+            updated_at = #{heartbeatAt}
+        WHERE task_id = #{taskId}
+          AND status = 'RUNNING'
+    </update>
+
+    <select id="listRecoverable" resultMap="AsyncTaskRecordMap">
+        SELECT <include refid="BaseColumns"/>
+        FROM async_task_record
+        WHERE (
+                status = 'CREATED'
+                AND created_at &lt;= #{heartbeatBefore}
+              )
+           OR (
+                status = 'RUNNING'
+                AND (last_heartbeat_at IS NULL OR last_heartbeat_at &lt;= #{heartbeatBefore})
+              )
+        ORDER BY id ASC
+        LIMIT #{limit}
+    </select>
+
+    <update id="claimRecoverable">
+        UPDATE async_task_record
+        SET status = 'CREATED',
+            worker_id = #{workerId},
+            last_heartbeat_at = NOW(),
+            updated_at = NOW(),
+            error_message = NULL
+        WHERE task_id = #{taskId}
+          AND (
+                (
+                    status = 'CREATED'
+                    AND created_at &lt;= #{heartbeatBefore}
+                )
+                OR (
+                    status = 'RUNNING'
+                    AND (last_heartbeat_at IS NULL OR last_heartbeat_at &lt;= #{heartbeatBefore})
+                )
+          )
     </update>
 </mapper>

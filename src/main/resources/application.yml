@@ -9,6 +9,11 @@ spring:
     driver-class-name: com.mysql.cj.jdbc.Driver
     hikari:
       maximum-pool-size: ${HIKARI_MAXIMUM_POOL_SIZE}
+  flyway:
+    enabled: ${FLYWAY_ENABLED:false}
+    locations: classpath:db/migration
+    baseline-on-migrate: ${FLYWAY_BASELINE_ON_MIGRATE:true}
+    baseline-version: ${FLYWAY_BASELINE_VERSION:0}
   redis:
     host: ${REDIS_HOST}
     port: ${REDIS_PORT}
@@ -27,6 +32,11 @@ mybatis:
     map-underscore-to-camel-case: true
 
 app:
+  security:
+    demo-mode: ${API_SECURITY_DEMO_MODE:true}
+    demo-user-token: ${API_SECURITY_DEMO_USER_TOKEN:demo-user-token}
+    demo-admin-token: ${API_SECURITY_DEMO_ADMIN_TOKEN:demo-admin-token}
+    demo-default-user-id: ${TASK_CENTER_DEFAULT_OWNER_ID:anonymous}
   task:
     init-enabled: ${TASK_CENTER_INIT_ENABLED:true}
     redis-key-prefix: ${TASK_CENTER_REDIS_KEY_PREFIX:task:center:}
@@ -34,7 +44,14 @@ app:
     max-page-size: ${TASK_CENTER_MAX_PAGE_SIZE:100}
     default-owner-id: ${TASK_CENTER_DEFAULT_OWNER_ID:anonymous}
     max-retry-count: ${TASK_CENTER_MAX_RETRY_COUNT:3}
+    recovery-enabled: ${TASK_RECOVERY_ENABLED:true}
+    worker-id: ${TASK_WORKER_ID:}
+    recovery-heartbeat-timeout-seconds: ${TASK_RECOVERY_HEARTBEAT_TIMEOUT_SECONDS:120}
+    recovery-batch-size: ${TASK_RECOVERY_BATCH_SIZE:20}
+    recovery-initial-delay-millis: ${TASK_RECOVERY_INITIAL_DELAY_MILLIS:30000}
+    recovery-fixed-delay-millis: ${TASK_RECOVERY_FIXED_DELAY_MILLIS:60000}
   excel:
+    init-enabled: ${EXCEL_INIT_ENABLED:true}
     export-page-size: 5000
     sheet-row-limit: 1048575
     import-batch-size: 2000
@@ -85,3 +102,12 @@ app:
     max-page-size: ${FILE_CENTER_MAX_PAGE_SIZE:100}
     cors-enabled: ${FILE_CENTER_CORS_ENABLED:true}
     cors-allowed-origin-patterns: ${FILE_CENTER_CORS_ALLOWED_ORIGIN_PATTERNS:http://localhost:*,http://127.0.0.1:*,null}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: when_authorized

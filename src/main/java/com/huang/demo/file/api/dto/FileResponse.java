@@ -12,6 +12,8 @@ public class FileResponse {
 
     private final String fileId;
 
+    private final String ownerId;
+
     private final String originalName;
 
     private final String contentType;
@@ -31,6 +33,7 @@ public class FileResponse {
     public static FileResponse from(FileRecord record) {
         return FileResponse.builder()
                 .fileId(record.getFileId())
+                .ownerId(record.getOwnerId())
                 .originalName(record.getOriginalName())
                 .contentType(record.getContentType())
                 .fileSize(record.getFileSize())

@@ -6,7 +6,9 @@ import com.huang.demo.task.domain.entity.AsyncTaskRecord;
 import com.huang.demo.task.domain.model.AsyncTaskStatus;
 import com.huang.demo.task.domain.model.AsyncTaskType;
 import com.huang.demo.task.domain.model.CreateAsyncTaskCommand;
+import com.huang.demo.task.monitor.TaskMetricsService;
 import com.huang.demo.task.repository.AsyncTaskRecordMapper;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -39,7 +41,11 @@ class TaskCenterServiceImplTest {
         when(stringRedisTemplate.opsForValue()).thenReturn(valueOperations);
         ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
         taskCenterService = new TaskCenterServiceImpl(
-                taskRecordMapper, stringRedisTemplate, objectMapper, new TaskCenterProperties());
+                taskRecordMapper,
+                stringRedisTemplate,
+                objectMapper,
+                new TaskCenterProperties(),
+                new TaskMetricsService(new SimpleMeterRegistry()));
     }
 
     @Test

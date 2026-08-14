@@ -10,6 +10,7 @@ import com.huang.demo.task.domain.entity.AsyncTaskRecord;
 import com.huang.demo.task.domain.model.AsyncTaskStatus;
 import com.huang.demo.task.domain.model.AsyncTaskType;
 import com.huang.demo.task.domain.model.CreateAsyncTaskCommand;
+import com.huang.demo.task.monitor.TaskMetricsService;
 import com.huang.demo.task.repository.AsyncTaskRecordMapper;
 import com.huang.demo.task.service.TaskCenterService;
 import org.slf4j.Logger;
@@ -37,15 +38,20 @@ public class TaskCenterServiceImpl implements TaskCenterService {
     private final StringRedisTemplate stringRedisTemplate;
     private final ObjectMapper objectMapper;
     private final TaskCenterProperties properties;
+    private final TaskMetricsService taskMetricsService;
+    private final String workerId;
 
     public TaskCenterServiceImpl(AsyncTaskRecordMapper taskRecordMapper,
                                  StringRedisTemplate stringRedisTemplate,
                                  ObjectMapper objectMapper,
-                                 TaskCenterProperties properties) {
+                                 TaskCenterProperties properties,
+                                 TaskMetricsService taskMetricsService) {
         this.taskRecordMapper = taskRecordMapper;
         this.stringRedisTemplate = stringRedisTemplate;
         this.objectMapper = objectMapper;
         this.properties = properties;
+        this.taskMetricsService = taskMetricsService;
+        this.workerId = resolveWorkerId(properties);
     }
 
     @PostConstruct
@@ -84,6 +90,7 @@ public class TaskCenterServiceImpl implements TaskCenterService {
                 .build();
         taskRecordMapper.insert(record);
         cacheTaskQuietly(record);
+        taskMetricsService.recordSubmitted(record);
         return record;
     }
 
@@ -106,6 +113,12 @@ public class TaskCenterServiceImpl implements TaskCenterService {
     @Override
     @Transactional(rollbackFor = Exception.class)
     public AsyncTaskRecord markRunning(String taskId) {
+        return markRunning(taskId, workerId);
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public AsyncTaskRecord markRunning(String taskId, String workerId) {
         AsyncTaskRecord record = findTaskRequired(taskId);
         record = refreshExpiredIfNecessary(record);
         if (isTerminalStatus(record.getStatus())) {
@@ -113,11 +126,14 @@ public class TaskCenterServiceImpl implements TaskCenterService {
         }
         LocalDateTime now = LocalDateTime.now();
         record.setStatus(AsyncTaskStatus.RUNNING.name());
+        record.setWorkerId(normalizeWorkerId(workerId));
+        record.setLastHeartbeatAt(now);
         if (record.getStartedAt() == null) {
             record.setStartedAt(now);
         }
         record.setUpdatedAt(now);
         updateRequired(record);
+        taskMetricsService.recordStatusChanged(record);
         return record;
     }
 
@@ -132,9 +148,17 @@ public class TaskCenterServiceImpl implements TaskCenterService {
         record.setCompletedCount(Math.max(0L, completedCount));
         record.setTotalCount(Math.max(0L, totalCount));
         record.setProgressPercent(normalizeProgress(progressPercent));
-        record.setUpdatedAt(LocalDateTime.now());
+        LocalDateTime now = LocalDateTime.now();
+        record.setWorkerId(workerId);
+        record.setLastHeartbeatAt(now);
+        record.setUpdatedAt(now);
         updateRequired(record);
         return record;
+    }
+
+    @Override
+    public void heartbeat(String taskId, String workerId) {
+        taskRecordMapper.updateHeartbeat(normalizeTaskId(taskId), normalizeWorkerId(workerId), LocalDateTime.now());
     }
 
     @Override
@@ -150,9 +174,11 @@ public class TaskCenterServiceImpl implements TaskCenterService {
         record.setProgressPercent(100);
         record.setResultPayload(resultPayload);
         record.setErrorMessage(null);
+        record.setLastHeartbeatAt(now);
         record.setUpdatedAt(now);
         record.setFinishedAt(now);
         updateRequired(record);
+        taskMetricsService.recordStatusChanged(record);
         return record;
     }
 
@@ -174,9 +200,11 @@ public class TaskCenterServiceImpl implements TaskCenterService {
         record.setStatus(AsyncTaskStatus.FAILED.name());
         record.setErrorMessage(normalizeErrorMessage(errorMessage));
         record.setResultPayload(resultPayload);
+        record.setLastHeartbeatAt(now);
         record.setUpdatedAt(now);
         record.setFinishedAt(now);
         updateRequired(record);
+        taskMetricsService.recordStatusChanged(record);
         return record;
     }
 
@@ -194,7 +222,9 @@ public class TaskCenterServiceImpl implements TaskCenterService {
         record.setUpdatedAt(now);
         record.setFinishedAt(now);
         record.setErrorMessage("任务已取消");
+        record.setLastHeartbeatAt(now);
         updateRequired(record);
+        taskMetricsService.recordStatusChanged(record);
         return true;
     }
 
@@ -226,6 +256,8 @@ public class TaskCenterServiceImpl implements TaskCenterService {
         record.setErrorMessage(null);
         record.setStartedAt(null);
         record.setFinishedAt(null);
+        record.setWorkerId(null);
+        record.setLastHeartbeatAt(null);
         record.setUpdatedAt(now);
         record.setExpireAt(now.plusHours(Math.max(1, properties.getCacheRetentionHours())));
         updateRequired(record);
@@ -287,6 +319,37 @@ public class TaskCenterServiceImpl implements TaskCenterService {
                 .build();
     }
 
+    @Override
+    public List<AsyncTaskRecord> listRecoverableTasks(int limit) {
+        if (!properties.isRecoveryEnabled()) {
+            return new ArrayList<AsyncTaskRecord>();
+        }
+        int safeLimit = Math.max(1, Math.min(limit, Math.max(1, properties.getRecoveryBatchSize())));
+        return taskRecordMapper.listRecoverable(resolveHeartbeatBefore(), safeLimit);
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public boolean claimRecoverableTask(String taskId) {
+        if (!properties.isRecoveryEnabled()) {
+            return false;
+        }
+        int claimed = taskRecordMapper.claimRecoverable(
+                normalizeTaskId(taskId), workerId, resolveHeartbeatBefore());
+        if (claimed > 0) {
+            Optional<AsyncTaskRecord> recordOptional = taskRecordMapper.findByTaskId(normalizeTaskId(taskId));
+            if (recordOptional.isPresent()) {
+                cacheTaskQuietly(recordOptional.get());
+            }
+        }
+        return claimed > 0;
+    }
+
+    @Override
+    public String currentWorkerId() {
+        return workerId;
+    }
+
     @Scheduled(fixedDelay = 3600000L, initialDelay = 3600000L)
     public void expireStaleTasks() {
         try {
@@ -332,6 +395,7 @@ public class TaskCenterServiceImpl implements TaskCenterService {
         record.setUpdatedAt(now);
         record.setFinishedAt(now);
         updateRequired(record);
+        taskMetricsService.recordStatusChanged(record);
         return record;
     }
 
@@ -453,6 +517,25 @@ public class TaskCenterServiceImpl implements TaskCenterService {
             throw new IllegalArgumentException("业务标识不能为空");
         }
         return normalized;
+    }
+
+    private LocalDateTime resolveHeartbeatBefore() {
+        int timeoutSeconds = Math.max(30, properties.getRecoveryHeartbeatTimeoutSeconds());
+        return LocalDateTime.now().minusSeconds(timeoutSeconds);
+    }
+
+    private String resolveWorkerId(TaskCenterProperties properties) {
+        String configured = properties.getWorkerId();
+        if (configured != null && !configured.trim().isEmpty()) {
+            String normalized = configured.trim();
+            return normalized.length() > 128 ? normalized.substring(0, 128) : normalized;
+        }
+        return "worker-" + UUID.randomUUID().toString().replace("-", "");
+    }
+
+    private String normalizeWorkerId(String value) {
+        String normalized = value == null || value.trim().isEmpty() ? workerId : value.trim();
+        return normalized.length() > 128 ? normalized.substring(0, 128) : normalized;
     }
 
     private int normalizeMaxRetryCount(Integer maxRetryCount) {

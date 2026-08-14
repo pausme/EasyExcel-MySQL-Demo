@@ -19,6 +19,8 @@ public class FileRecord {
 
     private String fileId;
 
+    private String ownerId;
+
     private String originalName;
 
     private String objectKey;

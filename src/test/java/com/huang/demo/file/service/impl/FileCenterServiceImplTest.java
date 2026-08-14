@@ -68,12 +68,12 @@ class FileCenterServiceImplTest {
                 .objectKey("files/general/2026/08/05/file-1.xlsx")
                 .status("NORMAL")
                 .build();
-        when(mapper.findNormalByFileId("file-1")).thenReturn(Optional.of(record));
-        when(mapper.markDeleted("file-1")).thenReturn(1);
+        when(mapper.findNormalByFileId("anonymous", "file-1")).thenReturn(Optional.of(record));
+        when(mapper.markDeleted("anonymous", "file-1")).thenReturn(1);
 
         service.delete("file-1");
 
-        verify(mapper).markDeleted("file-1");
+        verify(mapper).markDeleted("anonymous", "file-1");
         verify(storageService).deleteQuietly("files/general/2026/08/05/file-1.xlsx");
     }
 
@@ -83,8 +83,8 @@ class FileCenterServiceImplTest {
         FileUploadTaskMapper taskMapper = mock(FileUploadTaskMapper.class);
         FileObjectStorageService storageService = mock(FileObjectStorageService.class);
         FileCenterServiceImpl service = newService(mapper, taskMapper, storageService);
-        when(mapper.countNormal(null, null)).thenReturn(1L);
-        when(mapper.listNormalPage(null, null, 0, 20)).thenReturn(java.util.Collections.singletonList(
+        when(mapper.countNormal("anonymous", null, null)).thenReturn(1L);
+        when(mapper.listNormalPage("anonymous", null, null, 0, 20)).thenReturn(java.util.Collections.singletonList(
                 FileRecord.builder()
                         .fileId("file-1")
                         .originalName("demo.xlsx")
@@ -107,7 +107,7 @@ class FileCenterServiceImplTest {
         InstantUploadCheckRequest request = new InstantUploadCheckRequest();
         request.setFileMd5("5d41402abc4b2a76b9719d911017c592");
         request.setFileSize(5L);
-        when(mapper.findNormalByMd5AndSize("5d41402abc4b2a76b9719d911017c592", 5L)).thenReturn(Optional.of(
+        when(mapper.findNormalByMd5AndSize("anonymous", "5d41402abc4b2a76b9719d911017c592", 5L)).thenReturn(Optional.of(
                 FileRecord.builder().fileId("file-1").originalName("demo.txt").status("NORMAL").build()));
 
         InstantUploadCheckResponse response = service.instantCheck(request);
@@ -127,7 +127,7 @@ class FileCenterServiceImplTest {
         request.setContentType("text/plain");
         request.setFileMd5("5d41402abc4b2a76b9719d911017c592");
         request.setFileSize(5L);
-        when(mapper.findNormalByMd5AndSize("5d41402abc4b2a76b9719d911017c592", 5L)).thenReturn(Optional.empty());
+        when(mapper.findNormalByMd5AndSize("anonymous", "5d41402abc4b2a76b9719d911017c592", 5L)).thenReturn(Optional.empty());
         when(storageService.bucketName()).thenReturn("student-excel");
         when(storageService.createUploadUrl(any(String.class))).thenReturn("http://minio/upload-url");
 
@@ -158,10 +158,10 @@ class FileCenterServiceImplTest {
                 .fileExt("txt")
                 .status("UPLOADING")
                 .build();
-        when(taskMapper.findByUploadId("upload-1")).thenReturn(Optional.of(task));
+        when(taskMapper.findByUploadId("anonymous", "upload-1")).thenReturn(Optional.of(task));
         when(storageService.statObject("files/general/file-1.txt")).thenReturn(
                 StoredObject.builder().objectKey("files/general/file-1.txt").size(5L).etag("etag").build());
-        when(taskMapper.markSuccess("upload-1")).thenReturn(1);
+        when(taskMapper.markSuccess("anonymous", "upload-1")).thenReturn(1);
 
         FileRecord record = service.completeDirectUpload("upload-1");
 
@@ -181,7 +181,7 @@ class FileCenterServiceImplTest {
         request.setFileMd5("5d41402abc4b2a76b9719d911017c592");
         request.setFileSize(12L * 1024L * 1024L);
         request.setPartSize(6L * 1024L * 1024L);
-        when(mapper.findNormalByMd5AndSize("5d41402abc4b2a76b9719d911017c592", 12L * 1024L * 1024L))
+        when(mapper.findNormalByMd5AndSize("anonymous", "5d41402abc4b2a76b9719d911017c592", 12L * 1024L * 1024L))
                 .thenReturn(Optional.empty());
         when(storageService.bucketName()).thenReturn("student-excel");
         when(storageService.createUploadUrl(any(String.class))).thenReturn("http://minio/part-url");
@@ -207,7 +207,7 @@ class FileCenterServiceImplTest {
                 .partCount(2)
                 .status("UPLOADING")
                 .build();
-        when(taskMapper.findByUploadId("upload-1")).thenReturn(Optional.of(task));
+        when(taskMapper.findByUploadId("anonymous", "upload-1")).thenReturn(Optional.of(task));
         when(storageService.listObjectKeys("files/multipart/upload-1")).thenReturn(java.util.Arrays.asList(
                 "files/multipart/upload-1/00002.part",
                 "files/multipart/upload-1/00001.part"));

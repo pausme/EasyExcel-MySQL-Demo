@@ -14,15 +14,22 @@ public interface FileRecordMapper {
 
     int insert(FileRecord record);
 
-    Optional<FileRecord> findNormalByFileId(@Param("fileId") String fileId);
+    Optional<FileRecord> findNormalByFileId(@Param("ownerId") String ownerId,
+                                            @Param("fileId") String fileId);
 
-    Optional<FileRecord> findNormalByMd5AndSize(@Param("fileMd5") String fileMd5, @Param("fileSize") long fileSize);
+    Optional<FileRecord> findNormalByMd5AndSize(@Param("ownerId") String ownerId,
+                                                @Param("fileMd5") String fileMd5,
+                                                @Param("fileSize") long fileSize);
 
-    int markDeleted(@Param("fileId") String fileId);
+    int markDeleted(@Param("ownerId") String ownerId,
+                    @Param("fileId") String fileId);
 
-    long countNormal(@Param("originalName") String originalName, @Param("fileExt") String fileExt);
+    long countNormal(@Param("ownerId") String ownerId,
+                     @Param("originalName") String originalName,
+                     @Param("fileExt") String fileExt);
 
-    List<FileRecord> listNormalPage(@Param("originalName") String originalName,
+    List<FileRecord> listNormalPage(@Param("ownerId") String ownerId,
+                                    @Param("originalName") String originalName,
                                     @Param("fileExt") String fileExt,
                                     @Param("offset") int offset,
                                     @Param("limit") int limit);

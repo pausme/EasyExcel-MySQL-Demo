@@ -1,6 +1,8 @@
 package com.huang.demo.task.service;
 
 import com.huang.demo.task.config.TaskCenterProperties;
+import com.huang.demo.security.domain.CurrentUser;
+import com.huang.demo.security.domain.UserContextHolder;
 import org.springframework.stereotype.Component;
 
 import javax.servlet.http.HttpServletRequest;
@@ -17,7 +19,15 @@ public class TaskOwnerResolver {
     }
 
     public String resolve(HttpServletRequest request) {
+        java.util.Optional<CurrentUser> currentUser = UserContextHolder.get();
+        if (currentUser.isPresent()) {
+            return normalizeOwnerId(currentUser.get().getUserId());
+        }
         String ownerId = request == null ? null : request.getHeader(USER_ID_HEADER);
+        return normalizeOwnerId(ownerId);
+    }
+
+    private String normalizeOwnerId(String ownerId) {
         if (ownerId == null || ownerId.trim().isEmpty()) {
             ownerId = properties.getDefaultOwnerId();
         }

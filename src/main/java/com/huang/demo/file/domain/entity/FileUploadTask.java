@@ -21,6 +21,8 @@ public class FileUploadTask {
 
     private String fileId;
 
+    private String ownerId;
+
     private String uploadType;
 
     private String originalName;

@@ -10,19 +10,12 @@
 | DOING | 正在开发 |
 | DONE | 已完成并通过本地验证 |
 
-## 任务总览
+## 待办任务总览
+
+这里只保留尚未完成的任务；已经完成的任务统一归档到“已完成历史任务”中，详细方案和完成记录仍保留在下方章节，便于后续复盘。
 
 | 状态 | 优先级 | 任务 | 建议原因 |
 | --- | --- | --- | --- |
-| DONE | P0 | 导入错误明细文件 | 全量原子导入失败后，用户需要知道具体哪几行错了 |
-| DONE | P0 | 导入文件持久化到 MinIO | 解决本地临时文件丢失后无法重试的问题 |
-| DONE | P1 | 报表运行控制中心 | 向企业级调度报表规范靠拢，支持保存查询条件和历史运行 |
-| DONE | P1 | 通用报表导出引擎 | 将学生导出抽象成可复用框架，支持多报表扩展 |
-| TODO | P1 | 任务监控和指标 | 让系统具备生产排障能力 |
-| TODO | P1 | 任务恢复与补偿调度 | 解决应用重启后 CREATED/RUNNING 任务悬挂的问题 |
-| TODO | P1 | 统一响应和异常处理 | 让接口返回、错误码和异常日志更像企业项目 |
-| TODO | P1 | API 权限和用户体系 | 解决当前 `X-User-Id` 可伪造、缺少登录鉴权的问题 |
-| TODO | P1 | 数据库迁移版本管理 | 替换启动时自动建表和重复 SQL 脚本，降低生产变更风险 |
 | TODO | P2 | 文件安全治理 | 补齐文件类型校验、内容嗅探、病毒扫描和敏感文件管控 |
 | TODO | P2 | 集成测试和回归数据集 | 用真实 MySQL、Redis、MinIO 覆盖核心链路，减少 H2 差异风险 |
 | TODO | P2 | 数据归档和清理策略 | 清理过期任务、文件记录和对象元数据，控制表体积 |
@@ -30,23 +23,28 @@
 
 ## 已完成历史任务
 
-| 状态 | 任务 | 关键内容 |
-| --- | --- | --- |
-| DONE | 项目初始化 | 基于 Spring Boot、EasyExcel、MyBatis、MySQL 搭建学生导入导出演示项目 |
-| DONE | 配置安全改造 | 使用 `application.yml`，数据库密码等敏感信息改为环境变量 |
-| DONE | 数据库建表脚本 | 提供 `create_database.sql`、`create_tables.sql`、`schema.sql` |
-| DONE | MySQL + MyBatis 写库 | 使用 MyBatis XML 批量 `INSERT ... ON DUPLICATE KEY UPDATE` |
-| DONE | 导入模板接口 | 提供学生 Excel 导入模板下载 |
-| DONE | 百万级导出 | 游标分页、快照边界、异步任务、本地临时文件、MinIO 上传和签名下载 |
-| DONE | Redis 任务状态 | 导出任务状态缓存 Redis，并持久化任务记录到 MySQL |
-| DONE | 文件上传中心 | 普通上传、客户端直传、秒传、分片上传、分页查询和静态测试页 |
-| DONE | 统一异步任务中心 | 抽象任务创建、运行中、成功、失败、取消、过期、重试和分页查询 |
-| DONE | 真正异步导入 | 导入接口立即返回任务 ID，后台线程解析 Excel 并写库 |
-| DONE | 全量原子导入 | 使用 `student_import_stage` 暂存表，校验通过后单事务合并正式表 |
-| DONE | 导入错误明细文件 | 导入校验失败时生成错误 Excel，上传 MinIO，并提供签名下载入口 |
-| DONE | 导入文件持久化到 MinIO | 提交导入任务时保存源 Excel 到 MinIO，后台执行和重试从对象存储读取 |
-| DONE | 报表运行控制中心 | 保存学生报表查询条件，基于运行控制创建导出任务并查看历史运行 |
-| DONE | 通用报表导出引擎 | 抽象 Sheet 配置、快照计数、游标分页、Excel 写入、进度更新和取消检查 |
+| 状态 | 优先级 | 任务 | 关键内容 |
+| --- | --- | --- | --- |
+| DONE | 历史 | 项目初始化 | 基于 Spring Boot、EasyExcel、MyBatis、MySQL 搭建学生导入导出演示项目 |
+| DONE | 历史 | 配置安全改造 | 使用 `application.yml`，数据库密码等敏感信息改为环境变量 |
+| DONE | 历史 | 数据库建表脚本 | 提供 `create_database.sql`、`create_tables.sql`、`schema.sql` |
+| DONE | 历史 | MySQL + MyBatis 写库 | 使用 MyBatis XML 批量 `INSERT ... ON DUPLICATE KEY UPDATE` |
+| DONE | 历史 | 导入模板接口 | 提供学生 Excel 导入模板下载 |
+| DONE | 历史 | 百万级导出 | 游标分页、快照边界、异步任务、本地临时文件、MinIO 上传和签名下载 |
+| DONE | 历史 | Redis 任务状态 | 导出任务状态缓存 Redis，并持久化任务记录到 MySQL |
+| DONE | 历史 | 文件上传中心 | 普通上传、客户端直传、秒传、分片上传、分页查询和静态测试页 |
+| DONE | 历史 | 统一异步任务中心 | 抽象任务创建、运行中、成功、失败、取消、过期、重试和分页查询 |
+| DONE | 历史 | 真正异步导入 | 导入接口立即返回任务 ID，后台线程解析 Excel 并写库 |
+| DONE | 历史 | 全量原子导入 | 使用 `student_import_stage` 暂存表，校验通过后单事务合并正式表 |
+| DONE | P0 | 导入错误明细文件 | 导入校验失败时生成错误 Excel，上传 MinIO，并提供签名下载入口 |
+| DONE | P0 | 导入文件持久化到 MinIO | 提交导入任务时保存源 Excel 到 MinIO，后台执行和重试从对象存储读取 |
+| DONE | P1 | 报表运行控制中心 | 保存学生报表查询条件，基于运行控制创建导出任务并查看历史运行 |
+| DONE | P1 | 通用报表导出引擎 | 抽象 Sheet 配置、快照计数、游标分页、Excel 写入、进度更新和取消检查 |
+| DONE | P1 | 任务监控和指标 | 接入 Actuator/Micrometer，记录任务计数、耗时和线程池快照 |
+| DONE | P1 | 任务恢复与补偿调度 | 增加 worker 心跳、悬挂任务扫描、CAS 抢占和导入/导出恢复投递 |
+| DONE | P1 | 统一响应和异常处理 | 增加 `ApiResponse`、错误码、业务异常、全局异常处理和 JSON 响应包装 |
+| DONE | P1 | API 权限和用户体系 | 增加当前用户上下文、demo/auth 模式、Bearer token 和 owner 数据隔离 |
+| DONE | P1 | 数据库迁移版本管理 | 增加 Flyway 依赖、版本化迁移脚本、baseline 配置和生产初始化说明 |
 
 ---
 
@@ -365,6 +363,8 @@ public class ReportSheetConfig {
 
 ## 5. 任务监控和指标
 
+状态：DONE
+
 ### 目标
 
 为导入、导出、文件上传和任务中心增加基础可观测性，方便定位慢任务、失败任务、队列堆积和外部依赖异常。
@@ -408,6 +408,14 @@ public class ReportSheetConfig {
 - 任务失败时能通过 taskId 串起日志。
 - 100 万导入能输出解析、暂存、合并三个阶段耗时。
 - MinIO 上传失败和数据库写入失败能区分。
+
+### 完成记录
+
+- 新增 Spring Boot Actuator 和 Micrometer。
+- 新增 `TaskMetricsService`，记录异步任务提交、运行、成功、失败、取消、过期等计数和任务耗时。
+- 新增 `ThreadPoolMetricsConfig`，注册导入任务、导入 worker 和导出线程池指标。
+- 新增 `/api/tasks/metrics/thread-pools`，返回线程池核心线程数、活跃线程数、队列长度和完成任务数。
+- 保留 taskId 贯穿任务日志，导入、导出和 MinIO 异常仍按业务阶段记录。
 
 ---
 
@@ -471,7 +479,7 @@ public class ReportSheetConfig {
 
 ## 7. 任务恢复与补偿调度
 
-状态：TODO
+状态：DONE
 
 ### 目标
 
@@ -514,11 +522,19 @@ public class ReportSheetConfig {
 - 多实例同时启动时，同一个任务只会被一个实例恢复执行。
 - 恢复行为有清晰日志，可以通过 `taskId` 追踪。
 
+### 完成记录
+
+- `async_task_record` 新增 `worker_id` 和 `last_heartbeat_at`。
+- 任务进入 RUNNING、更新进度、成功、失败和取消时会同步心跳信息。
+- 新增 `TaskRecoveryCoordinator`，定时扫描超时 CREATED/RUNNING 任务。
+- 新增 `TaskRecoveryHandler`，导入和导出服务均支持恢复投递。
+- 恢复前通过数据库条件更新抢占任务，避免多实例重复执行同一任务。
+
 ---
 
 ## 8. 统一响应和异常处理
 
-状态：TODO
+状态：DONE
 
 ### 目标
 
@@ -565,11 +581,19 @@ Demo 阶段可以接受，但企业项目需要稳定的响应契约，便于前
 - 任务状态冲突返回稳定错误码和 HTTP 409。
 - 服务端日志包含异常堆栈，但响应体不暴露内部细节。
 
+### 完成记录
+
+- 新增 `ApiResponse<T>`，统一 `success`、`code`、`message`、`data`、`traceId` 和 `timestamp`。
+- 新增 `CommonErrorCode`、`ErrorCode` 和 `BusinessException`。
+- 新增 `GlobalExceptionHandler`，统一处理业务异常、参数异常、状态冲突和未捕获异常。
+- 新增 `ApiResponseBodyAdvice`，对常规 JSON Controller 响应做统一包装，下载和 302 接口保持原行为。
+- 新增 `RequestTraceFilter`，为请求和响应添加 `X-Trace-Id`。
+
 ---
 
 ## 9. API 权限和用户体系
 
-状态：TODO
+状态：DONE
 
 ### 目标
 
@@ -611,11 +635,19 @@ Demo 阶段可以接受，但企业项目需要稳定的响应契约，便于前
 - 管理员接口和普通用户接口边界清晰。
 - 本地 demo 模式仍可一键启动测试。
 
+### 完成记录
+
+- 新增 `CurrentUser`、`UserContextHolder` 和 `UserContextInterceptor`。
+- 默认 demo 模式兼容 `X-User-Id`；关闭 demo 模式后必须使用 Bearer token。
+- `TaskOwnerResolver` 改为优先读取当前认证用户。
+- 任务中心、报表运行控制继续按 ownerId 隔离。
+- 文件中心新增 `owner_id`，正式文件、直传任务、分片任务、秒传、详情、下载、删除和分页均按当前用户隔离。
+
 ---
 
 ## 10. 数据库迁移版本管理
 
-状态：TODO
+状态：DONE
 
 ### 目标
 
@@ -659,6 +691,14 @@ Demo 阶段可以接受，但企业项目需要稳定的响应契约，便于前
 - 已有库接入时可 baseline，不破坏已有数据。
 - 删除 Mapper XML 中生产不需要的 DDL 初始化职责。
 - README 清楚说明本地和生产的数据库初始化方式。
+
+### 完成记录
+
+- 新增 Flyway 依赖和 `spring.flyway` 配置，默认关闭，生产可通过环境变量开启。
+- 新增 `src/main/resources/db/migration/V1__init_schema.sql` 初始化完整表结构。
+- 新增 `V2__add_async_task_heartbeat.sql`，幂等补齐任务心跳字段。
+- 新增 `V3__add_file_owner.sql`，幂等补齐文件 owner 隔离字段。
+- README 增加 Flyway、本地自动建表和生产初始化建议。
 
 ---
 

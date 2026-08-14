@@ -22,6 +22,7 @@ import com.huang.demo.task.domain.model.AsyncTaskType;
 import com.huang.demo.task.domain.model.CreateAsyncTaskCommand;
 import com.huang.demo.task.domain.model.TaskCanceledException;
 import com.huang.demo.task.service.TaskCenterService;
+import com.huang.demo.task.service.TaskRecoveryHandler;
 import com.huang.demo.task.service.TaskRetryHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -41,7 +42,7 @@ import java.util.UUID;
 import java.util.concurrent.Executor;
 
 @Service
-public class ExportTaskServiceImpl implements ExportTaskService, TaskRetryHandler {
+public class ExportTaskServiceImpl implements ExportTaskService, TaskRetryHandler, TaskRecoveryHandler {
 
     private static final Logger log = LoggerFactory.getLogger(ExportTaskServiceImpl.class);
     private static final int MIN_EXPORT_PAGE_SIZE = 1000;
@@ -157,6 +158,11 @@ public class ExportTaskServiceImpl implements ExportTaskService, TaskRetryHandle
         return retriedTask;
     }
 
+    @Override
+    public void recover(AsyncTaskRecord task) {
+        submitExecution(task.getTaskId());
+    }
+
     @Scheduled(fixedDelay = 3600000L, initialDelay = 3600000L)
     public void cleanupExpiredExportFiles() {
         cleanupExpiredFiles();
@@ -168,7 +174,7 @@ public class ExportTaskServiceImpl implements ExportTaskService, TaskRetryHandle
 
     private void executeExport(String taskId) {
         long start = System.currentTimeMillis();
-        AsyncTaskRecord taskRecord = taskCenterService.markRunning(taskId);
+        AsyncTaskRecord taskRecord = taskCenterService.markRunning(taskId, taskCenterService.currentWorkerId());
         if (AsyncTaskStatus.CANCELED.name().equals(taskRecord.getStatus())
                 || AsyncTaskStatus.EXPIRED.name().equals(taskRecord.getStatus())) {
             return;

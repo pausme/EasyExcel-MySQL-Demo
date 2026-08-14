@@ -73,7 +73,8 @@ class StudentImportTaskServiceImplTest {
                     .expireAt(LocalDateTime.now().plusHours(1))
                     .build();
         });
-        when(taskCenterService.markRunning("task-1")).thenAnswer(invocation -> {
+        when(taskCenterService.currentWorkerId()).thenReturn("worker-1");
+        when(taskCenterService.markRunning(eq("task-1"), eq("worker-1"))).thenAnswer(invocation -> {
             ArgumentCaptor<CreateAsyncTaskCommand> captor = ArgumentCaptor.forClass(CreateAsyncTaskCommand.class);
             verify(taskCenterService).createTask(captor.capture());
             return AsyncTaskRecord.builder()
@@ -154,7 +155,8 @@ class StudentImportTaskServiceImplTest {
                     .expireAt(LocalDateTime.now().plusHours(1))
                     .build();
         });
-        when(taskCenterService.markRunning("task-2")).thenAnswer(invocation -> {
+        when(taskCenterService.currentWorkerId()).thenReturn("worker-1");
+        when(taskCenterService.markRunning(eq("task-2"), eq("worker-1"))).thenAnswer(invocation -> {
             ArgumentCaptor<CreateAsyncTaskCommand> captor = ArgumentCaptor.forClass(CreateAsyncTaskCommand.class);
             verify(taskCenterService).createTask(captor.capture());
             return AsyncTaskRecord.builder()

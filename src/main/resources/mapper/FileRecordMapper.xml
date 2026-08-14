@@ -7,6 +7,7 @@
     <resultMap id="FileRecordMap" type="com.huang.demo.file.domain.entity.FileRecord">
         <id property="id" column="id"/>
         <result property="fileId" column="file_id"/>
+        <result property="ownerId" column="owner_id"/>
         <result property="originalName" column="original_name"/>
         <result property="objectKey" column="object_key"/>
         <result property="bucketName" column="bucket_name"/>
@@ -24,6 +25,7 @@
         CREATE TABLE IF NOT EXISTS file_record (
             id BIGINT AUTO_INCREMENT PRIMARY KEY,
             file_id VARCHAR(64) NOT NULL,
+            owner_id VARCHAR(64) NOT NULL,
             original_name VARCHAR(255) NOT NULL,
             object_key VARCHAR(512) NOT NULL,
             bucket_name VARCHAR(128) NOT NULL,
@@ -36,36 +38,38 @@
             created_at DATETIME NOT NULL,
             updated_at DATETIME NOT NULL,
             UNIQUE KEY uk_file_record_file_id (file_id),
-            KEY idx_file_record_md5_size (file_md5, file_size),
+            KEY idx_file_record_owner_md5_size (owner_id, file_md5, file_size),
             KEY idx_file_record_status_created_at (status, created_at)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     </update>
 
     <insert id="insert" parameterType="com.huang.demo.file.domain.entity.FileRecord">
         INSERT INTO file_record (
-            file_id, original_name, object_key, bucket_name, content_type,
+            file_id, owner_id, original_name, object_key, bucket_name, content_type,
             file_size, file_md5, file_ext, storage_type, status, created_at, updated_at
         )
         VALUES (
-            #{fileId}, #{originalName}, #{objectKey}, #{bucketName}, #{contentType},
+            #{fileId}, #{ownerId}, #{originalName}, #{objectKey}, #{bucketName}, #{contentType},
             #{fileSize}, #{fileMd5}, #{fileExt}, #{storageType}, #{status}, #{createdAt}, #{updatedAt}
         )
     </insert>
 
     <select id="findNormalByFileId" resultMap="FileRecordMap">
-        SELECT id, file_id, original_name, object_key, bucket_name, content_type,
+        SELECT id, file_id, owner_id, original_name, object_key, bucket_name, content_type,
                file_size, file_md5, file_ext, storage_type, status, created_at, updated_at
         FROM file_record
-        WHERE file_id = #{fileId}
+        WHERE owner_id = #{ownerId}
+          AND file_id = #{fileId}
           AND status = 'NORMAL'
         LIMIT 1
     </select>
 
     <select id="findNormalByMd5AndSize" resultMap="FileRecordMap">
-        SELECT id, file_id, original_name, object_key, bucket_name, content_type,
+        SELECT id, file_id, owner_id, original_name, object_key, bucket_name, content_type,
                file_size, file_md5, file_ext, storage_type, status, created_at, updated_at
         FROM file_record
-        WHERE file_md5 = #{fileMd5}
+        WHERE owner_id = #{ownerId}
+          AND file_md5 = #{fileMd5}
           AND file_size = #{fileSize}
           AND status = 'NORMAL'
         ORDER BY id DESC
@@ -76,14 +80,16 @@
         UPDATE file_record
         SET status = 'DELETED',
             updated_at = NOW()
-        WHERE file_id = #{fileId}
+        WHERE owner_id = #{ownerId}
+          AND file_id = #{fileId}
           AND status = 'NORMAL'
     </update>
 
     <select id="countNormal" resultType="long">
         SELECT COUNT(*)
         FROM file_record
-        WHERE status = 'NORMAL'
+        WHERE owner_id = #{ownerId}
+          AND status = 'NORMAL'
         <if test="originalName != null and originalName != ''">
             AND original_name LIKE CONCAT('%', #{originalName}, '%')
         </if>
@@ -93,10 +99,11 @@
     </select>
 
     <select id="listNormalPage" resultMap="FileRecordMap">
-        SELECT id, file_id, original_name, object_key, bucket_name, content_type,
+        SELECT id, file_id, owner_id, original_name, object_key, bucket_name, content_type,
                file_size, file_md5, file_ext, storage_type, status, created_at, updated_at
         FROM file_record
-        WHERE status = 'NORMAL'
+        WHERE owner_id = #{ownerId}
+          AND status = 'NORMAL'
         <if test="originalName != null and originalName != ''">
             AND original_name LIKE CONCAT('%', #{originalName}, '%')
         </if>

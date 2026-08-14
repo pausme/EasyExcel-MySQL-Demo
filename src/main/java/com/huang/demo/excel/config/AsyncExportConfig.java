@@ -23,7 +23,7 @@ public class AsyncExportConfig {
     }
 
     @Bean("exportTaskExecutor")
-    public Executor exportTaskExecutor() {
+    public ThreadPoolTaskExecutor exportTaskExecutor() {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
         int corePoolSize = Math.max(1, properties.getExportCorePoolSize());
         int maxPoolSize = Math.max(corePoolSize, properties.getExportMaxPoolSize());

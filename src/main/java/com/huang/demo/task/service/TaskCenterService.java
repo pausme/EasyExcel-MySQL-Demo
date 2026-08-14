@@ -6,6 +6,7 @@ import com.huang.demo.task.domain.entity.AsyncTaskRecord;
 import com.huang.demo.task.domain.model.CreateAsyncTaskCommand;
 
 import java.util.Optional;
+import java.util.List;
 
 public interface TaskCenterService {
 
@@ -15,7 +16,11 @@ public interface TaskCenterService {
 
     AsyncTaskRecord markRunning(String taskId);
 
+    AsyncTaskRecord markRunning(String taskId, String workerId);
+
     AsyncTaskRecord updateProgress(String taskId, long completedCount, long totalCount, int progressPercent);
+
+    void heartbeat(String taskId, String workerId);
 
     AsyncTaskRecord markSuccess(String taskId, String resultPayload);
 
@@ -33,4 +38,10 @@ public interface TaskCenterService {
                                                    String taskType,
                                                    String businessKey,
                                                    AsyncTaskPageQueryRequest request);
+
+    List<AsyncTaskRecord> listRecoverableTasks(int limit);
+
+    boolean claimRecoverableTask(String taskId);
+
+    String currentWorkerId();
 }
