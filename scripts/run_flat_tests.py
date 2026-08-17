@@ -87,6 +87,21 @@ def P(resp):
         return d if isinstance(d, dict) else (d if d is not None else {})
     return j if isinstance(j, dict) else {}
 
+def task_status(task_id, owner_id):
+    if not task_id:
+        return "", {}
+    resp = curl("GET", "/api/tasks/%s" % task_id, headers={"X-User-Id": owner_id})
+    data = P(resp)
+    return data.get("status", ""), data
+
+def expected_retry_status(status):
+    # 任务中心只允许 FAILED / CANCELED / EXPIRED 重试；其他状态拒绝重试。
+    return "200" if status in ("FAILED", "CANCELED", "EXPIRED") else "409"
+
+def expected_export_download_status(status):
+    # 导出成功才会返回 MinIO 预签名 302；失败、取消、超限或仍未完成时应返回 409。
+    return "302" if status == "SUCCESS" else "409"
+
 def record(case_id, method, path, expected, resp, extra=None, note=""):
     status = resp.get("status", "")
     exp_codes = [c for c in str(expected).replace("→", "/").split("/") if c.strip()]
@@ -238,6 +253,7 @@ if cancel_task_id:
     rc = curl("POST", "/api/tasks/%s/cancel" % cancel_task_id, headers={"X-User-Id": "user-cancel"})
     record("TSK-CANCEL-01", "POST", "/api/tasks/{taskId}/cancel (active)", "200", rc)
 
+exp_status = ""
 if exp_task_id:
     rs = None
     for _ in range(90):
@@ -246,13 +262,16 @@ if exp_task_id:
         except Exception: st = ""
         if st in ("SUCCESS", "FAILED"): break
         time.sleep(2)
+    exp_status = st
     record("EXC-EXPS-01", "GET", "/api/excel/export/{taskId}", "200", rs or curl("GET","/api/excel/export/"+exp_task_id,headers={"X-User-Id":"user-a"}), note="导出最终状态")
     r404 = curl("GET", "/api/excel/not-exist", headers={"X-User-Id": "user-a"})
     record("EXC-EXPS-02", "GET", "/api/excel/not-exist", "404", r404)
     rOwner = curl("GET", "/api/excel/export/%s" % exp_task_id, headers={"X-User-Id": "user-b"})
     record("EXC-EXPS-03", "GET", "/api/excel/export/{taskId} (other owner)", "404", rOwner)
     rd = curl("GET", "/api/excel/export/%s/download" % exp_task_id, headers={"X-User-Id": "user-a"})
-    record("EXC-EXPD-01", "GET", "/api/excel/export/{taskId}/download", "302", rd)
+    record("EXC-EXPD-01", "GET", "/api/excel/export/{taskId}/download",
+           expected_export_download_status(exp_status), rd,
+           note="导出任务状态=%s；SUCCESS 才应 302，FAILED/CANCELED/未完成应 409" % (exp_status or "UNKNOWN"))
     rdOwner = curl("GET", "/api/excel/export/%s/download" % exp_task_id, headers={"X-User-Id": "user-b"})
     record("EXC-EXPD-04", "GET", "/api/excel/export/{taskId}/download (other)", "404", rdOwner)
 
@@ -279,16 +298,24 @@ if exp_task_id:
     # 取消已 SUCCESS 的任务 → false
     r = curl("POST", "/api/tasks/%s/cancel" % exp_task_id, headers={"X-User-Id": "user-a"})
     record("TSK-CANCEL-03", "POST", "/api/tasks/{taskId}/cancel (terminal)", "200", r, note="期望 canceled=false")
-    # 重试 SUCCESS → 409
+    # 重试终态任务：FAILED/CANCELED/EXPIRED 允许重试，其余状态拒绝
+    exp_retry_status = exp_status
+    if not exp_retry_status:
+        exp_retry_status, _ = task_status(exp_task_id, "user-a")
     r = curl("POST", "/api/tasks/%s/retry" % exp_task_id, headers={"X-User-Id": "user-a"})
-    record("TSK-RETRY-03", "POST", "/api/tasks/{taskId}/retry (SUCCESS)", "409", r)
+    record("TSK-RETRY-03", "POST", "/api/tasks/{taskId}/retry (terminal)",
+           expected_retry_status(exp_retry_status), r,
+           note="重试前任务状态=%s；FAILED/CANCELED/EXPIRED 应 200，其余应 409" % (exp_retry_status or "UNKNOWN"))
     r = curl("POST", "/api/tasks/not-exist/retry", headers={"X-User-Id": "user-a"})
     record("TSK-RETRY-06", "POST", "/api/tasks/not-exist/retry", "404", r)
 
 # 重试一个 CANCELED 任务（user-cancel 的导出被取消了）
 if cancel_task_id:
+    cancel_retry_status, _ = task_status(cancel_task_id, "user-cancel")
     r = curl("POST", "/api/tasks/%s/retry" % cancel_task_id, headers={"X-User-Id": "user-cancel"})
-    record("TSK-RETRY-02", "POST", "/api/tasks/{taskId}/retry (CANCELED)", "200", r)
+    record("TSK-RETRY-02", "POST", "/api/tasks/{taskId}/retry (CANCELED)",
+           expected_retry_status(cancel_retry_status), r,
+           note="重试前任务状态=%s；空库或小数据量下取消可能来晚，若已 SUCCESS 则 409 为正确行为" % (cancel_retry_status or "UNKNOWN"))
 
 # -------- 报表运行控制 --------
 log("\n──── 报表运行控制 ────")

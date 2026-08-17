@@ -4,10 +4,14 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.options;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @AutoConfigureMockMvc
@@ -26,7 +30,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "app.minio.endpoint=http://test-minio.invalid",
         "app.minio.access-key=test",
         "app.minio.secret-key=test",
-        "app.minio.bucket-name=public",
+        "app.minio.bucket-name=student-excel",
         "app.minio.lifecycle-enabled=false",
         "app.task.init-enabled=false",
         "app.file.init-enabled=false"
@@ -47,5 +51,41 @@ class DemoApplicationTests {
                         .header("Access-Control-Request-Method", "POST"))
                 .andExpect(status().isOk())
                 .andExpect(header().string("Access-Control-Allow-Origin", "null"));
+    }
+
+    @Test
+    void seedPathVariableTypeMismatchReturnsBadRequest() throws Exception {
+        mockMvc.perform(post("/api/excel/seed/abc"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("COMMON_PARAM_ERROR"))
+                .andExpect(jsonPath("$.message").value("请求参数类型错误"));
+    }
+
+    @Test
+    void excelImportMissingFileReturnsBadRequest() throws Exception {
+        mockMvc.perform(multipart("/api/excel/import")
+                        .contentType(MediaType.MULTIPART_FORM_DATA))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("COMMON_PARAM_ERROR"))
+                .andExpect(jsonPath("$.message").value("缺少请求文件参数: file"));
+    }
+
+    @Test
+    void fileUploadMissingFileReturnsBadRequest() throws Exception {
+        mockMvc.perform(multipart("/api/files/upload")
+                        .contentType(MediaType.MULTIPART_FORM_DATA))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("COMMON_PARAM_ERROR"))
+                .andExpect(jsonPath("$.message").value("缺少请求文件参数: file"));
+    }
+
+    @Test
+    void excelImportUnsupportedContentTypeReturnsUnsupportedMediaType() throws Exception {
+        mockMvc.perform(post("/api/excel/import")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isUnsupportedMediaType())
+                .andExpect(jsonPath("$.code").value("COMMON_PARAM_ERROR"))
+                .andExpect(jsonPath("$.message").value("请求 Content-Type 不支持"));
     }
 }

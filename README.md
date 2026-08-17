@@ -19,6 +19,24 @@
 - 数据更新：使用 `student_no` 作为唯一业务键，重复导入时更新已有记录。
 - 压测工具：提供 Python 标准库脚本，支持并发矩阵和吞吐量统计。
 
+## 当前验证结论
+
+当前以内部标准测试环境的 R7 轮为权威结果。历史本机和历史云端测试只作为参考，不再作为容量结论。
+
+| 项目 | 数据量 | 结果 |
+| --- | ---: | --- |
+| 单元/切片测试 | 40 用例 | 全部通过 |
+| 接口扁平化测试 | 76 用例 | R7 历史记录为 72 通过 / 4 失败；F-02 已本地回归修复，脚本已加固导出超限和取消竞态误判 |
+| 异步导出 | 1,000,006 行 × 3 | 全部成功，平均约 23,317 行/s |
+| 异步导入 | 100,000 行 × 3 | 全部成功，平均约 3,908 行/s |
+| 异步导入 | 1,000,000 行 | 当前小规格单机 Docker 环境不可直接压测，存在内存和长事务风险 |
+
+重要边界：
+
+- 导出为了保证“导出文件可直接回导”，当前只生成单 Sheet；超过 Excel 单 Sheet 数据行上限 `1,048,575` 时会失败并提示缩小范围或改用 CSV。
+- 全量原子导入采用“暂存表 + 校验 + 单事务合并”，正式表不会被半成功污染；代价是写入链路比直接批量 upsert 更重。
+- 标准环境已经通过 swap 缓解小规格机器 OOM，但百万级导入仍建议拆分任务、降低并发或改为分块合并。
+
 ## 实现思路
 
 ### 导入流程
@@ -171,7 +189,7 @@ export FLYWAY_BASELINE_ON_MIGRATE='true'
 export MINIO_ENDPOINT='http://<MinIO地址>:<MinIO API端口>'
 export MINIO_ACCESS_KEY='your_minio_access_key'
 export MINIO_SECRET_KEY='your_minio_secret_key'
-export MINIO_BUCKET_NAME='public'
+export MINIO_BUCKET_NAME='student-excel'
 export MINIO_IMPORT_SOURCE_OBJECT_PREFIX='excel/student/import-source'
 export MINIO_IMPORT_ERROR_OBJECT_PREFIX='excel/student/import-error'
 export MINIO_IMPORT_SOURCE_RETENTION_DAYS='1'
@@ -639,33 +657,41 @@ export EXPORT_REJECTED_EXECUTION_POLICY='abort'
 
 ## 性能基线和压测
 
-最新实测记录（2026-08-04 至 2026-08-05）：
+标准环境 R7 权威结果：
 
-| 场景 | 数据量 | 配置 | 结果 | 吞吐量 |
+| 场景 | 数据量 | 结果 | 吞吐 |
+| --- | ---: | ---: | ---: |
+| 服务端播种 | 1,000,000 行 | 88.5 s | 约 11,300 行/s |
+| 异步导出 | 1,000,006 行，3 次 | 平均 43.05 s | 约 23,317 行/s |
+| 异步导入 | 100,000 行，3 次 | 平均 25.6 s | 约 3,908 行/s |
+| 异步导入 | 1,000,000 行 | 不建议在当前小规格单机直接执行 | 需先治理内存与长事务 |
+
+本机高配或本地 DB 历史参考：
+
+| 场景 | 数据量 | 配置 | 结果 | 吞吐 |
 | --- | ---: | --- | ---: | ---: |
-| 导入 | 1,000,000 行 | 4 个 worker、单任务并发、2000 行/批 | 42,718 ms，500 批 | 约 23,400 行/秒 |
-| 导入 | 1,000,000 行 | 6 个 worker、单任务并发、2000 行/批 | 33,021 ms，500 批 | 约 30,283 行/秒 |
-| 导入 | 1,000,000 行 | 8 个 worker、单任务并发、2000 行/批 | 34,265 ms，500 批 | 约 29,184 行/秒 |
-| 导入 | 1,000,000 行 | 16 个 worker、单任务并发、2000 行/批 | 15,671 ms，500 批 | 约 63,812 行/秒 |
-| 导出 | 1,000,000 行 | 单任务、单 Sheet | 63,806 ms | 约 15,672 行/秒 |
+| 导入 | 1,000,000 行 | 4 worker、2000 行/批 | 42,718 ms | 约 23,400 行/s |
+| 导入 | 1,000,000 行 | 6 worker、2000 行/批 | 33,021 ms | 约 30,283 行/s |
+| 导入 | 1,000,000 行 | 8 worker、2000 行/批 | 34,265 ms | 约 29,184 行/s |
+| 导入 | 1,000,000 行 | 16 worker、2000 行/批 | 15,671 ms | 约 63,812 行/s |
+| 导出 | 1,000,000 行 | 单任务、单 Sheet | 63,806 ms | 约 15,672 行/s |
 
-四次 100 万条导入均没有出现失败、死锁、重试或超时；8 个 worker 的单次结果略慢于 6 个 worker，说明 worker 数增加不必然带来收益，应在相同环境下重复测试后再确定最优值。16 个 worker 相比 6 个 worker 的耗时减少约 52.5%，但需要数据库连接池至少能够支撑对应的写库线程，并为其他业务连接预留余量。实际收益仍取决于数据库连接池、CPU 和磁盘 IO。导出成功写入 1 个 Sheet。导入结果中的 `imported` 表示处理的 Excel 行数；如果这些学号已存在于正式表，会更新已有记录而不是新增重复记录。
+性能结论：
 
-历史基线：
-
-- 100 万条导入：约 `35272 ms`，`batchCount=500`；
-- 100 万条导出：约 `59151 ms`。
+- worker 数增加不等于线性提速。高配本地 DB 中 16 worker 最快，但标准小规格云服务器瓶颈在内存、云盘 fsync 和长事务。
+- `IMPORT_WORKER_COUNT * IMPORT_MAX_CONCURRENT_TASKS <= HIKARI_MAXIMUM_POOL_SIZE` 只是硬约束；生产还要给查询、导出、健康检查和普通接口预留连接。
+- 当前标准环境建议单次导入控制在 10 万行级别；百万级导入需要拆分任务、提高合并事务超时，或实现分块合并。
+- 导出 100 万级稳定，超过单 Sheet 上限会按设计失败。
 
 运行压测脚本：
 
 ```bash
-python3 scripts/import_load_test.py \
-  --base-url 'http://<应用地址>:<应用端口>' \
-  --file ./student-112000.xlsx \
-  --matrix 1,2,4 \
-  --requests 4 \
-  --output ./import-load-matrix.json
+BASE_URL='<STANDARD_BASE_URL>' API_SECURITY_DEMO_USER_TOKEN='<USER_TOKEN>' \
+  python3 scripts/perf_bench.py --mode export --runs 3 --label exp-std
+
+BASE_URL='<STANDARD_BASE_URL>' API_SECURITY_DEMO_USER_TOKEN='<USER_TOKEN>' \
+  python3 scripts/perf_bench.py --mode import --file /tmp/perf_100k.xlsx --runs 3 --label imp-std-100k
 ```
 
-脚本使用 Python 标准库流式上传，输出成功率、总耗时、请求吞吐和行吞吐。
-完整说明见：[docs/import-load-test.md](docs/import-load-test.md)。功能测试见：[docs/excel-import-export-test.md](docs/excel-import-export-test.md)。优化路径与复盘见：[docs/excel-import-export-optimization-review.md](docs/excel-import-export-optimization-review.md)。
+脚本使用 Python 标准库流式上传，输出任务处理耗时和行吞吐。
+完整说明见：[docs/import-load-test.md](docs/import-load-test.md)。功能测试见：[docs/excel-import-export-test.md](docs/excel-import-export-test.md)。标准环境压测报告见：[docs/performance-report.md](docs/performance-report.md)。优化路径与复盘见：[docs/excel-import-export-optimization-review.md](docs/excel-import-export-optimization-review.md)。

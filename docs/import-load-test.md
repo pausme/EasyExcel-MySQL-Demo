@@ -1,90 +1,118 @@
-# 导入压测
+# 导入压测说明
 
 脚本位置：`scripts/import_load_test.py`。
 
-脚本使用 Python 标准库，通过流式 multipart 上传 Excel，不会为每个并发请求把整个文件完整读入内存。
+该脚本使用 Python 标准库发起 multipart 上传，并按请求并发度统计成功率、总耗时和吞吐。对于异步导入接口，推荐优先使用 `scripts/perf_bench.py`，因为它会按任务自身 `startedAt/finishedAt` 计算后台处理耗时，更适合排除公网文件上传时间。
 
-## 准备
+## 1. 测试原则
 
-先准备一个真实的 `.xlsx` 文件，例如通过导出接口生成并下载 112000 条或 1000000 条数据的文件。
-压测会重复上传同一个文件，因此数据库中的 `student_no` 会执行更新，不会无限新增数据。
+- 先测 1 万或 10 万行，确认机器稳定后再扩大数据量。
+- 标准小规格单机 Docker 环境不建议直接跑 100 万行导入；当前 R7 已确认存在内存和长事务风险。
+- 每次只调整一个变量，例如 worker 数、连接池大小或导入并发任务数。
+- 测试结果必须同时看应用日志、任务状态、MySQL 连接/锁等待、系统内存、swap 和磁盘 IO。
+- 真实地址、Token、签名 URL 不写入文档和 Git，只通过环境变量传入。
 
-确认应用已配置：
+## 2. 环境变量
+
+```bash
+export BASE_URL='<STANDARD_BASE_URL>'
+export API_SECURITY_DEMO_USER_TOKEN='<USER_TOKEN>'
+```
+
+应用侧关键配置：
 
 ```bash
 export IMPORT_WORKER_COUNT='4'
 export IMPORT_MAX_CONCURRENT_TASKS='1'
+export IMPORT_QUEUE_CAPACITY='20'
 export HIKARI_MAXIMUM_POOL_SIZE='10'
+export IMPORT_TRANSACTION_TIMEOUT_SECONDS='60'
 ```
 
-默认配置只允许一个导入任务。要测试多个导入任务并发，需要同时调整：
+容量约束：
+
+```text
+IMPORT_WORKER_COUNT * IMPORT_MAX_CONCURRENT_TASKS <= HIKARI_MAXIMUM_POOL_SIZE
+```
+
+这个约束只保证导入 worker 不超过连接池上限。生产或准生产环境还要给普通查询、导出、健康检查和后台任务预留连接。
+
+## 3. 生成压测文件
 
 ```bash
-export IMPORT_MAX_CONCURRENT_TASKS='2'
-export IMPORT_WORKER_COUNT='4'
-export HIKARI_MAXIMUM_POOL_SIZE='10'
+python3 scripts/gen_perf_import_file.py \
+  --rows 100000 \
+  --prefix STD100K \
+  --out /tmp/perf_100k.xlsx
 ```
 
-总导入 worker 数不能超过连接池大小，即 `IMPORT_WORKER_COUNT * IMPORT_MAX_CONCURRENT_TASKS <= HIKARI_MAXIMUM_POOL_SIZE`。
+如果重复使用同一个 prefix，正式表会走 upsert 更新路径；如果更换 prefix，会走纯 INSERT 路径。两种场景都应单独记录。
 
-## 单级压测
+## 4. 推荐压测命令
 
-Windows PowerShell：
+### 4.1 单任务后台耗时基准
 
-```powershell
-python .\scripts\import_load_test.py `
-  --base-url 'http://<应用地址>:<应用端口>' `
-  --file .\student-112000.xlsx `
-  --concurrency 1 `
-  --requests 1 `
-  --output .\import-load-result.json
+```bash
+BASE_URL='<STANDARD_BASE_URL>' API_SECURITY_DEMO_USER_TOKEN='<USER_TOKEN>' \
+python3 scripts/perf_bench.py \
+  --mode import \
+  --file /tmp/perf_100k.xlsx \
+  --runs 3 \
+  --label imp-std-100k
 ```
 
-Linux/macOS：
+该脚本关注异步任务处理耗时，不把客户端跨公网上传时间算入导入处理吞吐。
+
+### 4.2 请求并发矩阵
 
 ```bash
 python3 scripts/import_load_test.py \
-  --base-url 'http://<应用地址>:<应用端口>' \
-  --file ./student-112000.xlsx \
-  --concurrency 1 \
-  --requests 1 \
-  --output ./import-load-result.json
-```
-
-## 并发矩阵
-
-下面的命令依次测试 1、2、4 个并发，每个级别发送 4 个请求：
-
-```bash
-python3 scripts/import_load_test.py \
-  --base-url 'http://<应用地址>:<应用端口>' \
-  --file ./student-112000.xlsx \
+  --base-url '<STANDARD_BASE_URL>' \
+  --file /tmp/perf_100k.xlsx \
   --matrix 1,2,4 \
   --requests 4 \
   --output ./import-load-matrix.json
 ```
 
-重点观察：
+默认 `IMPORT_MAX_CONCURRENT_TASKS=1` 时，多余并发请求会被业务拒绝，这是预期行为，不代表线程池故障。要测试多个导入任务同时执行，需要同时调大：
 
-- `success`、`failed`：请求成功率；
-- `elapsedSeconds`：该并发级别的总耗时；
-- `rowsPerSecond`：导入吞吐量；
-- 应用日志中的批次耗时、重试次数和 worker 数；
-- MySQL 活跃连接数、锁等待、死锁、CPU 和磁盘 IO；
-- Java 堆使用、Full GC 和应用线程数。
+- `IMPORT_MAX_CONCURRENT_TASKS`
+- `IMPORT_WORKER_COUNT`
+- `HIKARI_MAXIMUM_POOL_SIZE`
+- 机器内存和 MySQL 可用连接
 
-默认 `IMPORT_MAX_CONCURRENT_TASKS=1` 时，`--concurrency 4` 的额外请求会被业务拒绝，这是预期行为，不代表线程池故障。测试真正的多任务并发前，先确认连接池和数据库能够承受对应的 worker 数量。
+## 5. 当前基线
 
-## 建议记录
+标准环境 R7：
 
-至少记录以下组合：
+| 场景 | 数据量 | 结果 |
+| --- | ---: | --- |
+| 100k 导入，3 次 | 100,000 行/次 | 3/3 成功，平均约 25.6 s，约 3,908 行/s |
+| 1M 导入 | 1,000,000 行 | 当前小规格环境不可直接执行，已确认 OOM 和长事务风险 |
 
-| 文件规模 | worker 数 | 导入并发任务数 | 关注点 |
-| --- | ---: | ---: | --- |
-| 112000 行 | 1 | 1 | 单线程基线 |
-| 112000 行 | 2 | 1 | 多 worker 收益 |
-| 112000 行 | 4 | 1 | 当前默认建议 |
-| 112000 行 | 4 | 2 | 多导入任务竞争 |
-| 1000000 行 | 4 | 1 | 长事务、内存和数据库压力 |
+本地高配或本地 DB 历史参考：
 
-不要一开始直接把 worker 数调到很大。每次只调整一个变量，并在 MySQL、应用和机器监控数据稳定后再比较结果。
+| worker | 数据量 | 耗时 | 吞吐 |
+| ---: | ---: | ---: | ---: |
+| 4 | 1,000,000 行 | 42,718 ms | 约 23,400 行/s |
+| 6 | 1,000,000 行 | 33,021 ms | 约 30,283 行/s |
+| 8 | 1,000,000 行 | 34,265 ms | 约 29,184 行/s |
+| 16 | 1,000,000 行 | 15,671 ms | 约 63,812 行/s |
+
+结论：worker 数收益依赖硬件和数据库写入能力。标准小规格云盘环境瓶颈在内存、fsync 和长事务，不在 Java 线程数。
+
+## 6. 建议记录项
+
+| 类别 | 指标 |
+| --- | --- |
+| 应用任务 | taskId、状态、startedAt、finishedAt、imported、batchCount、失败原因 |
+| JVM | 堆内存、Full GC、线程数、导入 worker 活跃数 |
+| 数据库 | 活跃连接、锁等待、死锁、redo/binlog fsync、慢 SQL |
+| 系统 | CPU、内存、swap、磁盘 IO、容器重启次数 |
+| 对象存储 | 源文件上传耗时、对象大小、错误文件是否生成 |
+
+## 7. 风险边界
+
+- 10 万行是当前标准环境已验证的稳定导入级别。
+- 100 万行导入需要先治理两个问题：合并事务可能超过 `IMPORT_TRANSACTION_TIMEOUT_SECONDS=60`，以及小规格单机资源不足。
+- 如果业务必须支持百万级单文件导入，推荐优先实现分块合并、导入行数上限、失败恢复加速和资源保护，而不是单纯调大 worker。
