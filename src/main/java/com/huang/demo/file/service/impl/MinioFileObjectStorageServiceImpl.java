@@ -17,6 +17,7 @@ import io.minio.StatObjectArgs;
 import io.minio.StatObjectResponse;
 import io.minio.http.Method;
 import io.minio.messages.Item;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -38,13 +39,16 @@ public class MinioFileObjectStorageServiceImpl implements FileObjectStorageServi
     private static final String DEFAULT_CONTENT_TYPE = "application/octet-stream";
 
     private final MinioClient minioClient;
+    private final MinioClient minioPublicClient;
     private final MinioProperties minioProperties;
     private final FileCenterProperties fileCenterProperties;
 
     public MinioFileObjectStorageServiceImpl(MinioClient minioClient,
+                                             @Qualifier("minioPublicClient") MinioClient minioPublicClient,
                                              MinioProperties minioProperties,
                                              FileCenterProperties fileCenterProperties) {
         this.minioClient = minioClient;
+        this.minioPublicClient = minioPublicClient;
         this.minioProperties = minioProperties;
         this.fileCenterProperties = fileCenterProperties;
     }
@@ -81,7 +85,7 @@ public class MinioFileObjectStorageServiceImpl implements FileObjectStorageServi
     public String createUploadUrl(String objectKey) {
         try {
             int expireMinutes = Math.max(1, fileCenterProperties.getUploadUrlExpireMinutes());
-            return minioClient.getPresignedObjectUrl(GetPresignedObjectUrlArgs.builder()
+            return minioPublicClient.getPresignedObjectUrl(GetPresignedObjectUrlArgs.builder()
                     .method(Method.PUT)
                     .bucket(minioProperties.getBucketName())
                     .object(objectKey)
@@ -96,7 +100,7 @@ public class MinioFileObjectStorageServiceImpl implements FileObjectStorageServi
     public String createDownloadUrl(String objectKey, String fileName) {
         try {
             int expireMinutes = Math.max(1, fileCenterProperties.getDownloadUrlExpireMinutes());
-            return minioClient.getPresignedObjectUrl(GetPresignedObjectUrlArgs.builder()
+            return minioPublicClient.getPresignedObjectUrl(GetPresignedObjectUrlArgs.builder()
                     .method(Method.GET)
                     .bucket(minioProperties.getBucketName())
                     .object(objectKey)

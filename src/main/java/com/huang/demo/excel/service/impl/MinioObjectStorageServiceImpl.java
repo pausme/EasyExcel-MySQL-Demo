@@ -17,6 +17,7 @@ import io.minio.messages.LifecycleRule;
 import io.minio.messages.ResponseDate;
 import io.minio.messages.RuleFilter;
 import io.minio.messages.Status;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -42,10 +43,14 @@ public class MinioObjectStorageServiceImpl implements MinioObjectStorageService 
     private static final String IMPORT_ERROR_LIFECYCLE_RULE_ID = "student-excel-import-error-retention";
 
     private final MinioClient minioClient;
+    private final MinioClient minioPublicClient;
     private final MinioProperties properties;
 
-    public MinioObjectStorageServiceImpl(MinioClient minioClient, MinioProperties properties) {
+    public MinioObjectStorageServiceImpl(MinioClient minioClient,
+                                         @Qualifier("minioPublicClient") MinioClient minioPublicClient,
+                                         MinioProperties properties) {
         this.minioClient = minioClient;
+        this.minioPublicClient = minioPublicClient;
         this.properties = properties;
     }
 
@@ -140,7 +145,7 @@ public class MinioObjectStorageServiceImpl implements MinioObjectStorageService 
     public String createDownloadUrl(String objectKey, String fileName) {
         try {
             int expireMinutes = Math.max(1, properties.getDownloadUrlExpireMinutes());
-            return minioClient.getPresignedObjectUrl(GetPresignedObjectUrlArgs.builder()
+            return minioPublicClient.getPresignedObjectUrl(GetPresignedObjectUrlArgs.builder()
                     .method(Method.GET)
                     .bucket(properties.getBucketName())
                     .object(objectKey)

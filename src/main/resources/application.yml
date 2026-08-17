@@ -34,8 +34,8 @@ mybatis:
 app:
   security:
     demo-mode: ${API_SECURITY_DEMO_MODE:true}
-    demo-user-token: ${API_SECURITY_DEMO_USER_TOKEN:demo-user-token}
-    demo-admin-token: ${API_SECURITY_DEMO_ADMIN_TOKEN:demo-admin-token}
+    demo-user-token: ${API_SECURITY_DEMO_USER_TOKEN:}
+    demo-admin-token: ${API_SECURITY_DEMO_ADMIN_TOKEN:}
     demo-default-user-id: ${TASK_CENTER_DEFAULT_OWNER_ID:anonymous}
   task:
     init-enabled: ${TASK_CENTER_INIT_ENABLED:true}
@@ -81,6 +81,7 @@ app:
     export-rejected-execution-policy: ${EXPORT_REJECTED_EXECUTION_POLICY:abort}
   minio:
     endpoint: ${MINIO_ENDPOINT}
+    public-endpoint: ${MINIO_PUBLIC_ENDPOINT:}
     access-key: ${MINIO_ACCESS_KEY}
     secret-key: ${MINIO_SECRET_KEY}
     bucket-name: ${MINIO_BUCKET_NAME:student-excel}

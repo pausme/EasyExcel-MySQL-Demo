@@ -19,7 +19,7 @@
 | TODO | P2 | 文件安全治理 | 补齐文件类型校验、内容嗅探、病毒扫描和敏感文件管控 |
 | TODO | P2 | 集成测试和回归数据集 | 用真实 MySQL、Redis、MinIO 覆盖核心链路，减少 H2 差异风险 |
 | TODO | P2 | 数据归档和清理策略 | 清理过期任务、文件记录和对象元数据，控制表体积 |
-| TODO | P2 | 性能压测和调优报告 | 固化百万级导入导出的性能结论 |
+| DONE | P2 | 性能压测和调优报告 | 固化百万级导入导出的性能结论 |
 
 ## 已完成历史任务
 
@@ -420,6 +420,16 @@ public class ReportSheetConfig {
 ---
 
 ## 6. 性能压测和调优报告
+
+状态：DONE
+
+### 完成记录
+
+- 新增 `docs/performance-report.md`，含测试机器/部署、JVM、数据量、参数矩阵（可调项 vs 代码常量）、结果表格、推荐配置、全量原子导入成本、风险与边界、复现步骤。
+- 新增可复现脚本：`scripts/gen_perf_import_file.py`（流式生成百万行导入文件）、`scripts/perf_bench.py`（按任务 `startedAt/finishedAt` 计算纯异步处理吞吐）；沿用 `scripts/import_load_test.py` 并发矩阵。
+- 本次在“应用本机 + 远端 MySQL/Redis/MinIO（RTT≈64ms、上行≈0.16MB/s）”环境实测：导入暂存 ~8.9 行/s（WAN 上行受限，1M 外推 ~31h）、导出读 ~2,512 行/s 但 1M 上传触发 0 字节缺陷（见接口测试记录 F-01）。
+- 应用层调优结论以 README 中**本地 DB** 基线为权威（4/6/8/16 worker：约 23.4k/30.3k/29.2k/63.8k 行/s；导出 ~15.7k 行/s），并给出推荐配置：默认 6 worker + Hikari≥10、极限 16 worker + Hikari≥24、约束 `worker × 并发任务 ≤ 连接池`。
+- 完整“worker × 重复 3 次”百万级矩阵需在本地 DB/LAN 环境执行；本次完成方法学、脚本与边界数据。
 
 ### 目标
 

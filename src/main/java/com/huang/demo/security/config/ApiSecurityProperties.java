@@ -13,9 +13,9 @@ public class ApiSecurityProperties {
 
     private boolean demoMode = true;
 
-    private String demoUserToken = "demo-user-token";
+    private String demoUserToken;
 
-    private String demoAdminToken = "demo-admin-token";
+    private String demoAdminToken;
 
     private String demoDefaultUserId = "anonymous";
 }

@@ -160,8 +160,8 @@ export TASK_RECOVERY_BATCH_SIZE='20'
 
 # API 权限
 export API_SECURITY_DEMO_MODE='true'
-export API_SECURITY_DEMO_USER_TOKEN='demo-user-token'
-export API_SECURITY_DEMO_ADMIN_TOKEN='demo-admin-token'
+export API_SECURITY_DEMO_USER_TOKEN='<配置的普通用户 Token>'
+export API_SECURITY_DEMO_ADMIN_TOKEN='<配置的管理员 Token>'
 
 # Flyway，默认关闭；开启后建议关闭各模块 INIT_ENABLED
 export FLYWAY_ENABLED='false'
@@ -277,7 +277,7 @@ export SPRING_SERVLET_MULTIPART_MAX_REQUEST_SIZE='200MB'
 }
 ```
 
-demo 模式下仍兼容请求头 `X-User-Id`，不传时使用 `TASK_CENTER_DEFAULT_OWNER_ID`。关闭 demo 模式后，请使用 `Authorization: Bearer demo-user-token` 或按实际系统替换 `DemoTokenService`。文件、任务和报表运行控制都会按当前用户隔离。
+demo 模式下仍兼容请求头 `X-User-Id`，不传时使用 `TASK_CENTER_DEFAULT_OWNER_ID`。关闭 demo 模式后，请使用 `Authorization: Bearer <配置的访问 Token>` 或按实际系统替换 `DemoTokenService`。文件、任务和报表运行控制都会按当前用户隔离。
 学生导入和导出任务都可以通过 `/api/tasks` 查询、取消和重试。`/api/excel/export/{taskId}` 仍保留导出专用状态接口，方便直接获取导出下载信息。
 导入接口提交成功后立即返回任务 ID，任务完成后通过 `/api/tasks/{taskId}` 查看最终状态和结果；导出接口同样先返回任务 ID，完成后再调用状态接口和下载接口。
 

@@ -1,5 +1,9 @@
 HELP.md
 target/
+.DS_Store
+docs/test/live-test-results*.json
+import-load-matrix*.json
+perf-*.json
 !.mvn/wrapper/maven-wrapper.jar
 !**/src/main/**/target/
 !**/src/test/**/target/

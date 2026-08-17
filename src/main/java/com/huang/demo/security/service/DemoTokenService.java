@@ -3,6 +3,7 @@ package com.huang.demo.security.service;
 import com.huang.demo.security.config.ApiSecurityProperties;
 import com.huang.demo.security.domain.CurrentUser;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 
 import java.util.Optional;
 
@@ -20,10 +21,10 @@ public class DemoTokenService {
             return Optional.empty();
         }
         String token = authorizationHeader.substring("Bearer ".length()).trim();
-        if (token.equals(properties.getDemoAdminToken())) {
+        if (StringUtils.hasText(properties.getDemoAdminToken()) && token.equals(properties.getDemoAdminToken())) {
             return Optional.of(CurrentUser.authenticated("admin", "ADMIN"));
         }
-        if (token.equals(properties.getDemoUserToken())) {
+        if (StringUtils.hasText(properties.getDemoUserToken()) && token.equals(properties.getDemoUserToken())) {
             return Optional.of(CurrentUser.authenticated("user-1", "USER"));
         }
         return Optional.empty();
