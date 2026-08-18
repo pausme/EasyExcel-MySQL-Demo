@@ -15,15 +15,38 @@ public interface StudentMapper {
 
     void createTableIfAbsent();
 
+    void createVersionControlTableIfAbsent();
+
+    void initVersionControl();
+
+    void ensureStudentRecordVersionColumns();
+
     void createImportStageTableIfAbsent();
 
     void updateImportStageColumnCapacity();
 
     int countStudentNoUniqueIndex();
 
+    int countLegacyStudentNoUniqueIndex();
+
+    int countStudentVersionIdIndex();
+
+    int countStudentImportTaskIdIndex();
+
     int countDuplicateStudentNo();
 
+    void dropLegacyStudentNoUniqueIndex();
+
     void createStudentNoUniqueIndex();
+
+    void createStudentVersionIdIndex();
+
+    void createStudentImportTaskIdIndex();
+
+    Long currentStudentVersion();
+
+    int promoteStudentVersion(@Param("expectedVersion") long expectedVersion,
+                              @Param("newVersion") long newVersion);
 
     int count();
 
@@ -33,9 +56,16 @@ public interface StudentMapper {
 
     Long maxIdByQuery(@Param("query") StudentExportQuery query);
 
+    Long maxIdByVersionAndQuery(@Param("version") long version,
+                                @Param("query") StudentExportQuery query);
+
     int countByMaxId(@Param("maxId") Long maxId);
 
     int countByMaxIdAndQuery(@Param("maxId") Long maxId, @Param("query") StudentExportQuery query);
+
+    int countByVersionAndMaxIdAndQuery(@Param("version") long version,
+                                       @Param("maxId") Long maxId,
+                                       @Param("query") StudentExportQuery query);
 
     List<StudentExportRecord> listByCursor(@Param("lastId") long lastId,
                                            @Param("maxId") long maxId,
@@ -45,6 +75,12 @@ public interface StudentMapper {
                                                    @Param("maxId") long maxId,
                                                    @Param("limit") int limit,
                                                    @Param("query") StudentExportQuery query);
+
+    List<StudentExportRecord> listByCursorAndVersionAndQuery(@Param("version") long version,
+                                                             @Param("lastId") long lastId,
+                                                             @Param("maxId") long maxId,
+                                                             @Param("limit") int limit,
+                                                             @Param("query") StudentExportQuery query);
 
     void saveBatch(@Param("rows") List<StudentExcelRow> rows);
 
@@ -64,7 +100,13 @@ public interface StudentMapper {
 
     int mergeImportStageRangeToStudent(@Param("importTaskId") String importTaskId,
                                        @Param("startRowNo") int startRowNo,
-                                       @Param("endRowNo") int endRowNo);
+                                       @Param("endRowNo") int endRowNo,
+                                       @Param("importVersion") long importVersion);
+
+    int deleteStudentRowsByImportTaskId(@Param("importTaskId") String importTaskId);
+
+    int deleteExpiredStudentVersions(@Param("retainCount") int retainCount,
+                                     @Param("limit") int limit);
 
     int deleteImportStage(@Param("importTaskId") String importTaskId);
 

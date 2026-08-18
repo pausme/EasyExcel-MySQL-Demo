@@ -13,7 +13,11 @@ public class StudentExportTaskPayload {
 
     private Long snapshotMaxId;
 
+    private Long snapshotVersion;
+
     private String fileName;
+
+    private StudentExportFormat format;
 
     private StudentExportQuery query;
 }

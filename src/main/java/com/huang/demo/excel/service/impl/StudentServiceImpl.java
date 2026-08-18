@@ -39,6 +39,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -79,23 +80,40 @@ public class StudentServiceImpl implements StudentService {
         }
         long start = System.currentTimeMillis();
         studentMapper.createTableIfAbsent();
+        studentMapper.createVersionControlTableIfAbsent();
+        studentMapper.initVersionControl();
+        studentMapper.ensureStudentRecordVersionColumns();
         studentMapper.createImportStageTableIfAbsent();
         try {
             studentMapper.updateImportStageColumnCapacity();
         } catch (RuntimeException ex) {
             log.warn("update student import stage column capacity failed", ex);
         }
-        if (studentMapper.countStudentNoUniqueIndex() == 0) {
-            int duplicateCount = studentMapper.countDuplicateStudentNo();
-            if (duplicateCount > 0) {
-                throw new IllegalStateException("student_no 存在重复数据，请先清理后再创建唯一索引");
-            }
-            studentMapper.createStudentNoUniqueIndex();
-        }
+        ensureStudentVersionIndexes();
         if (count() == 0) {
             seedDemoData(properties.getDemoSeedCount());
         }
         log.info("student service initialized, total={}, elapsedMs={}", count(), System.currentTimeMillis() - start);
+    }
+
+    private void ensureStudentVersionIndexes() {
+        if (studentMapper.countLegacyStudentNoUniqueIndex() > 0) {
+            studentMapper.dropLegacyStudentNoUniqueIndex();
+            log.info("legacy student_no unique index dropped for versioned import");
+        }
+        if (studentMapper.countStudentNoUniqueIndex() == 0) {
+            int duplicateCount = studentMapper.countDuplicateStudentNo();
+            if (duplicateCount > 0) {
+                throw new IllegalStateException("student_no 在同一导入版本内存在重复数据，请先清理后再创建唯一索引");
+            }
+            studentMapper.createStudentNoUniqueIndex();
+        }
+        if (studentMapper.countStudentVersionIdIndex() == 0) {
+            studentMapper.createStudentVersionIdIndex();
+        }
+        if (studentMapper.countStudentImportTaskIdIndex() == 0) {
+            studentMapper.createStudentImportTaskIdIndex();
+        }
     }
 
     @Override
@@ -598,28 +616,55 @@ public class StudentServiceImpl implements StudentService {
                                             StudentImportProgressCallback progressCallback) {
         progressCallback.checkCanceled();
         long start = System.currentTimeMillis();
-        validateImportStageBeforeMerge(importTaskId, expectedRows);
-        int mergeChunkSize = getImportMergeChunkSize();
-        int mergeChunkCount = expectedRows == 0 ? 0 : Math.max(1, (expectedRows + mergeChunkSize - 1) / mergeChunkSize);
-        int mergedRows = 0;
-        for (int startRowNo = 1; startRowNo <= expectedRows; startRowNo += mergeChunkSize) {
-            progressCallback.checkCanceled();
-            final int chunkStartRowNo = startRowNo;
-            final int chunkEndRowNo = Math.min(expectedRows, chunkStartRowNo + mergeChunkSize - 1);
-            long chunkStart = System.currentTimeMillis();
-            Integer affectedRows = newImportTransactionTemplate()
-                    .execute(status -> studentMapper.mergeImportStageRangeToStudent(
-                            importTaskId, chunkStartRowNo, chunkEndRowNo));
-            mergedRows = chunkEndRowNo;
-            progressCallback.onCommitted(mergedRows, mergeChunkCount);
-            log.info("import stage merge chunk finished, importTaskId={}, startRowNo={}, endRowNo={}, "
-                            + "affectedRows={}, elapsedMs={}",
-                    importTaskId, chunkStartRowNo, chunkEndRowNo,
-                    affectedRows == null ? 0 : affectedRows, System.currentTimeMillis() - chunkStart);
+        Long currentVersion = studentMapper.currentStudentVersion();
+        long expectedVersion = currentVersion == null ? 1L : currentVersion;
+        long importVersion = nextImportVersion(expectedVersion);
+        try {
+            validateImportStageBeforeMerge(importTaskId, expectedRows);
+            int mergeChunkSize = getImportMergeChunkSize();
+            int mergeChunkCount = expectedRows == 0 ? 0 : Math.max(1, (expectedRows + mergeChunkSize - 1) / mergeChunkSize);
+            int mergedRows = 0;
+            for (int startRowNo = 1; startRowNo <= expectedRows; startRowNo += mergeChunkSize) {
+                progressCallback.checkCanceled();
+                final int chunkStartRowNo = startRowNo;
+                final int chunkEndRowNo = Math.min(expectedRows, chunkStartRowNo + mergeChunkSize - 1);
+                long chunkStart = System.currentTimeMillis();
+                Integer affectedRows = newImportTransactionTemplate()
+                        .execute(status -> studentMapper.mergeImportStageRangeToStudent(
+                                importTaskId, chunkStartRowNo, chunkEndRowNo, importVersion));
+                mergedRows = chunkEndRowNo;
+                progressCallback.onCommitted(mergedRows, mergeChunkCount);
+                log.info("import stage merge chunk finished, importTaskId={}, importVersion={}, startRowNo={}, endRowNo={}, "
+                                + "affectedRows={}, elapsedMs={}",
+                        importTaskId, importVersion, chunkStartRowNo, chunkEndRowNo,
+                        affectedRows == null ? 0 : affectedRows, System.currentTimeMillis() - chunkStart);
+            }
+            promoteImportVersion(importTaskId, expectedVersion, importVersion);
+            progressCallback.onCommitted(expectedRows, mergeChunkCount);
+            log.info("import stage version promoted, importTaskId={}, previousVersion={}, currentVersion={}",
+                    importTaskId, expectedVersion, importVersion);
+            log.info("import stage merged by chunks, rows={}, chunks={}, chunkSize={}, importVersion={}, elapsedMs={}",
+                    expectedRows, mergeChunkCount, mergeChunkSize, importVersion, System.currentTimeMillis() - start);
+        } catch (RuntimeException ex) {
+            deleteStudentRowsByImportTaskIdQuietly(importTaskId);
+            throw ex;
         }
-        progressCallback.onCommitted(expectedRows, mergeChunkCount);
-        log.info("import stage merged by chunks, rows={}, chunks={}, chunkSize={}, elapsedMs={}",
-                expectedRows, mergeChunkCount, mergeChunkSize, System.currentTimeMillis() - start);
+    }
+
+    private void promoteImportVersion(String importTaskId, long expectedVersion, long importVersion) {
+        Integer updatedRows = newImportTransactionTemplate()
+                .execute(status -> studentMapper.promoteStudentVersion(expectedVersion, importVersion));
+        if (updatedRows == null || updatedRows != 1) {
+            throw new IllegalStateException("导入版本发布失败，当前数据版本已被其他任务更新，importTaskId=" + importTaskId);
+        }
+    }
+
+    private long nextImportVersion(long expectedVersion) {
+        long timeVersion = System.currentTimeMillis() * 1000L + ThreadLocalRandom.current().nextInt(1000);
+        if (timeVersion > expectedVersion) {
+            return timeVersion;
+        }
+        return expectedVersion + 1L;
     }
 
     private void validateImportStageBeforeMerge(String importTaskId, int expectedRows) {
@@ -627,16 +672,6 @@ public class StudentServiceImpl implements StudentService {
         if (stagedRows != expectedRows) {
             throw new IllegalStateException("导入暂存数据数量不一致，expectedRows="
                     + expectedRows + ", stagedRows=" + stagedRows);
-        }
-        int invalidRows = studentMapper.countInvalidImportStageRows(importTaskId);
-        if (invalidRows > 0) {
-            throw new IllegalStateException("导入文件存在必填字段为空的数据，invalidRows=" + invalidRows);
-        }
-        int duplicateStudentNoCount = studentMapper.countDuplicateImportStageStudentNo(importTaskId);
-        if (duplicateStudentNoCount > 0) {
-            throw new StudentImportValidationException(
-                    "导入文件校验失败，errorRows=" + duplicateStudentNoCount,
-                    buildImportValidationErrors(importTaskId));
         }
         List<StudentImportErrorRow> errorRows = buildImportValidationErrors(importTaskId);
         if (!errorRows.isEmpty()) {
@@ -647,9 +682,23 @@ public class StudentServiceImpl implements StudentService {
 
     private void deleteImportStageQuietly(String importTaskId) {
         try {
-            studentMapper.deleteImportStage(importTaskId);
+            int deletedRows = studentMapper.deleteImportStage(importTaskId);
+            if (deletedRows > 0) {
+                log.info("import stage rows deleted, importTaskId={}, rows={}", importTaskId, deletedRows);
+            }
         } catch (RuntimeException ex) {
             log.warn("delete import stage failed, importTaskId={}", importTaskId, ex);
+        }
+    }
+
+    private void deleteStudentRowsByImportTaskIdQuietly(String importTaskId) {
+        try {
+            int deletedRows = studentMapper.deleteStudentRowsByImportTaskId(importTaskId);
+            if (deletedRows > 0) {
+                log.info("unpublished import version rows deleted, importTaskId={}, rows={}", importTaskId, deletedRows);
+            }
+        } catch (RuntimeException cleanupException) {
+            log.warn("delete unpublished import rows failed, importTaskId={}", importTaskId, cleanupException);
         }
     }
 

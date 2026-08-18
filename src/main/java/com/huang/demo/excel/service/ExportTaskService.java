@@ -11,6 +11,8 @@ public interface ExportTaskService {
 
     ExportTask submitExport(String ownerId, String businessKey, String taskName, StudentExportQuery query);
 
+    ExportTask submitExport(String ownerId, String format);
+
     Optional<ExportTask> findTask(String taskId);
 
     Optional<String> createDownloadUrl(ExportTask task);

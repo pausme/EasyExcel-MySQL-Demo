@@ -2,6 +2,7 @@ package com.huang.demo.excel.service.impl;
 
 import com.huang.demo.excel.domain.model.StudentExportQuery;
 import com.huang.demo.excel.domain.model.StudentExportRecord;
+import com.huang.demo.excel.domain.model.StudentExportFormat;
 import com.huang.demo.excel.model.StudentExcelRow;
 import com.huang.demo.excel.report.ReportExportJob;
 import com.huang.demo.excel.report.ReportPage;
@@ -28,12 +29,19 @@ public class StudentReportExportJob implements ReportExportJob<StudentExportQuer
 
     @Override
     public String buildFileName(String businessKey, StudentExportQuery params) {
-        return "student-demo-" + businessKey + ".xlsx";
+        StudentExportFormat format = params == null || params.getFormat() == null
+                ? StudentExportFormat.XLSX_SINGLE_SHEET
+                : params.getFormat();
+        return "student-demo-" + businessKey + "." + format.getFileExtension();
+    }
+
+    public Long resolveSnapshotVersion() {
+        return studentMapper.currentStudentVersion();
     }
 
     @Override
     public Long resolveSnapshotMaxId(StudentExportQuery params) {
-        return studentMapper.maxIdByQuery(params);
+        return studentMapper.maxIdByVersionAndQuery(resolveVersion(params), params);
     }
 
     @Override
@@ -47,13 +55,13 @@ public class StudentReportExportJob implements ReportExportJob<StudentExportQuer
 
     @Override
     public long count(StudentExportQuery params, ReportSheetConfig sheetConfig, Long snapshotMaxId) {
-        return studentMapper.countByMaxIdAndQuery(snapshotMaxId, params);
+        return studentMapper.countByVersionAndMaxIdAndQuery(resolveVersion(params), snapshotMaxId, params);
     }
 
     @Override
     public ReportPage queryPage(StudentExportQuery params, ReportSheetConfig sheetConfig, ReportPageCursor cursor) {
-        List<StudentExportRecord> records = studentMapper.listByCursorAndQuery(
-                cursor.getLastCursor(), cursor.getMaxCursor(), cursor.getPageSize(), params);
+        List<StudentExportRecord> records = studentMapper.listByCursorAndVersionAndQuery(
+                resolveVersion(params), cursor.getLastCursor(), cursor.getMaxCursor(), cursor.getPageSize(), params);
         if (records.isEmpty()) {
             return ReportPage.builder()
                     .rows(Collections.emptyList())
@@ -80,5 +88,13 @@ public class StudentReportExportJob implements ReportExportJob<StudentExportQuer
                     .build());
         }
         return rows;
+    }
+
+    private long resolveVersion(StudentExportQuery params) {
+        if (params != null && params.getSnapshotVersion() != null) {
+            return params.getSnapshotVersion();
+        }
+        Long currentVersion = studentMapper.currentStudentVersion();
+        return currentVersion == null ? 1L : currentVersion;
     }
 }

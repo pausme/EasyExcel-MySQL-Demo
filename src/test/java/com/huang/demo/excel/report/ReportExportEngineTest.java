@@ -13,6 +13,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.zip.ZipFile;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -98,6 +99,52 @@ class ReportExportEngineTest {
                 .build()));
     }
 
+    @Test
+    void writeCsvExportsRowsWithoutSheetLimit() throws Exception {
+        ReportExportEngine engine = new ReportExportEngine();
+        DemoReportJob job = new DemoReportJob(3);
+        Path filePath = tempDir.resolve("demo-report.csv");
+
+        ReportExportResult result = engine.writeCsv(job, ReportExportCommand.<String>builder()
+                .taskId("task-1")
+                .params("demo")
+                .snapshotMaxId(3L)
+                .pageSize(2)
+                .sheetRowLimit(1)
+                .filePath(filePath)
+                .build());
+
+        String csv = new String(Files.readAllBytes(filePath), java.nio.charset.StandardCharsets.UTF_8);
+        assertEquals(3L, result.getExported());
+        assertEquals(1, result.getSheetCount());
+        assertTrue(csv.contains("名称"));
+        assertTrue(csv.contains("\"row,1\""));
+    }
+
+    @Test
+    void writeCsvPartsSplitsRowsIntoZipEntries() throws Exception {
+        ReportExportEngine engine = new ReportExportEngine();
+        DemoReportJob job = new DemoReportJob(5);
+        Path filePath = tempDir.resolve("demo-report.zip");
+
+        ReportExportResult result = engine.writeCsvParts(job, ReportExportCommand.<String>builder()
+                .taskId("task-1")
+                .params("demo")
+                .snapshotMaxId(5L)
+                .pageSize(2)
+                .sheetRowLimit(1)
+                .filePath(filePath)
+                .build(), 2);
+
+        assertEquals(5L, result.getExported());
+        assertEquals(3, result.getSheetCount());
+        try (ZipFile zipFile = new ZipFile(filePath.toFile())) {
+            assertTrue(zipFile.getEntry("part-001.csv") != null);
+            assertTrue(zipFile.getEntry("part-002.csv") != null);
+            assertTrue(zipFile.getEntry("part-003.csv") != null);
+        }
+    }
+
     private static class DemoReportJob implements ReportExportJob<String> {
 
         private final int total;
@@ -145,7 +192,7 @@ class ReportExportEngineTest {
             }
             List<DemoRow> rows = new ArrayList<DemoRow>(end - start);
             for (int index = start; index < end; index++) {
-                rows.add(new DemoRow("row-" + index));
+                rows.add(new DemoRow(index == 1 ? "row,1" : "row-" + index));
             }
             return ReportPage.builder()
                     .rows(rows)

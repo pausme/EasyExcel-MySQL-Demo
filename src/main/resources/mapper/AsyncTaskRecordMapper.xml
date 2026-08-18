@@ -20,6 +20,9 @@
         <result property="requestPayload" column="request_payload"/>
         <result property="resultPayload" column="result_payload"/>
         <result property="errorMessage" column="error_message"/>
+        <result property="failureType" column="failure_type"/>
+        <result property="retryable" column="retryable"/>
+        <result property="failureSuggestion" column="failure_suggestion"/>
         <result property="workerId" column="worker_id"/>
         <result property="lastHeartbeatAt" column="last_heartbeat_at"/>
         <result property="createdAt" column="created_at"/>
@@ -32,7 +35,8 @@
     <sql id="BaseColumns">
         id, task_id, owner_id, task_type, task_name, business_key, status,
         progress_percent, total_count, completed_count, retry_count, max_retry_count,
-        request_payload, result_payload, error_message, worker_id, last_heartbeat_at, created_at, updated_at,
+        request_payload, result_payload, error_message, failure_type, retryable, failure_suggestion,
+        worker_id, last_heartbeat_at, created_at, updated_at,
         started_at, finished_at, expire_at
     </sql>
 
@@ -53,6 +57,9 @@
             request_payload TEXT,
             result_payload TEXT,
             error_message VARCHAR(1024),
+            failure_type VARCHAR(32),
+            retryable TINYINT(1),
+            failure_suggestion VARCHAR(512),
             worker_id VARCHAR(128),
             last_heartbeat_at DATETIME,
             created_at DATETIME NOT NULL,
@@ -74,13 +81,15 @@
         INSERT INTO async_task_record (
             task_id, owner_id, task_type, task_name, business_key, status,
             progress_percent, total_count, completed_count, retry_count, max_retry_count,
-            request_payload, result_payload, error_message, worker_id, last_heartbeat_at, created_at, updated_at,
+            request_payload, result_payload, error_message, failure_type, retryable, failure_suggestion,
+            worker_id, last_heartbeat_at, created_at, updated_at,
             started_at, finished_at, expire_at
         )
         VALUES (
             #{taskId}, #{ownerId}, #{taskType}, #{taskName}, #{businessKey}, #{status},
             #{progressPercent}, #{totalCount}, #{completedCount}, #{retryCount}, #{maxRetryCount},
-            #{requestPayload}, #{resultPayload}, #{errorMessage}, #{workerId}, #{lastHeartbeatAt}, #{createdAt}, #{updatedAt},
+            #{requestPayload}, #{resultPayload}, #{errorMessage}, #{failureType}, #{retryable}, #{failureSuggestion},
+            #{workerId}, #{lastHeartbeatAt}, #{createdAt}, #{updatedAt},
             #{startedAt}, #{finishedAt}, #{expireAt}
         )
     </insert>
@@ -100,6 +109,9 @@
             request_payload = #{requestPayload},
             result_payload = #{resultPayload},
             error_message = #{errorMessage},
+            failure_type = #{failureType},
+            retryable = #{retryable},
+            failure_suggestion = #{failureSuggestion},
             worker_id = #{workerId},
             last_heartbeat_at = #{lastHeartbeatAt},
             updated_at = #{updatedAt},
@@ -114,6 +126,19 @@
         FROM async_task_record
         WHERE task_id = #{taskId}
         LIMIT 1
+    </select>
+
+    <select id="countActive" resultType="long">
+        SELECT COUNT(*)
+        FROM async_task_record
+        WHERE status IN ('CREATED', 'RUNNING')
+    </select>
+
+    <select id="countActiveByOwner" resultType="long">
+        SELECT COUNT(*)
+        FROM async_task_record
+        WHERE owner_id = #{ownerId}
+          AND status IN ('CREATED', 'RUNNING')
     </select>
 
     <select id="countByOwner" resultType="long">
@@ -209,7 +234,10 @@
             worker_id = #{workerId},
             last_heartbeat_at = NOW(),
             updated_at = NOW(),
-            error_message = NULL
+            error_message = NULL,
+            failure_type = NULL,
+            retryable = NULL,
+            failure_suggestion = NULL
         WHERE task_id = #{taskId}
           AND (
                 (

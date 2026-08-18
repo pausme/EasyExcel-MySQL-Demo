@@ -17,6 +17,8 @@
     <update id="createTableIfAbsent">
         CREATE TABLE IF NOT EXISTS student_record (
             id BIGINT AUTO_INCREMENT PRIMARY KEY,
+            import_version BIGINT NOT NULL DEFAULT 1,
+            import_task_id VARCHAR(64),
             student_no VARCHAR(32) NOT NULL,
             name VARCHAR(64) NOT NULL,
             age INT,
@@ -24,8 +26,30 @@
             class_name VARCHAR(64),
             email VARCHAR(128),
             birthday VARCHAR(32),
-            UNIQUE KEY uk_student_record_student_no (student_no)
+            UNIQUE KEY uk_student_record_version_student_no (import_version, student_no),
+            KEY idx_student_record_version_id (import_version, id),
+            KEY idx_student_record_import_task_id (import_task_id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    </update>
+
+    <update id="createVersionControlTableIfAbsent">
+        CREATE TABLE IF NOT EXISTS student_import_version_control (
+            id BIGINT NOT NULL PRIMARY KEY,
+            current_version BIGINT NOT NULL,
+            created_at DATETIME NOT NULL,
+            updated_at DATETIME NOT NULL
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    </update>
+
+    <insert id="initVersionControl">
+        INSERT IGNORE INTO student_import_version_control (id, current_version, created_at, updated_at)
+        VALUES (1, 1, NOW(), NOW())
+    </insert>
+
+    <update id="ensureStudentRecordVersionColumns">
+        ALTER TABLE student_record
+            ADD COLUMN IF NOT EXISTS import_version BIGINT NOT NULL DEFAULT 1 AFTER id,
+            ADD COLUMN IF NOT EXISTS import_task_id VARCHAR(64) NULL AFTER import_version
     </update>
 
     <update id="createImportStageTableIfAbsent">
@@ -61,37 +85,97 @@
         FROM information_schema.statistics
         WHERE table_schema = DATABASE()
           AND table_name = 'student_record'
+          AND index_name = 'uk_student_record_version_student_no'
+    </select>
+
+    <select id="countLegacyStudentNoUniqueIndex" resultType="int">
+        SELECT COUNT(*)
+        FROM information_schema.statistics
+        WHERE table_schema = DATABASE()
+          AND table_name = 'student_record'
           AND index_name = 'uk_student_record_student_no'
+    </select>
+
+    <select id="countStudentVersionIdIndex" resultType="int">
+        SELECT COUNT(*)
+        FROM information_schema.statistics
+        WHERE table_schema = DATABASE()
+          AND table_name = 'student_record'
+          AND index_name = 'idx_student_record_version_id'
+    </select>
+
+    <select id="countStudentImportTaskIdIndex" resultType="int">
+        SELECT COUNT(*)
+        FROM information_schema.statistics
+        WHERE table_schema = DATABASE()
+          AND table_name = 'student_record'
+          AND index_name = 'idx_student_record_import_task_id'
     </select>
 
     <select id="countDuplicateStudentNo" resultType="int">
         SELECT COUNT(*)
         FROM (
-            SELECT student_no
+            SELECT import_version, student_no
             FROM student_record
-            GROUP BY student_no
+            GROUP BY import_version, student_no
             HAVING COUNT(*) &gt; 1
         ) duplicate_student_no
     </select>
 
+    <update id="dropLegacyStudentNoUniqueIndex">
+        DROP INDEX uk_student_record_student_no ON student_record
+    </update>
+
     <update id="createStudentNoUniqueIndex">
         ALTER TABLE student_record
-        ADD UNIQUE KEY uk_student_record_student_no (student_no)
+            ADD UNIQUE KEY uk_student_record_version_student_no (import_version, student_no)
     </update>
+
+    <update id="createStudentVersionIdIndex">
+        ALTER TABLE student_record
+            ADD KEY idx_student_record_version_id (import_version, id)
+    </update>
+
+    <update id="createStudentImportTaskIdIndex">
+        ALTER TABLE student_record
+            ADD KEY idx_student_record_import_task_id (import_task_id)
+    </update>
+
+    <select id="currentStudentVersion" resultType="long">
+        SELECT current_version
+        FROM student_import_version_control
+        WHERE id = 1
+        LIMIT 1
+    </select>
+
+    <update id="promoteStudentVersion">
+        UPDATE student_import_version_control
+        SET current_version = #{newVersion},
+            updated_at = NOW()
+        WHERE id = 1
+          AND current_version = #{expectedVersion}
+    </update>
+
+    <sql id="CurrentStudentVersionCondition">
+        import_version = (SELECT current_version FROM student_import_version_control WHERE id = 1)
+    </sql>
 
     <select id="count" resultType="int">
         SELECT COUNT(*) FROM student_record
+        WHERE <include refid="CurrentStudentVersionCondition"/>
     </select>
 
     <select id="listPage" resultMap="StudentExcelRowMap">
         SELECT student_no, name, age, gender, class_name, email, birthday
         FROM student_record
+        WHERE <include refid="CurrentStudentVersionCondition"/>
         ORDER BY id
         LIMIT #{limit} OFFSET #{offset}
     </select>
 
     <select id="maxId" resultType="long">
         SELECT MAX(id) FROM student_record
+        WHERE <include refid="CurrentStudentVersionCondition"/>
     </select>
 
     <sql id="StudentExportQueryCondition">
@@ -118,27 +202,45 @@
     <select id="maxIdByQuery" resultType="long">
         SELECT MAX(id)
         FROM student_record
-        WHERE 1 = 1
+        WHERE <include refid="CurrentStudentVersionCondition"/>
+        <include refid="StudentExportQueryCondition"/>
+    </select>
+
+    <select id="maxIdByVersionAndQuery" resultType="long">
+        SELECT MAX(id)
+        FROM student_record
+        WHERE import_version = #{version}
         <include refid="StudentExportQueryCondition"/>
     </select>
 
     <select id="countByMaxId" resultType="int">
         SELECT COUNT(*)
         FROM student_record
-        WHERE id &lt;= #{maxId}
+        WHERE <include refid="CurrentStudentVersionCondition"/>
+          AND id &lt;= #{maxId}
     </select>
 
     <select id="countByMaxIdAndQuery" resultType="int">
         SELECT COUNT(*)
         FROM student_record
-        WHERE id &lt;= #{maxId}
+        WHERE <include refid="CurrentStudentVersionCondition"/>
+          AND id &lt;= #{maxId}
+        <include refid="StudentExportQueryCondition"/>
+    </select>
+
+    <select id="countByVersionAndMaxIdAndQuery" resultType="int">
+        SELECT COUNT(*)
+        FROM student_record
+        WHERE import_version = #{version}
+          AND id &lt;= #{maxId}
         <include refid="StudentExportQueryCondition"/>
     </select>
 
     <select id="listByCursor" resultType="com.huang.demo.excel.domain.model.StudentExportRecord">
         SELECT id, student_no, name, age, gender, class_name, email, birthday
         FROM student_record
-        WHERE id &gt; #{lastId}
+        WHERE <include refid="CurrentStudentVersionCondition"/>
+          AND id &gt; #{lastId}
           AND id &lt;= #{maxId}
         ORDER BY id
         LIMIT #{limit}
@@ -147,7 +249,19 @@
     <select id="listByCursorAndQuery" resultType="com.huang.demo.excel.domain.model.StudentExportRecord">
         SELECT id, student_no, name, age, gender, class_name, email, birthday
         FROM student_record
-        WHERE id &gt; #{lastId}
+        WHERE <include refid="CurrentStudentVersionCondition"/>
+          AND id &gt; #{lastId}
+          AND id &lt;= #{maxId}
+        <include refid="StudentExportQueryCondition"/>
+        ORDER BY id
+        LIMIT #{limit}
+    </select>
+
+    <select id="listByCursorAndVersionAndQuery" resultType="com.huang.demo.excel.domain.model.StudentExportRecord">
+        SELECT id, student_no, name, age, gender, class_name, email, birthday
+        FROM student_record
+        WHERE import_version = #{version}
+          AND id &gt; #{lastId}
           AND id &lt;= #{maxId}
         <include refid="StudentExportQueryCondition"/>
         ORDER BY id
@@ -155,10 +269,11 @@
     </select>
 
     <insert id="saveBatch">
-        INSERT INTO student_record (student_no, name, age, gender, class_name, email, birthday)
+        INSERT INTO student_record (import_version, student_no, name, age, gender, class_name, email, birthday)
         VALUES
         <foreach collection="rows" item="row" separator=",">
-            (#{row.studentNo}, #{row.name}, #{row.age}, #{row.gender}, #{row.className}, #{row.email}, #{row.birthday})
+            ((SELECT current_version FROM student_import_version_control WHERE id = 1),
+             #{row.studentNo}, #{row.name}, #{row.age}, #{row.gender}, #{row.className}, #{row.email}, #{row.birthday})
         </foreach>
         ON DUPLICATE KEY UPDATE
             name = VALUES(name),
@@ -254,8 +369,9 @@
     </select>
 
     <insert id="mergeImportStageToStudent">
-        INSERT INTO student_record (student_no, name, age, gender, class_name, email, birthday)
-        SELECT student_no, name, age, gender, class_name, email, birthday
+        INSERT INTO student_record (import_version, import_task_id, student_no, name, age, gender, class_name, email, birthday)
+        SELECT (SELECT current_version FROM student_import_version_control WHERE id = 1),
+               import_task_id, student_no, name, age, gender, class_name, email, birthday
         FROM student_import_stage
         WHERE import_task_id = #{importTaskId}
         ORDER BY row_no
@@ -269,8 +385,8 @@
     </insert>
 
     <insert id="mergeImportStageRangeToStudent">
-        INSERT INTO student_record (student_no, name, age, gender, class_name, email, birthday)
-        SELECT student_no, name, age, gender, class_name, email, birthday
+        INSERT INTO student_record (import_version, import_task_id, student_no, name, age, gender, class_name, email, birthday)
+        SELECT #{importVersion}, import_task_id, student_no, name, age, gender, class_name, email, birthday
         FROM student_import_stage
         WHERE import_task_id = #{importTaskId}
           AND row_no &gt;= #{startRowNo}
@@ -284,6 +400,32 @@
             email = VALUES(email),
             birthday = VALUES(birthday)
     </insert>
+
+    <delete id="deleteStudentRowsByImportTaskId">
+        DELETE FROM student_record
+        WHERE import_task_id = #{importTaskId}
+          AND import_version &lt;&gt; (SELECT current_version FROM student_import_version_control WHERE id = 1)
+    </delete>
+
+    <delete id="deleteExpiredStudentVersions">
+        DELETE FROM student_record
+        WHERE import_version IN (
+            SELECT import_version
+            FROM (
+                SELECT old_versions.import_version
+                FROM (
+                    SELECT import_version
+                    FROM student_record
+                    WHERE import_version &lt;&gt; (SELECT current_version FROM student_import_version_control WHERE id = 1)
+                    GROUP BY import_version
+                    ORDER BY import_version DESC
+                    LIMIT 18446744073709551615 OFFSET #{retainCount}
+                ) old_versions
+            ) deletable_versions
+        )
+        ORDER BY id ASC
+        LIMIT #{limit}
+    </delete>
 
     <delete id="deleteImportStage">
         DELETE FROM student_import_stage

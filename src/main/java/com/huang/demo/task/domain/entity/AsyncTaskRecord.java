@@ -43,6 +43,12 @@ public class AsyncTaskRecord {
 
     private String errorMessage;
 
+    private String failureType;
+
+    private Boolean retryable;
+
+    private String failureSuggestion;
+
     private String workerId;
 
     private LocalDateTime lastHeartbeatAt;

@@ -22,4 +22,8 @@ public class StudentExportQuery {
     private Integer minAge;
 
     private Integer maxAge;
+
+    private Long snapshotVersion;
+
+    private StudentExportFormat format;
 }

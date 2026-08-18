@@ -6,8 +6,8 @@
 
 覆盖以下能力：
 
-- 异步导出：任务提交、状态查询、单 Sheet 生成、MinIO 上传、302 签名下载。
-- 异步导入：模板下载、源文件上传 MinIO、后台解析、暂存表写入、全量校验、分块合并。
+- 异步导出：任务提交、状态查询、版本快照、单 Sheet 生成、MinIO 上传、302 签名下载。
+- 异步导入：模板下载、源文件上传 MinIO、后台解析、暂存表写入、全量校验、分块构建新版本、可见版本切换。
 - 数据一致性：`student_no` 唯一键 upsert、重复学号拦截、失败时正式表不被污染。
 - 任务能力：统一任务中心查询、取消、重试、失败原因、进度。
 - 权限隔离：关闭 demo 模式后按 Bearer Token 识别用户，用户只能访问自己的任务和文件。
@@ -145,7 +145,8 @@ curl -X POST '<BASE_URL>/api/excel/import' \
     -> 每 2000 行入队
     -> 多 worker 分批写入 student_import_stage
     -> 校验必填、长度、格式、文件内重复 student_no
-    -> 按 IMPORT_MERGE_CHUNK_SIZE 分块合并到 student_record
+    -> 按 IMPORT_MERGE_CHUNK_SIZE 分块写入 student_record 新版本
+    -> CAS 发布 student_import_version_control.current_version
 ```
 
 验收：
@@ -155,7 +156,7 @@ curl -X POST '<BASE_URL>/api/excel/import' \
 - 最终校验失败，正式表不发生本次导入变更。
 - 同一文件出现重复 `student_no`，任务失败并生成错误明细文件。
 - 失败后 `student_import_stage` 不长期残留本次任务数据。
-- 进入合并阶段后使用多个短事务；如果中途数据库异常，已提交分块不会自动回滚，严格全量原子需另行设计版本切换或影子表。
+- 构建新版本阶段使用多个短事务；如果中途数据库异常或版本发布 CAS 失败，当前可见版本不变，未发布版本按 `import_task_id` 清理。
 
 ### 5.3 导入边界
 
@@ -176,7 +177,7 @@ curl -X POST '<BASE_URL>/api/excel/import' \
 
 | 项目 | 结果 |
 | --- | --- |
-| `mvn test` | 12 类 / 54 用例全部通过 |
+| `mvn test` | 15 类 / 77 用例全部通过 |
 | 接口扁平化测试 | 标准环境 R11 为 77 用例 / 77 通过；当前用例矩阵已更新到 135 条 |
 | 已修复缺陷 | F-02/F-12 已关闭；导出超限、取消竞态和文件安全扫描均已补充回归 |
 | 1M 导出 | 3/3 成功，平均约 23,317 行/s |

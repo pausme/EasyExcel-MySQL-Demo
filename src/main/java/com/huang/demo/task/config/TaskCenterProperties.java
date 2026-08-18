@@ -27,6 +27,10 @@ public class TaskCenterProperties {
 
     private String workerId;
 
+    private int maxActiveTasksPerOwner = 10;
+
+    private int maxActiveTasksTotal = 50;
+
     private int recoveryHeartbeatTimeoutSeconds = 120;
 
     private int recoveryBatchSize = 20;

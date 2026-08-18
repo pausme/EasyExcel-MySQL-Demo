@@ -15,5 +15,7 @@ public class StudentExportTaskResult {
 
     private String objectKey;
 
+    private StudentExportFormat format;
+
     private int sheetCount;
 }

@@ -6,6 +6,7 @@ import com.huang.demo.excel.config.ExcelDemoProperties;
 import com.huang.demo.excel.config.MinioProperties;
 import com.huang.demo.excel.domain.model.ExportTask;
 import com.huang.demo.excel.domain.model.ExportTaskStatus;
+import com.huang.demo.excel.domain.model.StudentExportFormat;
 import com.huang.demo.excel.domain.model.StudentExportQuery;
 import com.huang.demo.excel.domain.model.StudentExportTaskPayload;
 import com.huang.demo.excel.domain.model.StudentExportTaskResult;
@@ -17,9 +18,11 @@ import com.huang.demo.excel.report.ReportProgressUpdater;
 import com.huang.demo.excel.service.ExportTaskService;
 import com.huang.demo.excel.service.MinioObjectStorageService;
 import com.huang.demo.task.domain.entity.AsyncTaskRecord;
+import com.huang.demo.task.domain.model.AsyncTaskFailureType;
 import com.huang.demo.task.domain.model.AsyncTaskStatus;
 import com.huang.demo.task.domain.model.AsyncTaskType;
 import com.huang.demo.task.domain.model.CreateAsyncTaskCommand;
+import com.huang.demo.task.domain.model.MarkAsyncTaskFailedCommand;
 import com.huang.demo.task.domain.model.TaskCanceledException;
 import com.huang.demo.task.service.TaskCenterService;
 import com.huang.demo.task.service.TaskRecoveryHandler;
@@ -93,15 +96,27 @@ public class ExportTaskServiceImpl implements ExportTaskService, TaskRetryHandle
     }
 
     @Override
+    public ExportTask submitExport(String ownerId, String format) {
+        return submitExport(ownerId, UUID.randomUUID().toString().replace("-", ""),
+                "学生数据导出", StudentExportQuery.builder()
+                        .format(StudentExportFormat.parse(format))
+                        .build());
+    }
+
+    @Override
     public ExportTask submitExport(String ownerId, String businessKey, String taskName, StudentExportQuery query) {
         String normalizedBusinessKey = normalizeBusinessKey(businessKey);
         StudentExportQuery normalizedQuery = normalizeQuery(query);
         String normalizedTaskName = normalizeTaskName(taskName);
+        Long snapshotVersion = studentReportExportJob.resolveSnapshotVersion();
+        normalizedQuery.setSnapshotVersion(snapshotVersion);
         Long maxId = studentReportExportJob.resolveSnapshotMaxId(normalizedQuery);
         String fileName = studentReportExportJob.buildFileName(normalizedBusinessKey, normalizedQuery);
         StudentExportTaskPayload payload = StudentExportTaskPayload.builder()
                 .snapshotMaxId(maxId)
+                .snapshotVersion(snapshotVersion)
                 .fileName(fileName)
+                .format(normalizedQuery.getFormat())
                 .query(normalizedQuery)
                 .build();
 
@@ -115,7 +130,8 @@ public class ExportTaskServiceImpl implements ExportTaskService, TaskRetryHandle
         try {
             submitExecution(task.getTaskId());
         } catch (RuntimeException ex) {
-            task = taskCenterService.markFailed(task.getTaskId(), "导出任务提交失败");
+            task = taskCenterService.markFailed(buildRetryableFailure(task.getTaskId(),
+                    "导出任务提交失败", AsyncTaskFailureType.SYSTEM_ERROR, "导出任务未进入后台执行队列，可稍后重试"));
             log.error("submit export task failed, taskId={}", task.getTaskId(), ex);
         }
         return toExportTask(task);
@@ -137,6 +153,11 @@ public class ExportTaskServiceImpl implements ExportTaskService, TaskRetryHandle
             minioObjectStorageService.ensureObjectExists(task.getObjectKey());
             return Optional.of(minioObjectStorageService.createDownloadUrl(task.getObjectKey(), task.getFileName()));
         } catch (RuntimeException ex) {
+            if (isMissingExportObject(ex)) {
+                taskCenterService.markExpired(task.getTaskId(),
+                        "导出文件不存在或已过期",
+                        "导出文件已被清理，可重试任务或重新提交导出");
+            }
             log.warn("create minio download url failed, taskId={}, objectKey={}", task.getTaskId(), task.getObjectKey(), ex);
             return Optional.empty();
         }
@@ -153,7 +174,8 @@ public class ExportTaskServiceImpl implements ExportTaskService, TaskRetryHandle
         try {
             submitExecution(retriedTask.getTaskId());
         } catch (RuntimeException ex) {
-            retriedTask = taskCenterService.markFailed(retriedTask.getTaskId(), "导出任务提交失败");
+            retriedTask = taskCenterService.markFailed(buildRetryableFailure(retriedTask.getTaskId(),
+                    "导出任务提交失败", AsyncTaskFailureType.SYSTEM_ERROR, "导出任务未进入后台执行队列，可稍后重试"));
             log.error("retry export task submit failed, taskId={}", retriedTask.getTaskId(), ex);
         }
         return retriedTask;
@@ -194,6 +216,7 @@ public class ExportTaskServiceImpl implements ExportTaskService, TaskRetryHandle
             AsyncTaskRecord completedTask = taskCenterService.markSuccess(task.getTaskId(), toJson(StudentExportTaskResult.builder()
                     .fileName(task.getFileName())
                     .objectKey(task.getObjectKey())
+                    .format(task.getFormat())
                     .sheetCount(task.getSheetCount())
                     .build()));
             if (!AsyncTaskStatus.SUCCESS.name().equals(completedTask.getStatus())) {
@@ -209,8 +232,9 @@ public class ExportTaskServiceImpl implements ExportTaskService, TaskRetryHandle
                     task.getTaskId(), System.currentTimeMillis() - start);
         } catch (Exception ex) {
             deletePartialFile(task);
-            taskCenterService.markFailed(task.getTaskId(),
-                    ex.getMessage() == null ? "导出失败，请查看服务端日志" : ex.getMessage());
+            taskCenterService.markFailed(buildRetryableFailure(task.getTaskId(),
+                    ex.getMessage() == null ? "导出失败，请查看服务端日志" : ex.getMessage(),
+                    classifyFailure(ex), "可稍后重试；若持续失败，请检查数据库、MinIO 或服务端日志"));
             log.error("export task failed, taskId={}, elapsedMs={}",
                     task.getTaskId(), System.currentTimeMillis() - start, ex);
         } finally {
@@ -220,12 +244,41 @@ public class ExportTaskServiceImpl implements ExportTaskService, TaskRetryHandle
 
     private void storeExportFile(ExportTask task, Path temporaryFilePath) {
         String objectKey = buildExportObjectKey(task);
-        minioObjectStorageService.uploadExcel(temporaryFilePath, objectKey);
+        minioObjectStorageService.uploadFile(temporaryFilePath, objectKey, task.getFormat().getContentType());
         task.setObjectKey(objectKey);
     }
 
+    private MarkAsyncTaskFailedCommand buildRetryableFailure(String taskId,
+                                                             String errorMessage,
+                                                             AsyncTaskFailureType failureType,
+                                                             String suggestion) {
+        return MarkAsyncTaskFailedCommand.builder()
+                .taskId(taskId)
+                .errorMessage(errorMessage)
+                .failureType(failureType)
+                .retryable(true)
+                .failureSuggestion(suggestion)
+                .build();
+    }
+
+    private AsyncTaskFailureType classifyFailure(Exception ex) {
+        String message = ex.getMessage();
+        if (message != null && (message.contains("MinIO") || message.contains("文件不存在") || message.contains("已过期"))) {
+            return AsyncTaskFailureType.DEPENDENCY_ERROR;
+        }
+        if (message != null && (message.contains("超过") || message.contains("线程池") || message.contains("超时"))) {
+            return AsyncTaskFailureType.RESOURCE_LIMIT;
+        }
+        return AsyncTaskFailureType.SYSTEM_ERROR;
+    }
+
+    private boolean isMissingExportObject(RuntimeException ex) {
+        String message = ex.getMessage();
+        return message != null && message.contains("MinIO 文件不存在或已过期");
+    }
+
     private ReportExportResult writeReport(ExportTask task, Path filePath) {
-        return reportExportEngine.write(studentReportExportJob, ReportExportCommand.<StudentExportQuery>builder()
+        ReportExportCommand<StudentExportQuery> command = ReportExportCommand.<StudentExportQuery>builder()
                 .taskId(task.getTaskId())
                 .params(task.getQuery())
                 .snapshotMaxId(task.getSnapshotMaxId())
@@ -242,33 +295,73 @@ public class ExportTaskServiceImpl implements ExportTaskService, TaskRetryHandle
                     @Override
                     public void update(long completedCount, long totalCount, int progressPercent) {
                         taskCenterService.updateProgress(
-                                task.getTaskId(), completedCount, totalCount, progressPercent);
+                        task.getTaskId(), completedCount, totalCount, progressPercent);
                     }
                 })
-                .build());
+                .build();
+        if (task.getFormat() == StudentExportFormat.CSV) {
+            return reportExportEngine.writeCsv(studentReportExportJob, command);
+        }
+        if (task.getFormat() == StudentExportFormat.ZIP_CSV_PARTS) {
+            return reportExportEngine.writeCsvParts(studentReportExportJob, command, getSheetRowLimit());
+        }
+        return reportExportEngine.write(studentReportExportJob, command);
     }
 
     private ExportTask toExportTask(AsyncTaskRecord taskRecord) {
         StudentExportTaskPayload payload = readPayload(taskRecord.getRequestPayload());
         StudentExportTaskResult result = readResult(taskRecord.getResultPayload());
+        StudentExportQuery query = normalizePayloadQuery(payload);
         return ExportTask.builder()
                 .taskId(taskRecord.getTaskId())
                 .ownerId(taskRecord.getOwnerId())
                 .status(toExportTaskStatus(taskRecord.getStatus()))
                 .progressPercent(safeInt(taskRecord.getProgressPercent()))
                 .snapshotMaxId(payload.getSnapshotMaxId())
-                .query(normalizeQuery(payload.getQuery()))
+                .snapshotVersion(payload.getSnapshotVersion())
+                .query(query)
                 .total(safeLongToInt(taskRecord.getTotalCount()))
                 .exported(safeLongToInt(taskRecord.getCompletedCount()))
                 .sheetCount(result.getSheetCount())
                 .retryCount(safeInt(taskRecord.getRetryCount()))
                 .maxRetryCount(safeInt(taskRecord.getMaxRetryCount()))
                 .fileName(payload.getFileName() == null ? result.getFileName() : payload.getFileName())
+                .format(resolveExportFormat(payload, result, query))
                 .objectKey(result.getObjectKey())
                 .errorMessage(taskRecord.getErrorMessage())
+                .failureType(taskRecord.getFailureType())
+                .retryable(taskRecord.getRetryable())
+                .failureSuggestion(taskRecord.getFailureSuggestion())
+                .canRetry(canRetry(taskRecord))
                 .createdAt(taskRecord.getCreatedAt())
                 .finishedAt(taskRecord.getFinishedAt())
                 .build();
+    }
+
+    private StudentExportQuery normalizePayloadQuery(StudentExportTaskPayload payload) {
+        StudentExportQuery query = normalizeQuery(payload.getQuery());
+        if (query.getSnapshotVersion() == null) {
+            query.setSnapshotVersion(payload.getSnapshotVersion());
+        }
+        if (query.getFormat() == null) {
+            query.setFormat(payload.getFormat() == null ? StudentExportFormat.XLSX_SINGLE_SHEET : payload.getFormat());
+        }
+        return query;
+    }
+
+    private StudentExportFormat resolveExportFormat(StudentExportTaskPayload payload,
+                                                    StudentExportTaskResult result,
+                                                    StudentExportQuery query) {
+        if (payload.getFormat() != null) {
+            return payload.getFormat();
+        }
+        if (result.getFormat() != null) {
+            return result.getFormat();
+        }
+        if (query.getFormat() != null) {
+            return query.getFormat();
+        }
+        return StudentExportFormat.XLSX_SINGLE_SHEET;
     }
 
     private ExportTaskStatus toExportTaskStatus(String status) {
@@ -288,6 +381,19 @@ public class ExportTaskServiceImpl implements ExportTaskService, TaskRetryHandle
             return ExportTaskStatus.SUCCESS;
         }
         return ExportTaskStatus.FAILED;
+    }
+
+    private boolean canRetry(AsyncTaskRecord taskRecord) {
+        if (!AsyncTaskStatus.FAILED.name().equals(taskRecord.getStatus())
+                && !AsyncTaskStatus.CANCELED.name().equals(taskRecord.getStatus())
+                && !AsyncTaskStatus.EXPIRED.name().equals(taskRecord.getStatus())) {
+            return false;
+        }
+        if (AsyncTaskStatus.FAILED.name().equals(taskRecord.getStatus())
+                && Boolean.FALSE.equals(taskRecord.getRetryable())) {
+            return false;
+        }
+        return safeInt(taskRecord.getRetryCount()) < safeInt(taskRecord.getMaxRetryCount());
     }
 
     private StudentExportTaskPayload readPayload(String payloadJson) {
@@ -358,6 +464,8 @@ public class ExportTaskServiceImpl implements ExportTaskService, TaskRetryHandle
                 .gender(normalizeOptionalText(safeQuery.getGender(), 16))
                 .minAge(minAge)
                 .maxAge(maxAge)
+                .snapshotVersion(safeQuery.getSnapshotVersion())
+                .format(safeQuery.getFormat() == null ? StudentExportFormat.XLSX_SINGLE_SHEET : safeQuery.getFormat())
                 .build();
     }
 

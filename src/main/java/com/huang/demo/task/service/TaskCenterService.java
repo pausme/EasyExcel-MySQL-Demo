@@ -4,6 +4,7 @@ import com.huang.demo.task.api.dto.AsyncTaskPageQueryRequest;
 import com.huang.demo.task.api.dto.AsyncTaskPageResponse;
 import com.huang.demo.task.domain.entity.AsyncTaskRecord;
 import com.huang.demo.task.domain.model.CreateAsyncTaskCommand;
+import com.huang.demo.task.domain.model.MarkAsyncTaskFailedCommand;
 
 import java.util.Optional;
 import java.util.List;
@@ -28,7 +29,15 @@ public interface TaskCenterService {
 
     AsyncTaskRecord markFailed(String taskId, String errorMessage, String resultPayload);
 
+    AsyncTaskRecord markFailed(MarkAsyncTaskFailedCommand command);
+
+    AsyncTaskRecord markExpired(String taskId, String errorMessage, String failureSuggestion);
+
     boolean cancelTask(String taskId, String ownerId);
+
+    long countActiveTasks();
+
+    long countActiveTasksByOwner(String ownerId);
 
     AsyncTaskRecord prepareRetry(String taskId, String ownerId);
 

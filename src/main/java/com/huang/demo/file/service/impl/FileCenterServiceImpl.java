@@ -317,6 +317,7 @@ public class FileCenterServiceImpl implements FileCenterService {
     }
 
     @Override
+    @Transactional(rollbackFor = Exception.class)
     public Optional<String> createDownloadUrl(String fileId) {
         Optional<FileRecord> recordOptional = findNormalFile(fileId);
         if (!recordOptional.isPresent()) {
@@ -327,6 +328,7 @@ public class FileCenterServiceImpl implements FileCenterService {
             fileObjectStorageService.statObject(record.getObjectKey());
             return Optional.of(fileObjectStorageService.createDownloadUrl(record.getObjectKey(), record.getOriginalName()));
         } catch (RuntimeException ex) {
+            fileRecordMapper.markDeleted(currentOwnerId(), record.getFileId());
             log.warn("create file download url failed, fileId={}, objectKey={}", record.getFileId(), record.getObjectKey(), ex);
             return Optional.empty();
         }

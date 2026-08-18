@@ -5,9 +5,9 @@
 
 ## 功能概览
 
-- Excel 导入：提交阶段校验 `.xlsx` 结构和容量边界，上传后创建 IMPORT 任务，后台流式读取 Excel，分批放入有界队列，由多个 worker 批量写入 MySQL 暂存表。
-- Excel 导出：异步提交任务，使用游标分页读取数据库，生成单 Sheet Excel 后上传 MinIO。
-- 异步任务中心：统一记录任务状态、进度、失败原因和重试次数，状态缓存 Redis，任务记录持久化 MySQL。
+- Excel 导入：提交阶段校验 `.xlsx` 结构和容量边界，上传后创建 IMPORT 任务，后台流式读取 Excel，分批放入有界队列，由多个 worker 批量写入 MySQL 暂存表，校验通过后构建新数据版本并一次性发布可见版本。
+- Excel 导出：异步提交任务，记录当前数据版本和最大 id，使用游标分页读取数据库，支持单 Sheet Excel、CSV 和 ZIP 分片 CSV，生成后上传 MinIO。
+- 异步任务中心：统一记录任务状态、进度、失败原因、失败类型、可重试状态和重试次数，状态缓存 Redis，任务记录持久化 MySQL。
 - 任务恢复和监控：任务执行写入 worker 心跳，应用定时恢复悬挂任务，并暴露 Actuator/Micrometer 指标。
 - 统一 API 响应：常规 JSON 接口返回 `ApiResponse`，异常由全局处理器转换为稳定错误码。
 - 用户上下文：默认 demo 模式兼容本地调试，关闭 demo 后必须使用 Bearer token，任务、报表和文件按 owner 隔离。
@@ -16,8 +16,10 @@
 - 文件下载：应用只返回 MinIO 签名地址，不经过应用服务器转发大文件内容。
 - 通用文件中心：支持普通上传、元数据查询、逻辑删除、分页查询和签名下载。
 - 文件中心测试页：启动应用后访问 `/file-upload-test.html`，可测试秒传、客户端直传和分片上传。
-- 数据更新：使用 `student_no` 作为唯一业务键，重复导入时更新已有记录。
+- 文件中心测试页还能展示分片状态、断点继续和失败分片重试，适合联调文件中心。
+- 数据更新：同一可见版本内使用 `student_no` 作为唯一业务键，重复导入时按新版本整体发布。
 - 压测工具：提供 Python 标准库脚本，支持并发矩阵和吞吐量统计。
+- 回归样本：提供统一 fixture 生成脚本，样本说明见 [regression-datasets.md](docs/regression-datasets.md)。
 
 ## 当前验证结论
 
@@ -25,7 +27,7 @@
 
 | 项目 | 数据量 | 结果 |
 | --- | ---: | --- |
-| 单元/切片测试 | 12 类 / 54 用例 | 全部通过 |
+| 单元/切片测试 | 15 类 / 77 用例 | 全部通过 |
 | 接口扁平化测试 | 77 用例 | R11 标准环境 77/77 通过；F-02/F-09/F-12 已关闭，F-11 受控，新增文件安全扫描用例通过 |
 | 异步导出 | 1,000,006 行 × 3 | 全部成功，平均约 23,317 行/s |
 | 异步导入 | 100,000 行 × 3 | 全部成功，平均约 4,511 行/s |
@@ -33,8 +35,8 @@
 
 重要边界：
 
-- 导出为了保证“导出文件可直接回导”，当前只生成单 Sheet；超过 Excel 单 Sheet 数据行上限 `1,048,575` 时会失败并提示缩小范围或改用 CSV。
-- 导入采用“暂存表 + 全量校验 + 分块事务合并”，可以在写正式表前拦截坏数据，并降低百万级长事务风险。
+- 导出默认使用单 Sheet XLSX 以保证“导出文件可直接回导”；超过 Excel 单 Sheet 数据行上限 `1,048,575` 时会失败并提示缩小范围或改用 CSV。CSV 和 ZIP 分片 CSV 适合归档、分析和审计，不承诺直接回导。
+- 导入采用“暂存表 + 全量校验 + 新版本构建 + 可见版本切换”，可以在写正式表前拦截坏数据，并避免失败导入污染当前可见版本。
 - 标准环境已经通过 swap 缓解小规格机器 OOM；默认还会用最大行数和文件大小限制拒绝超出当前环境容量的导入任务。
 
 ## 实现思路
@@ -69,14 +71,17 @@ EasyExcel 流式解析
 校验必填字段和文件内重复 student_no
         |
         v
-按 `IMPORT_MERGE_CHUNK_SIZE` 从暂存表分块 upsert 到 student_record
+按 `IMPORT_MERGE_CHUNK_SIZE` 从暂存表分块 upsert 到 student_record 的新 import_version
+        |
+        v
+CAS 更新 student_import_version_control.current_version，发布新版本
 ```
 
 导入任务的原始 Excel 会先保存到 MinIO 的 `excel/student/import-source/` 前缀，任务 payload 记录 `sourceObjectKey`、原始文件名和文件大小。
-后台执行和任务重试都从 MinIO 读取源文件，不依赖本机临时目录；如果源文件生命周期过期或被删除，重试会明确失败并提示源文件不存在或已过期。
+后台执行和任务重试都从 MinIO 读取源文件，不依赖本机临时目录；如果源文件生命周期过期或被删除，重试会明确失败并提示源文件不存在或已过期。导入校验失败时，任务详情会返回错误摘要和前 100 行预览，也可以通过 `/api/excel/import/{taskId}/errors?limit=20` 单独查询预览。
 导入不会把整份 Excel 加载到内存中。解析线程只保留当前批次，队列容量有限，队列满时解析会产生背压。
-解析后的批次先写入 `student_import_stage` 暂存表，全部解析和暂存成功后，先统一校验必填、长度、格式和文件内重复 `student_no`，再按 `IMPORT_MERGE_CHUNK_SIZE` 分块合并到 `student_record`。
-如果 Excel 后半段解析失败、暂存失败或最终校验失败，正式表都不会被修改；如果已经进入分块合并阶段后数据库异常，已提交的合并块不会自动回滚，这是用短事务稳定性换取的容量边界。
+解析后的批次先写入 `student_import_stage` 暂存表，全部解析和暂存成功后，先统一校验必填、长度、格式和文件内重复 `student_no`，再按 `IMPORT_MERGE_CHUNK_SIZE` 分块写入 `student_record` 的新 `import_version`。
+查询和导出只读取 `student_import_version_control.current_version` 指向的数据版本；新版本只有最后 CAS 发布成功后才可见。Excel 后半段解析失败、暂存失败、最终校验失败、构建新版本失败或发布失败时，旧版本继续对外服务，未发布版本会按 `import_task_id` 清理。
 如果导入校验失败，系统会生成错误明细 Excel 上传到 MinIO，用户可以通过导入任务状态接口查看错误文件信息，并通过签名地址下载。
 导入任务进度会写入统一任务中心：`totalCount` 表示已经解析的行数，`completedCount` 表示已经暂存的行数，任务完成前进度最高到 95%，成功后为 100%。
 
@@ -88,7 +93,7 @@ IMPORT_WORKER_COUNT * IMPORT_MAX_CONCURRENT_TASKS <= HIKARI_MAXIMUM_POOL_SIZE
 
 默认只允许一个导入任务执行。导入失败时会清空待处理队列、取消 worker，并等待已经启动的 worker 收尾，最后清理本次导入的暂存数据。
 数据库瞬时异常会按配置进行有限重试。
-取消导入是尽力而为：解析线程和 worker 会在批次边界检查任务状态；如果取消发生在最终合并事务已经提交之后，正式表变更不会自动撤销。
+取消导入是尽力而为：解析线程和 worker 会在批次边界检查任务状态；如果取消发生在可见版本发布前，旧版本继续对外服务；如果取消发生在版本发布成功之后，新版本已经对外生效。
 
 ### 导出流程
 
@@ -99,7 +104,7 @@ IMPORT_WORKER_COUNT * IMPORT_MAX_CONCURRENT_TASKS <= HIKARI_MAXIMUM_POOL_SIZE
 任务中心创建 EXPORT 任务，MySQL 持久化记录，Redis 缓存状态
         |
         v
-记录当前 MAX(id)，按运行条件和 id 游标分页读取
+记录当前 import_version 和 MAX(id)，按运行条件和 id 游标分页读取
         |
         v
 通用报表导出引擎调用具体 Job 查询并写入 Excel
@@ -111,10 +116,10 @@ IMPORT_WORKER_COUNT * IMPORT_MAX_CONCURRENT_TASKS <= HIKARI_MAXIMUM_POOL_SIZE
 查询任务状态并返回 MinIO 签名下载地址
 ```
 
-导出使用 `id > lastId AND id <= maxId` 的游标条件，避免大 offset 分页越来越慢，且保证一次导出有固定的数据边界。
+导出使用 `import_version = snapshotVersion AND id > lastId AND id <= maxId` 的游标条件，避免大 offset 分页越来越慢，且保证一次导出固定读取同一个已发布版本。
 学生报表运行控制会保存 `studentNo`、`nameKeyword`、`className`、`gender`、`minAge`、`maxAge` 等查询条件；点击运行时，运行控制的 `runId` 会作为导出任务 `businessKey`，因此可以按运行控制查看历史导出任务。
 `ReportExportEngine` 负责通用写文件流程，`StudentReportExportJob` 只负责学生报表的文件名、Sheet 配置、快照边界、分页查询和 Excel 行转换。
-导入和导出任务都已经接入统一任务中心，进度、失败原因、取消和重试都会同步到 `async_task_record`，并缓存到 Redis。
+导入和导出任务都已经接入统一任务中心，进度、失败原因、失败类型、可重试状态、取消和重试都会同步到 `async_task_record`，并缓存到 Redis。
 为了让导出的文件可以直接作为导入文件使用，当前导出只生成一个 Sheet；超过 Excel 单 Sheet 行数限制时任务失败。
 
 ## 项目结构
@@ -174,6 +179,8 @@ export TASK_CENTER_CACHE_RETENTION_HOURS='24'
 export TASK_CENTER_MAX_PAGE_SIZE='100'
 export TASK_CENTER_DEFAULT_OWNER_ID='anonymous'
 export TASK_CENTER_MAX_RETRY_COUNT='3'
+export TASK_CENTER_MAX_ACTIVE_TASKS_PER_OWNER='10'
+export TASK_CENTER_MAX_ACTIVE_TASKS_TOTAL='50'
 export TASK_RECOVERY_ENABLED='true'
 export TASK_WORKER_ID=''
 export TASK_RECOVERY_HEARTBEAT_TIMEOUT_SECONDS='120'
@@ -219,13 +226,18 @@ export DATA_CLEANUP_TASK_RETENTION_HOURS='168'
 export DATA_CLEANUP_UPLOAD_TASK_RETENTION_HOURS='24'
 export DATA_CLEANUP_DELETED_FILE_RETENTION_HOURS='24'
 export DATA_CLEANUP_IMPORT_STAGE_RETENTION_HOURS='24'
+export DATA_CLEANUP_IMPORT_VERSION_CLEANUP_ENABLED='true'
+export DATA_CLEANUP_IMPORT_VERSION_RETAIN_COUNT='2'
+export DATA_CLEANUP_DISTRIBUTED_LOCK_ENABLED='true'
+export DATA_CLEANUP_LOCK_KEY='cleanup:retention:lock'
+export DATA_CLEANUP_LOCK_TTL_SECONDS='1800'
 ```
 
 建议将 MinIO Bucket 设置为私有。导出下载接口返回有效期默认 30 分钟的签名地址，避免大文件流量经过应用服务器。
 导出对象默认写入 `excel/student/` 前缀，生命周期规则默认在 1 天后清理对象。
 导入源文件默认写入 `excel/student/import-source/` 前缀，生命周期规则默认在 1 天后清理对象，用于失败任务重试和多实例部署下的任务恢复。
 通用文件中心默认写入 `files/general/` 前缀，可通过 `FILE_CENTER_OBJECT_PREFIX` 调整。
-数据清理任务默认每小时执行一次，按配置清理终态任务、已完成上传任务、逻辑删除文件记录和异常残留导入暂存数据。
+数据清理任务默认每小时执行一次，按配置清理终态任务、已完成上传任务、逻辑删除文件记录、异常残留导入暂存数据以及过旧的导入历史版本。
 
 ## 数据库初始化
 
@@ -322,7 +334,10 @@ export SPRING_SERVLET_MULTIPART_MAX_REQUEST_SIZE='200MB'
 ```
 
 demo 模式下仍兼容请求头 `X-User-Id`，不传时使用 `TASK_CENTER_DEFAULT_OWNER_ID`。关闭 demo 模式后，请使用 `Authorization: Bearer <配置的访问 Token>` 或按实际系统替换 `DemoTokenService`。文件、任务和报表运行控制都会按当前用户隔离。
+异步任务中心默认限制同一用户同时活跃任务数和系统活跃任务总数，可通过 `TASK_CENTER_MAX_ACTIVE_TASKS_PER_OWNER` 和 `TASK_CENTER_MAX_ACTIVE_TASKS_TOTAL` 调整。
 学生导入和导出任务都可以通过 `/api/tasks` 查询、取消和重试。`/api/excel/export/{taskId}` 仍保留导出专用状态接口，方便直接获取导出下载信息。
+当导出文件已被 MinIO 生命周期清理或手动删除时，下载接口会返回 404，并把对应导出任务标记为 `EXPIRED`，避免任务状态长期停留在成功但文件不可用的假健康状态。
+当导入错误文件已被 MinIO 生命周期清理或手动删除时，错误文件下载接口同样会返回 404，并把对应导入任务标记为 `EXPIRED`。
 导入接口提交成功后立即返回任务 ID，任务完成后通过 `/api/tasks/{taskId}` 查看最终状态和结果；导出接口同样先返回任务 ID，完成后再调用状态接口和下载接口。
 
 任务中心还提供：
@@ -331,7 +346,7 @@ demo 模式下仍兼容请求头 `X-User-Id`，不传时使用 `TASK_CENTER_DEFA
 | --- | --- | --- |
 | GET | `/metrics/thread-pools` | 查询导入、导出线程池活跃线程、队列长度和完成任务数 |
 
-Actuator 指标默认暴露 `health`、`info` 和 `metrics`，可通过 `/actuator/metrics/demo.async.task.total`、`/actuator/metrics/demo.async.task.duration` 和 JVM executor 指标查看任务计数、耗时和线程池状态。
+Actuator 指标默认暴露 `health`、`info`、`metrics` 和 `prometheus`，可通过 `/actuator/metrics/demo.async.task.total`、`/actuator/metrics/demo.async.task.duration`、`/actuator/prometheus` 和 JVM executor 指标查看任务计数、耗时和线程池状态。Prometheus/Grafana 面板和告警规则见 [monitoring-alerting.md](docs/monitoring-alerting.md)。
 
 基础路径：`/api/report/student-runs`
 
@@ -681,9 +696,9 @@ export EXPORT_PAGE_SIZE='5000'
 
 ## 一致性和容量边界
 
-- 导入采用“暂存表 + 全量校验 + 分块合并”策略，正式表写入前会完整校验本次导入数据。
-- 暂存表写入可以分批完成；只要解析、暂存或最终校验失败，本次导入不会修改 `student_record`。
-- 合并阶段使用多个短事务降低百万级长事务风险；进入合并阶段后如果中途失败，已提交分块不会自动回滚，严格全量原子场景需要版本切换或影子表方案。
+- 导入采用“暂存表 + 全量校验 + 分块构建新版本 + 可见版本切换”策略，正式版本发布前会完整校验本次导入数据。
+- 暂存表写入和新版本构建都可以分批完成；只要解析、暂存、校验、构建新版本或发布版本失败，当前可见版本不变。
+- 合并阶段使用多个短事务降低百万级长事务风险；这些短事务写入的是未发布版本，只有最后更新 `student_import_version_control.current_version` 成功后才对查询和导出可见。
 - 同一个文件内出现重复 `student_no` 会直接失败，避免不同批次提交顺序影响最终结果。
 - 导入源文件会持久化到 MinIO，任务执行和重试不依赖本机临时目录。
 - 导入提交阶段会校验 `.xlsx` 后缀和文件真实结构，非 Excel 文件直接返回 400，不创建异步任务。

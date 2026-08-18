@@ -26,4 +26,14 @@ public class CleanupProperties {
     private int deletedFileRetentionHours = 24;
 
     private int importStageRetentionHours = 24;
+
+    private boolean importVersionCleanupEnabled = true;
+
+    private int importVersionRetainCount = 2;
+
+    private boolean distributedLockEnabled = true;
+
+    private String lockKey = "cleanup:retention:lock";
+
+    private int lockTtlSeconds = 1800;
 }

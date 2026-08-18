@@ -16,15 +16,6 @@
 
 | 状态 | 优先级 | 任务 | 建议原因 |
 | --- | --- | --- | --- |
-| TODO | P1 | 全量原子导入版本切换 | 当前分块合并稳定但不是严格全量原子，适合补版本化发布语义 |
-| TODO | P1 | 多实例部署一致性治理 | 解决多节点下任务、文件、MinIO 对象和数据库元数据的一致性问题 |
-| TODO | P1 | 任务中心重试与失败分级 | 细化失败类型、可重试条件和退避策略，避免坏任务反复压垮系统 |
-| TODO | P2 | 导出 CSV / 多文件兜底 | 当前单 Sheet 保证可回导，但超大导出需要 CSV 或拆分文件兜底 |
-| TODO | P2 | 导入/导出限流策略 | 增加全局和用户维度并发保护，避免高峰任务挤爆线程池和数据库 |
-| TODO | P2 | 监控面板和告警规则 | 已有指标但缺少可视化和告警阈值，生产排障不够直接 |
-| TODO | P2 | 回归数据集治理 | 统一维护小样本、错误样本、重复样本和分片样本，提升回归可重复性 |
-| TODO | P2 | 错误行在线预览 | 错误文件可下载，但缺少任务详情内的错误摘要和前 N 行快速定位 |
-| TODO | P2 | 文件上传测试页增强 | 当前测试页可用但还可补状态展示、失败重试和分片进度可视化 |
 
 ## 已完成历史任务
 
@@ -39,6 +30,7 @@
 | DONE | 历史 | Redis 任务状态 | 导出任务状态缓存 Redis，并持久化任务记录到 MySQL |
 | DONE | 历史 | 文件上传中心 | 普通上传、客户端直传、秒传、分片上传、分页查询和静态测试页 |
 | DONE | 历史 | 统一异步任务中心 | 抽象任务创建、运行中、成功、失败、取消、过期、重试和分页查询 |
+| DONE | P1 | 任务中心重试与失败分级 | 引入失败类型、可重试标记和建议动作，避免坏任务反复压垮系统 |
 | DONE | 历史 | 真正异步导入 | 导入接口立即返回任务 ID，后台线程解析 Excel 并写库 |
 | DONE | 历史 | 全量原子导入 | 使用 `student_import_stage` 暂存表，校验通过后合并正式表 |
 | DONE | P0 | 导入错误明细文件 | 导入校验失败时生成错误 Excel，上传 MinIO，并提供签名下载入口 |
@@ -51,16 +43,24 @@
 | DONE | P1 | API 权限和用户体系 | 增加当前用户上下文、demo/auth 模式、Bearer token 和 owner 数据隔离 |
 | DONE | P1 | 数据库迁移版本管理 | 增加 Flyway 依赖、版本化迁移脚本、baseline 配置和生产初始化说明 |
 | DONE | P1 | 框架层参数异常映射 | 修复 R7 中 3 个 500，统一映射为 400/415，并补本地回归测试 |
-| DONE | P2 | 数据归档和清理策略 | 增加可配置定时清理，按批清理终态任务、上传任务、逻辑删除文件和暂存数据 |
 | DONE | P1 | 接口扁平化脚本加固 | 导出下载和任务重试按任务实际终态动态断言，避免空库取消竞态和超单 Sheet 边界误判 |
+| DONE | P2 | 数据归档和清理策略 | 增加可配置定时清理，按批清理终态任务、上传任务、逻辑删除文件和暂存数据 |
 | DONE | P1 | 批次和分页参数配置化 | `IMPORT_BATCH_SIZE`、`EXPORT_PAGE_SIZE` 支持环境变量配置，并对导入批次和导出分页做范围保护 |
 | DONE | P1 | 百万级导入稳定性护栏 | 增加导入行数/文件大小保护、恢复默认失败、连接池容量校验和启动资源摘要日志 |
 | DONE | P1 | 导入分块合并 | 先完整校验暂存表，再按 `IMPORT_MERGE_CHUNK_SIZE` 分块 upsert 正式表，降低长事务风险 |
 | DONE | P2 | Excel 导入文件头校验 | 修复 F-12，提交阶段校验 `.xlsx` 后缀、zip 文件头和 xlsx 必要结构，非法文件直接 400 |
 | DONE | P2 | 性能压测和调优报告 | 固化 R7/R10 标准环境导入导出结论、风险边界和复现脚本 |
 | DONE | P2 | 文档脱敏和测试产物治理 | 删除原始联调 JSON，真实地址、签名 URL 和测试 Token 改为占位符或环境变量 |
-| DONE | P2 | 数据归档和清理策略 | 增加可配置定时清理，按批清理终态任务、上传任务、逻辑删除文件和暂存数据 |
 | DONE | P1 | CI/CD 自动回归门禁 | 增加 GitHub Actions 单测门禁、手动/定时集成测试和失败产物上传 |
+| DONE | P1 | 全量原子导入版本切换 | 引入 `import_version` 和版本控制表，导入构建新版本后一次性发布可见版本 |
+| DONE | P2 | 导入历史版本清理 | 保留当前版本和最近 1 个历史版本，定时清理更旧的 `import_version` 数据 |
+| DONE | P2 | 导入/导出限流策略 | 增加全局和用户维度并发保护，避免高峰任务挤爆线程池和数据库 |
+| DONE | P1 | 多实例部署一致性治理 | 任务恢复 CAS 抢占、清理分布式锁、对象缺失元数据标记和恢复协调器测试 |
+| DONE | P2 | 导出 CSV / 多文件兜底 | 导出接口支持 XLSX、CSV 和 ZIP 分片 CSV，超大数据可绕开单 Sheet 上限 |
+| DONE | P2 | 监控面板和告警规则 | 增加 Prometheus endpoint、指标说明、Grafana 面板建议、告警规则和排障手册 |
+| DONE | P2 | 回归数据集治理 | 新增统一 fixture 生成脚本和数据集说明，样本默认输出到 target/test-fixtures |
+| DONE | P2 | 错误行在线预览 | 导入失败任务 resultPayload 保存错误摘要和前 100 行预览，并提供预览接口 |
+| DONE | P2 | 文件上传测试页增强 | 测试页支持 baseURL、分片状态、断点继续、失败重试和日志可视化 |
 
 ---
 
@@ -860,7 +860,7 @@ student_import_stage -> student_record
 - 解析、暂存、必填字段、长度、格式和文件内重复 `student_no` 全部校验通过后，才允许进入正式表合并。
 - 合并阶段按 `IMPORT_MERGE_CHUNK_SIZE` 切块，每块一个短事务，默认 `5000` 行。
 - 该方案能显著降低单个长事务的锁持有、undo/redo 和超时风险。
-- 该方案不是严格的单事务全量原子：如果已经进入合并阶段后发生数据库异常，已提交的合并块不会自动回滚。严格全量原子仍需要版本切换或影子表方案。
+- 该阶段曾经不是严格全量原子；后续第 18 项已经补齐 `import_version` 可见版本切换，分块写入未发布版本，发布失败不会影响当前可见版本。
 
 ### 需求范围
 
@@ -868,18 +868,18 @@ student_import_stage -> student_record
 - Mapper 支持按 `row_no` 范围从 `student_import_stage` upsert 到 `student_record`。
 - 合并前统一校验暂存行数、必填字段、长度、格式和文件内重复学号。
 - 记录每个合并块耗时、影响行数和行号范围。
-- 文档明确说明当前一致性语义和严格全量原子的差异。
+- 文档明确说明分块合并与后续版本切换的一致性语义。
 
 ### 验收标准
 
 - 100k 导入耗时不明显退化。
 - 1M 导入不再依赖单个超长事务。
-- 合并中途失败时，任务会失败并清理暂存表；已提交正式表分块不会自动回滚，文档需明确该边界。
+- 合并中途失败时，任务会失败并清理暂存表；第 18 项完成后，未发布版本也会按 `import_task_id` 清理。
 - 文档明确说明新的“一致性语义”。
 
 ### 完成记录
 
-- `StudentMapper` 新增 `mergeImportStageRangeToStudent(importTaskId, startRowNo, endRowNo)`。
+- `StudentMapper` 新增 `mergeImportStageRangeToStudent(importTaskId, startRowNo, endRowNo, importVersion)`。
 - `StudentServiceImpl` 的最终合并改为先校验暂存表，再按 `IMPORT_MERGE_CHUNK_SIZE` 分块执行短事务。
 - 分块合并日志包含 `importTaskId`、`startRowNo`、`endRowNo`、`affectedRows` 和耗时。
 - 成功、失败、取消统一在外层清理本次 `student_import_stage` 数据，成功路径不再重复删除暂存表。
@@ -988,8 +988,8 @@ student_import_stage -> student_record
 - 新增文件后缀白名单、MIME 白名单和内容嗅探配置，默认开启安全扫描。
 - 补充文件中心单测，覆盖合法文本文件、合法 ZIP 型 Office 文件和伪装可执行文件的拦截。
 - 本地验证通过：
-  - `JAVA_HOME=/Users/dingli/Dependent/JDK/jdk8u482-b08/Contents/Home /Users/dingli/Dependent/apache-maven-3.6.3/bin/mvn -q -Dtest=FileCenterServiceImplTest,RuleBasedFileSecurityScannerTest test`
-  - `JAVA_HOME=/Users/dingli/Dependent/JDK/jdk8u482-b08/Contents/Home /Users/dingli/Dependent/apache-maven-3.6.3/bin/mvn -q test`
+  - `JAVA_HOME=<JDK8_HOME> <MAVEN_HOME>/bin/mvn -q -Dtest=FileCenterServiceImplTest,RuleBasedFileSecurityScannerTest test`
+  - `JAVA_HOME=<JDK8_HOME> <MAVEN_HOME>/bin/mvn -q test`
 
 ---
 
@@ -1115,7 +1115,7 @@ student_import_stage -> student_record
 - 下载前会先校验对象是否仍存在；若对象已被生命周期清理或手工删除，下载接口返回空地址并由 Controller 按 404 处理。
 - README 已补充数据清理环境变量说明。
 - 本地验证通过：
-  - `JAVA_HOME=/Users/dingli/Dependent/JDK/jdk8u482-b08/Contents/Home /Users/dingli/Dependent/apache-maven-3.6.3/bin/mvn -q -Dtest=RetentionCleanupServiceTest,FileCenterServiceImplTest,RuleBasedFileSecurityScannerTest test`
+  - `JAVA_HOME=<JDK8_HOME> <MAVEN_HOME>/bin/mvn -q -Dtest=RetentionCleanupServiceTest,FileCenterServiceImplTest,RuleBasedFileSecurityScannerTest test`
 
 ---
 
@@ -1125,32 +1125,32 @@ student_import_stage -> student_record
 
 ### 目标
 
-在现有“暂存表 + 全量校验 + 分块合并”的基础上，进一步实现严格的全量原子导入语义：要么整批数据对外可见，要么整批数据完全不影响当前可见版本。
+在现有“暂存表 + 全量校验 + 分块合并”的基础上，实现可见版本原子切换语义：导入新版本构建完成前，旧版本继续对外可见；新版本只有最后发布成功后才对查询和导出生效。
 
 ### 背景
 
-当前分块合并能显著降低长事务、锁持有和 OOM 风险，但进入合并阶段后，如果数据库异常发生在部分分块提交之后，已经提交的分块不会自动回滚。对于 Demo 和多数更新场景这是可接受取舍；如果业务要求“导入文件整体替换一版数据”，需要引入版本切换或影子表方案。
+分块合并能显著降低长事务、锁持有和 OOM 风险，但历史实现中分块一旦写入正式表就会被当前查询读到。为兼顾百万级短事务和“失败不污染当前可见数据”，本次引入 `import_version` 和版本控制表。
 
 ### 需求范围
 
 1. 版本模型设计
-   - 新增 `import_version` 或等价批次版本字段。
-   - 正式数据按业务查询只读取当前生效版本。
-   - 导入成功后通过一次短事务切换当前版本。
+   - `student_record` 新增 `import_version` 和 `import_task_id`。
+   - 新增 `student_import_version_control` 保存当前可见版本。
+   - 导入成功后通过一次 CAS 更新切换当前版本。
 
 2. 数据写入路径
    - Excel 仍先写入 `student_import_stage`。
-   - 校验通过后写入新版本数据或影子表。
+   - 校验通过后写入新 `import_version` 数据。
    - 切换生效前，线上查询仍读取旧版本。
 
 3. 失败处理
    - 解析、暂存、校验、构建新版本任一阶段失败时，旧版本继续对外服务。
    - 切换前失败可清理新版本数据。
-   - 切换后失败进入补偿流程，不回滚已对外确认的新版本。
+   - 切换后新版本已对外确认，不再回滚。
 
 4. 数据清理
-   - 旧版本至少保留 1 到 2 个版本用于回退。
-   - 定时清理过期版本数据和对应任务记录。
+   - 当前已清理发布失败的未发布版本数据。
+   - 后续已经补齐版本历史清理，避免历史版本无限增长。
 
 ### 验收标准
 
@@ -1160,11 +1160,23 @@ student_import_stage -> student_record
 - 成功导入后只通过一次版本切换生效。
 - README 和测试文档明确说明“分块合并”和“版本切换”两种模式差异。
 
+### 完成记录
+
+- `student_record` 增加 `import_version`、`import_task_id`、`uk_student_record_version_student_no`、`idx_student_record_version_id` 和 `idx_student_record_import_task_id`。
+- 新增 `student_import_version_control`，启动初始化和 Flyway 迁移都会创建并初始化当前版本。
+- 导入合并阶段先读取当前版本，生成独立新版本号，分块写入未发布版本。
+- 发布阶段通过 `promoteStudentVersion(expectedVersion, newVersion)` CAS 更新当前可见版本；更新失败说明已有其他导入发布，当前任务失败。
+- 构建新版本或发布失败时，按 `import_task_id` 清理未发布数据，旧版本继续对外服务。
+- 普通查询、导出计数和导出游标分页都按当前/快照版本过滤。
+- 导出任务 payload 新增 `snapshotVersion`，一次导出固定读取同一个版本和最大 id 边界。
+- 新增 `StudentReportExportJobTest` 覆盖导出按快照版本查询，新增导入发布失败清理测试。
+- 本地验证通过：`JAVA_HOME=<JDK8_HOME> <MAVEN_HOME>/bin/mvn test`，15 类 / 77 用例全部通过。
+
 ---
 
 ## 19. CI/CD 自动回归门禁
 
-状态：TODO
+状态：DONE
 
 ### 目标
 
@@ -1225,7 +1237,7 @@ student_import_stage -> student_record
 
 ## 20. 多实例部署一致性治理
 
-状态：TODO
+状态：DONE
 
 ### 目标
 
@@ -1262,11 +1274,21 @@ student_import_stage -> student_record
 - MinIO 对象被手动删除后，下载接口返回 404，数据库元数据可标记异常。
 - 清理任务在多实例下不会出现重复删除导致的异常噪音。
 
+### 完成记录
+
+- 任务恢复已有 worker 心跳和数据库 CAS 抢占。
+- 定时保留清理已增加 Redis 分布式锁，多个应用实例同时调度时只有一个实例执行清理。
+- 文件对象缺失时已将 `file_record` 标记为 `DELETED`，避免假正常数据继续参与查询和秒传。
+- 导出文件对象缺失时会将对应导出任务标记为 `EXPIRED`，避免成功态任务长期保留失效下载地址。
+- 导入错误文件对象缺失时也会将对应导入任务标记为 `EXPIRED`，避免失败态任务长期保留失效下载地址。
+- 新增 `TaskRecoveryCoordinatorTest` 覆盖恢复开关、无 handler 跳过、CAS 抢占失败跳过、抢占成功投递和恢复投递异常落失败。
+- 本地单元测试已覆盖多实例恢复的核心互斥语义；标准环境双节点部署后仍建议按同一验收标准做人工演练复核。
+
 ---
 
 ## 21. 任务中心重试与失败分级
 
-状态：TODO
+状态：DONE
 
 ### 目标
 
@@ -1299,16 +1321,24 @@ student_import_stage -> student_record
 
 ### 验收标准
 
-- 非 Excel 文件失败后不可重试，提示重新上传文件。
+- 非 Excel 文件提交阶段直接拒绝，不产生可重试任务。
 - MinIO 短暂不可用失败可重试，重试次数受上限控制。
 - 容量护栏失败返回拆分建议。
 - 任务详情能展示结构化失败类型和可重试状态。
+
+### 完成记录
+
+- `async_task_record` 增加 `failure_type`、`retryable` 和 `failure_suggestion` 字段，并补齐 Flyway 增量迁移与初始化脚本。
+- 任务中心写入失败时按分类保存结构化失败信息，任务详情返回失败类型、是否可重试和建议动作。
+- 导入校验失败标记为 `VALIDATION_ERROR` 且不可重试；普通系统/依赖失败保留重试入口。
+- 重试入口会拒绝不可重试失败，避免坏任务反复压垮系统。
+- 相关单元测试已补齐并通过 `mvn test` 验证。
 
 ---
 
 ## 22. 导出 CSV / 多文件兜底
 
-状态：TODO
+状态：DONE
 
 ### 目标
 
@@ -1346,11 +1376,20 @@ student_import_stage -> student_record
 - 多文件模式生成 zip，包内文件命名清晰。
 - 下载接口能正确返回签名 URL 和文件名。
 
+### 完成记录
+
+- 新增 `StudentExportFormat`，支持 `XLSX_SINGLE_SHEET`、`CSV`、`ZIP_CSV_PARTS` 三种导出格式。
+- `POST /api/excel/export?format=CSV` 可提交 CSV 导出；不传 `format` 时保持原有单 Sheet XLSX。
+- `ReportExportEngine` 新增流式 CSV 写入和 ZIP 分片 CSV 写入，继续复用快照边界、游标分页、取消检查和进度更新。
+- CSV 表头复用导出行模型上的 `@ExcelProperty`，避免 Excel 和 CSV 列名不一致。
+- MinIO 上传支持按文件格式写入 content-type，下载仍返回签名 URL。
+- 单元测试覆盖 CSV 写入、CSV 逗号转义、ZIP part 切分以及 Controller 透传格式参数。
+
 ---
 
 ## 23. 导入/导出限流策略
 
-状态：TODO
+状态：DONE
 
 ### 目标
 
@@ -1389,11 +1428,19 @@ student_import_stage -> student_record
 - 指标能展示当前运行中和排队任务数量。
 - README 增加限流配置说明。
 
+### 完成记录
+
+- `TaskCenterProperties` 新增 `maxActiveTasksPerOwner` 和 `maxActiveTasksTotal`，支持通过环境变量配置。
+- `TaskCenterServiceImpl` 在创建任务前统一校验用户活跃任务数和系统活跃任务总数。
+- `AsyncTaskRecordMapper` 和 XML 新增活跃任务统计查询。
+- 导入、导出和其他异步任务共享同一套任务提交节流规则。
+- 单元测试覆盖用户活跃任务超限和系统活跃任务超限场景。
+
 ---
 
 ## 24. 监控面板和告警规则
 
-状态：TODO
+状态：DONE
 
 ### 目标
 
@@ -1428,6 +1475,13 @@ student_import_stage -> student_record
    - 增加 Prometheus/Grafana 示例配置。
    - 增加常见告警排查路径。
 
+### 完成记录
+
+- 增加 `micrometer-registry-prometheus`，应用暴露 `/actuator/prometheus` 供 Prometheus 抓取。
+- 新增 [monitoring-alerting.md](monitoring-alerting.md)，整理任务、线程池、Hikari、JVM 和 CPU 指标。
+- 文档提供 Prometheus scrape 配置、Grafana 面板 PromQL、告警规则 YAML 和任务失败/队列堆积/连接等待/JVM 内存高的排障路径。
+- README 增加监控手册入口。
+
 ### 验收标准
 
 - README 或 docs 中有指标清单和告警阈值建议。
@@ -1439,7 +1493,7 @@ student_import_stage -> student_record
 
 ## 25. 回归数据集治理
 
-状态：TODO
+状态：DONE
 
 ### 目标
 
@@ -1466,6 +1520,13 @@ student_import_stage -> student_record
    - 输出到 `.tmp` 或 `target/test-fixtures`。
    - 默认不提交生成产物。
 
+### 完成记录
+
+- 新增 `scripts/gen_regression_fixtures.py`，统一生成合法小 Excel、空模板、重复学号、必填缺失、超长字段、伪装 Excel 和分片二进制样本。
+- 新增 [regression-datasets.md](regression-datasets.md)，沉淀样本清单、命名规则、清理规则和性能样本生成方式。
+- 脚本默认输出到 `target/test-fixtures/regression`，生成产物不提交。
+- 已本地执行脚本验证，所有样本均能生成。
+
 3. 用例引用
    - 接口扁平化脚本从固定目录读取或生成样本。
    - 性能脚本支持复用同一数据集。
@@ -1485,7 +1546,7 @@ student_import_stage -> student_record
 
 ## 26. 错误行在线预览
 
-状态：TODO
+状态：DONE
 
 ### 目标
 
@@ -1522,11 +1583,19 @@ student_import_stage -> student_record
 - 越权查看错误预览返回 404。
 - 错误文件下载能力仍保持不变。
 
+### 完成记录
+
+- `StudentImportTaskResult` 新增 `errorSummary` 和 `errorPreviewRows`，导入校验失败时写入任务 resultPayload。
+- 导入任务详情 `ImportTaskResponse` 返回错误摘要和预览行，用户可先看摘要再决定是否下载错误 Excel。
+- 新增 `GET /api/excel/import/{taskId}/errors?limit=20`，默认返回 20 行，最大 100 行。
+- 预览接口复用任务 owner 过滤，非本人任务返回 404。
+- 单元测试覆盖错误摘要写入、预览行 limit 裁剪和 Controller 预览接口。
+
 ---
 
 ## 27. 文件上传测试页增强
 
-状态：TODO
+状态：DONE
 
 ### 目标
 
@@ -1549,6 +1618,13 @@ student_import_stage -> student_record
    - 支持断点查询后继续上传。
    - 支持取消上传任务。
 
+### 完成记录
+
+- `file-upload-test.html` 新增分片状态表，展示每个分片的大小、状态和失败原因。
+- 新增 `继续分片` 和 `重试失败分片` 按钮，支持基于 `/api/files/multipart/{uploadId}/parts` 的断点恢复。
+- 上传过程会实时更新分片状态，失败分片可单独重试，不必重传全部文件。
+- 页面保留 base URL 可配置、请求/响应日志和文件列表刷新能力，适合作为文件中心联调页。
+
 3. 秒传和直传
    - 秒传命中时展示已有文件 ID。
    - 直传完成后展示文件详情和下载链接。
@@ -1566,14 +1642,50 @@ student_import_stage -> student_record
 
 ---
 
+## 28. 导入历史版本清理
+
+状态：DONE
+
+### 目标
+
+在导入可见版本切换落地后，定期清理过旧的 `student_record.import_version` 数据，避免每次全量导入都永久保留一份完整历史数据。
+
+### 背景
+
+版本切换让失败导入不会污染当前可见版本，但成功导入会留下历史版本。历史版本可以用于短期排查和回退，但如果长期不清理，百万级导入多跑几轮后表体积会快速增长，影响索引大小、备份时间和查询维护成本。
+
+### 需求范围
+
+1. 配置项
+   - `DATA_CLEANUP_IMPORT_VERSION_CLEANUP_ENABLED`：是否启用历史版本清理。
+   - `DATA_CLEANUP_IMPORT_VERSION_RETAIN_COUNT`：总保留版本数，默认 `2`，表示当前版本 + 最近 1 个历史版本。
+
+2. 清理规则
+   - 永远不删除 `student_import_version_control.current_version` 指向的当前可见版本。
+   - 按 `import_version` 倒序保留最近历史版本。
+   - 每次按 `DATA_CLEANUP_BATCH_SIZE` 分批删除，避免单次清理事务过大。
+
+3. 多实例协同
+   - 复用保留清理任务的 Redis 分布式锁。
+   - 多实例同时调度时只允许一个实例执行版本清理。
+
+### 验收标准
+
+- 当前可见版本不会被清理。
+- 默认保留当前版本和最近 1 个历史版本。
+- 关闭清理开关后不会删除历史版本数据。
+- 清理结果日志和 `CleanupResult.importVersionRows` 能看到本轮清理行数。
+
+### 完成记录
+
+- `CleanupProperties` 新增 `importVersionCleanupEnabled` 和 `importVersionRetainCount`。
+- `RetentionCleanupService` 新增导入历史版本清理流程，并将结果写入 `CleanupResult.importVersionRows`。
+- `StudentMapper` 新增 `deleteExpiredStudentVersions(retainCount, limit)`，排除当前可见版本后分批删除过旧版本。
+- README 补充 `DATA_CLEANUP_IMPORT_VERSION_CLEANUP_ENABLED` 和 `DATA_CLEANUP_IMPORT_VERSION_RETAIN_COUNT`。
+- 单元测试覆盖启用清理、保留历史版本数换算和关闭清理开关。
+
+---
+
 ## 建议实施顺序
 
-1. `P1` 全量原子导入版本切换
-2. `P1` 多实例部署一致性治理
-3. `P1` 任务中心重试与失败分级
-4. `P2` 导出 CSV / 多文件兜底
-5. `P2` 导入/导出限流策略
-6. `P2` 监控面板和告警规则
-7. `P2` 回归数据集治理
-8. `P2` 错误行在线预览
-9. `P2` 文件上传测试页增强
+1. `P2` 文件上传测试页增强

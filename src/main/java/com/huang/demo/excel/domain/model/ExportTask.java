@@ -23,6 +23,8 @@ public class ExportTask {
 
     private Long snapshotMaxId;
 
+    private Long snapshotVersion;
+
     private volatile int total;
 
     private volatile int exported;
@@ -35,11 +37,21 @@ public class ExportTask {
 
     private String fileName;
 
+    private StudentExportFormat format;
+
     private StudentExportQuery query;
 
     private String objectKey;
 
     private volatile String errorMessage;
+
+    private volatile String failureType;
+
+    private volatile Boolean retryable;
+
+    private volatile String failureSuggestion;
+
+    private volatile Boolean canRetry;
 
     private volatile LocalDateTime createdAt;
 

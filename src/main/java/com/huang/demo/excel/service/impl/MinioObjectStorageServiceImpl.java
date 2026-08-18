@@ -103,15 +103,25 @@ public class MinioObjectStorageServiceImpl implements MinioObjectStorageService 
 
     @Override
     public void uploadExcel(Path filePath, String objectKey) {
-        try (InputStream inputStream = Files.newInputStream(filePath)) {
-            uploadExcel(inputStream, Files.size(filePath), objectKey);
-        } catch (Exception ex) {
-            throw new IllegalStateException("上传 Excel 文件到 MinIO 失败", ex);
-        }
+        uploadFile(filePath, objectKey, EXCEL_CONTENT_TYPE);
     }
 
     @Override
     public void uploadExcel(InputStream inputStream, long fileSize, String objectKey) {
+        uploadFile(inputStream, fileSize, objectKey, EXCEL_CONTENT_TYPE);
+    }
+
+    @Override
+    public void uploadFile(Path filePath, String objectKey, String contentType) {
+        try (InputStream inputStream = Files.newInputStream(filePath)) {
+            uploadFile(inputStream, Files.size(filePath), objectKey, contentType);
+        } catch (Exception ex) {
+            throw new IllegalStateException("上传文件到 MinIO 失败", ex);
+        }
+    }
+
+    @Override
+    public void uploadFile(InputStream inputStream, long fileSize, String objectKey, String contentType) {
         if (inputStream == null) {
             throw new IllegalArgumentException("上传文件流不能为空");
         }
@@ -123,11 +133,18 @@ public class MinioObjectStorageServiceImpl implements MinioObjectStorageService 
                     .bucket(properties.getBucketName())
                     .object(objectKey)
                     .stream(inputStream, fileSize, -1)
-                    .contentType(EXCEL_CONTENT_TYPE)
+                    .contentType(normalizeContentType(contentType))
                     .build());
         } catch (Exception ex) {
-            throw new IllegalStateException("上传 Excel 文件到 MinIO 失败", ex);
+            throw new IllegalStateException("上传文件到 MinIO 失败", ex);
         }
+    }
+
+    private String normalizeContentType(String contentType) {
+        if (contentType == null || contentType.trim().isEmpty()) {
+            return "application/octet-stream";
+        }
+        return contentType.trim();
     }
 
     @Override

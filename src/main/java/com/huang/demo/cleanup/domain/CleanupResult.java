@@ -14,4 +14,6 @@ public class CleanupResult {
     private final int deletedFiles;
 
     private final int importStageRows;
+
+    private final int importVersionRows;
 }

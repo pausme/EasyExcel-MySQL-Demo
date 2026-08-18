@@ -259,6 +259,26 @@
             font-weight: 700;
         }
 
+        .part-status {
+            display: inline-flex;
+            border-radius: 999px;
+            padding: 2px 8px;
+            background: #eef2ff;
+            color: #3730a3;
+            font-size: 12px;
+            font-weight: 700;
+        }
+
+        .part-status.done {
+            background: #eaf7ef;
+            color: var(--ok);
+        }
+
+        .part-status.failed {
+            background: #fef2f2;
+            color: var(--bad);
+        }
+
         .link-button {
             min-height: 30px;
             padding: 5px 9px;
@@ -348,9 +368,28 @@
                 <button id="instantButton">秒传检查</button>
                 <button id="uploadButton" class="primary">开始上传</button>
                 <button id="partsButton">查询分片</button>
+                <button id="resumeButton">继续分片</button>
+                <button id="retryButton">重试失败分片</button>
                 <button id="abortButton">取消分片</button>
                 <button id="pageButton">刷新列表</button>
                 <button id="clearButton">清空日志</button>
+            </div>
+
+            <div style="margin-top: 16px;">
+                <h2>分片状态</h2>
+                <table>
+                    <thead>
+                    <tr>
+                        <th>分片</th>
+                        <th>大小</th>
+                        <th>状态</th>
+                        <th>重试</th>
+                    </tr>
+                    </thead>
+                    <tbody id="partTableBody">
+                    <tr><td colspan="4">暂无分片</td></tr>
+                    </tbody>
+                </table>
             </div>
         </section>
 
@@ -385,7 +424,8 @@
         fileMd5: '',
         uploadId: '',
         fileId: '',
-        multipartParts: []
+        multipartParts: [],
+        currentMultipartInit: null
     };
 
     var els = {
@@ -397,6 +437,8 @@
         instantButton: document.getElementById('instantButton'),
         uploadButton: document.getElementById('uploadButton'),
         partsButton: document.getElementById('partsButton'),
+        resumeButton: document.getElementById('resumeButton'),
+        retryButton: document.getElementById('retryButton'),
         abortButton: document.getElementById('abortButton'),
         pageButton: document.getElementById('pageButton'),
         clearButton: document.getElementById('clearButton'),
@@ -408,7 +450,8 @@
         uploadBar: document.getElementById('uploadBar'),
         status: document.getElementById('status'),
         logOutput: document.getElementById('logOutput'),
-        fileTableBody: document.getElementById('fileTableBody')
+        fileTableBody: document.getElementById('fileTableBody'),
+        partTableBody: document.getElementById('partTableBody')
     };
 
     els.baseUrlInput.value = window.location.origin === 'null' ? 'http://localhost:18088' : window.location.origin;
@@ -419,12 +462,14 @@
         state.uploadId = '';
         state.fileId = '';
         state.multipartParts = [];
+        state.currentMultipartInit = null;
         els.fileSizeText.textContent = state.file ? formatBytes(state.file.size) : '-';
         els.md5Text.textContent = '-';
         els.uploadIdText.textContent = '-';
         els.fileIdText.textContent = '-';
         setProgress(els.hashBar, 0);
         setProgress(els.uploadBar, 0);
+        renderPartTable();
         if (state.file) {
             log('已选择文件：' + state.file.name + '，大小：' + formatBytes(state.file.size));
         }
@@ -442,6 +487,14 @@
 
     els.partsButton.addEventListener('click', function () {
         runGuarded(listParts);
+    });
+
+    els.resumeButton.addEventListener('click', function () {
+        runGuarded(resumeMultipart);
+    });
+
+    els.retryButton.addEventListener('click', function () {
+        runGuarded(retryFailedParts);
     });
 
     els.abortButton.addEventListener('click', function () {
@@ -507,8 +560,10 @@
         }
         state.uploadId = init.uploadId;
         state.fileId = init.fileId;
-        state.multipartParts = init.parts || [];
+        state.currentMultipartInit = init;
+        state.multipartParts = prepareParts(init.parts || []);
         renderIds();
+        renderPartTable();
         await uploadParts(file, init);
         setStatus('合并分片', '');
         var completed = await postJson('/api/files/multipart/' + encodeURIComponent(init.uploadId) + '/complete');
@@ -539,9 +594,52 @@
         }
         var result = await getJson('/api/files/multipart/' + encodeURIComponent(state.uploadId) + '/parts');
         logJson('分片进度响应', result);
-        if (result.partCount) {
-            setProgress(els.uploadBar, (result.uploadedParts.length / result.partCount) * 100);
+        updatePartProgress(result);
+        renderPartTable();
+    }
+
+    async function resumeMultipart() {
+        if (!state.uploadId) {
+            throw new Error('当前没有 uploadId');
         }
+        var file = requireFile();
+        if (!state.currentMultipartInit) {
+            throw new Error('当前没有可恢复的分片元数据，请重新初始化上传');
+        }
+        var result = await getJson('/api/files/multipart/' + encodeURIComponent(state.uploadId) + '/parts');
+        logJson('继续上传前的分片状态', result);
+        updatePartProgress(result);
+        await uploadParts(file, state.currentMultipartInit, result.uploadedParts || []);
+        setStatus('合并分片', '');
+        var completed = await postJson('/api/files/multipart/' + encodeURIComponent(state.uploadId) + '/complete');
+        logJson('分片完成响应', completed);
+        markCompleted(completed.fileId, completed);
+        await loadFiles();
+    }
+
+    async function retryFailedParts() {
+        if (!state.uploadId) {
+            throw new Error('当前没有 uploadId');
+        }
+        var file = requireFile();
+        if (!state.currentMultipartInit) {
+            throw new Error('当前没有分片元数据');
+        }
+        var failedParts = state.multipartParts.filter(function (part) {
+            return part.status === 'failed';
+        });
+        if (!failedParts.length) {
+            throw new Error('当前没有失败分片');
+        }
+        await uploadParts(file, state.currentMultipartInit, state.currentMultipartInit.parts
+                .filter(function (part) {
+                    return failedParts.some(function (failed) {
+                        return failed.partNumber === part.partNumber;
+                    }) === false;
+                })
+                .map(function (part) {
+                    return part.partNumber;
+                }));
     }
 
     async function abortMultipart() {
@@ -553,20 +651,35 @@
         setStatus('已取消', 'warn');
     }
 
-    async function uploadParts(file, init) {
+    async function uploadParts(file, init, uploadedPartNumbers) {
         var parts = init.parts || [];
         if (!parts.length) {
             throw new Error('后端没有返回分片上传地址');
         }
-        var uploadedBytes = 0;
+        var uploadedMap = {};
+        (uploadedPartNumbers || []).forEach(function (partNumber) {
+            uploadedMap[partNumber] = true;
+        });
+        var uploadedBytes = parts.reduce(function (sum, part) {
+            return sum + (uploadedMap[part.partNumber] ? part.expectedSize : 0);
+        }, 0);
         var concurrency = normalizeConcurrency();
-        setProgress(els.uploadBar, 0);
+        setProgress(els.uploadBar, (uploadedBytes / file.size) * 100);
         setStatus('上传分片', '');
-        await runPool(parts, concurrency, async function (part) {
+        await runPool(parts.filter(function (part) {
+            return !uploadedMap[part.partNumber];
+        }), concurrency, async function (part) {
             var start = (part.partNumber - 1) * init.partSize;
             var end = start + part.expectedSize;
             var blob = file.slice(start, end);
-            await putObject(part.uploadUrl, blob);
+            updatePartState(part.partNumber, 'uploading');
+            try {
+                await putObject(part.uploadUrl, blob);
+                updatePartState(part.partNumber, 'done');
+            } catch (error) {
+                updatePartState(part.partNumber, 'failed', error.message);
+                throw error;
+            }
             uploadedBytes += part.expectedSize;
             setProgress(els.uploadBar, (uploadedBytes / file.size) * 100);
             log('分片上传完成：' + part.partNumber + '/' + init.partCount + '，大小：' + formatBytes(part.expectedSize));
@@ -780,6 +893,116 @@
         setStatus('完成', 'ok');
     }
 
+    function prepareParts(parts) {
+        return (parts || []).map(function (part) {
+            return {
+                partNumber: part.partNumber,
+                expectedSize: part.expectedSize,
+                uploadUrl: part.uploadUrl,
+                status: 'pending',
+                errorMessage: ''
+            };
+        });
+    }
+
+    function updatePartProgress(result) {
+        var uploaded = {};
+        (result.uploadedParts || []).forEach(function (partNumber) {
+            uploaded[partNumber] = true;
+        });
+        state.multipartParts = (state.currentMultipartInit && state.currentMultipartInit.parts
+                ? state.currentMultipartInit.parts
+                : []).map(function (part) {
+            return {
+                partNumber: part.partNumber,
+                expectedSize: part.expectedSize,
+                uploadUrl: part.uploadUrl,
+                status: uploaded[part.partNumber] ? 'done' : 'pending',
+                errorMessage: ''
+            };
+        });
+        if (result.partCount) {
+            setProgress(els.uploadBar, (Object.keys(uploaded).length / result.partCount) * 100);
+        }
+    }
+
+    function updatePartState(partNumber, status, errorMessage) {
+        state.multipartParts = state.multipartParts.map(function (part) {
+            if (part.partNumber !== partNumber) {
+                return part;
+            }
+            return {
+                partNumber: part.partNumber,
+                expectedSize: part.expectedSize,
+                uploadUrl: part.uploadUrl,
+                status: status,
+                errorMessage: errorMessage || ''
+            };
+        });
+        renderPartTable();
+    }
+
+    function renderPartTable() {
+        if (!state.multipartParts.length) {
+            els.partTableBody.innerHTML = '<tr><td colspan="4">暂无分片</td></tr>';
+            return;
+        }
+        els.partTableBody.innerHTML = state.multipartParts.map(function (part) {
+            var statusClass = part.status === 'done' ? 'done' : (part.status === 'failed' ? 'failed' : '');
+            return '<tr>'
+                + '<td>Part ' + part.partNumber + '</td>'
+                + '<td>' + formatBytes(part.expectedSize || 0) + '</td>'
+                + '<td><span class="part-status ' + statusClass + '">' + escapeHtml(part.status || 'pending') + '</span>'
+                + (part.errorMessage ? '<div style="margin-top:4px;color:var(--bad);font-size:12px;">' + escapeHtml(part.errorMessage) + '</div>' : '')
+                + '</td>'
+                + '<td>'
+                + (part.status === 'failed'
+                        ? '<button class="link-button" data-part-retry="' + part.partNumber + '">重试</button>'
+                        : '-')
+                + '</td>'
+                + '</tr>';
+        }).join('');
+        Array.prototype.forEach.call(els.partTableBody.querySelectorAll('button[data-part-retry]'), function (button) {
+            button.addEventListener('click', function () {
+                var partNumber = parseInt(button.getAttribute('data-part-retry'), 10);
+                runGuarded(function () {
+                    return retrySinglePart(partNumber);
+                });
+            });
+        });
+    }
+
+    async function retrySinglePart(partNumber) {
+        if (!state.uploadId) {
+            throw new Error('当前没有 uploadId');
+        }
+        var file = requireFile();
+        if (!state.currentMultipartInit) {
+            throw new Error('当前没有分片元数据');
+        }
+        var part = findPart(partNumber);
+        if (!part) {
+            throw new Error('分片不存在');
+        }
+        var start = (part.partNumber - 1) * state.currentMultipartInit.partSize;
+        var end = start + part.expectedSize;
+        updatePartState(part.partNumber, 'uploading');
+        await putObject(part.uploadUrl, file.slice(start, end));
+        updatePartState(part.partNumber, 'done');
+    }
+
+    function findPart(partNumber) {
+        if (!state.currentMultipartInit || !state.currentMultipartInit.parts) {
+            return null;
+        }
+        for (var i = 0; i < state.currentMultipartInit.parts.length; i++) {
+            if (state.currentMultipartInit.parts[i].partNumber === partNumber) {
+                return state.currentMultipartInit.parts[i];
+            }
+        }
+        return null;
+    }
+
     function renderIds() {
         els.uploadIdText.textContent = state.uploadId || '-';
         els.fileIdText.textContent = state.fileId || '-';
@@ -799,6 +1022,8 @@
             els.instantButton,
             els.uploadButton,
             els.partsButton,
+            els.resumeButton,
+            els.retryButton,
             els.abortButton,
             els.pageButton
         ].forEach(function (button) {

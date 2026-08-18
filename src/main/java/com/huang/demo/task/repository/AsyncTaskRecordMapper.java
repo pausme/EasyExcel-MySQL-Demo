@@ -19,6 +19,10 @@ public interface AsyncTaskRecordMapper {
 
     Optional<AsyncTaskRecord> findByTaskId(@Param("taskId") String taskId);
 
+    long countActive();
+
+    long countActiveByOwner(@Param("ownerId") String ownerId);
+
     long countByOwner(@Param("ownerId") String ownerId,
                       @Param("taskType") String taskType,
                       @Param("status") String status);

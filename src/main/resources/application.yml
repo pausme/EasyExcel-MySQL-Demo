@@ -44,6 +44,8 @@ app:
     max-page-size: ${TASK_CENTER_MAX_PAGE_SIZE:100}
     default-owner-id: ${TASK_CENTER_DEFAULT_OWNER_ID:anonymous}
     max-retry-count: ${TASK_CENTER_MAX_RETRY_COUNT:3}
+    max-active-tasks-per-owner: ${TASK_CENTER_MAX_ACTIVE_TASKS_PER_OWNER:10}
+    max-active-tasks-total: ${TASK_CENTER_MAX_ACTIVE_TASKS_TOTAL:50}
     recovery-enabled: ${TASK_RECOVERY_ENABLED:true}
     worker-id: ${TASK_WORKER_ID:}
     recovery-heartbeat-timeout-seconds: ${TASK_RECOVERY_HEARTBEAT_TIMEOUT_SECONDS:120}
@@ -119,12 +121,17 @@ app:
     upload-task-retention-hours: ${DATA_CLEANUP_UPLOAD_TASK_RETENTION_HOURS:24}
     deleted-file-retention-hours: ${DATA_CLEANUP_DELETED_FILE_RETENTION_HOURS:24}
     import-stage-retention-hours: ${DATA_CLEANUP_IMPORT_STAGE_RETENTION_HOURS:24}
+    import-version-cleanup-enabled: ${DATA_CLEANUP_IMPORT_VERSION_CLEANUP_ENABLED:true}
+    import-version-retain-count: ${DATA_CLEANUP_IMPORT_VERSION_RETAIN_COUNT:2}
+    distributed-lock-enabled: ${DATA_CLEANUP_DISTRIBUTED_LOCK_ENABLED:true}
+    lock-key: ${DATA_CLEANUP_LOCK_KEY:cleanup:retention:lock}
+    lock-ttl-seconds: ${DATA_CLEANUP_LOCK_TTL_SECONDS:1800}
 
 management:
   endpoints:
     web:
       exposure:
-        include: health,info,metrics
+        include: health,info,metrics,prometheus
   endpoint:
     health:
       show-details: when_authorized

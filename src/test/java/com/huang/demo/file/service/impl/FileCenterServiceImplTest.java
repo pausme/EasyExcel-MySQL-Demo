@@ -263,6 +263,7 @@ class FileCenterServiceImplTest {
         Optional<String> downloadUrl = service.createDownloadUrl("file-1");
 
         assertTrue(!downloadUrl.isPresent());
+        verify(mapper).markDeleted("anonymous", "file-1");
         verify(storageService, org.mockito.Mockito.never()).createDownloadUrl(any(String.class), any(String.class));
     }
 

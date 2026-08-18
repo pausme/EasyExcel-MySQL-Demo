@@ -7,9 +7,11 @@ import com.huang.demo.task.api.dto.AsyncTaskPageResponse;
 import com.huang.demo.task.api.dto.AsyncTaskResponse;
 import com.huang.demo.task.config.TaskCenterProperties;
 import com.huang.demo.task.domain.entity.AsyncTaskRecord;
+import com.huang.demo.task.domain.model.AsyncTaskFailureType;
 import com.huang.demo.task.domain.model.AsyncTaskStatus;
 import com.huang.demo.task.domain.model.AsyncTaskType;
 import com.huang.demo.task.domain.model.CreateAsyncTaskCommand;
+import com.huang.demo.task.domain.model.MarkAsyncTaskFailedCommand;
 import com.huang.demo.task.monitor.TaskMetricsService;
 import com.huang.demo.task.repository.AsyncTaskRecordMapper;
 import com.huang.demo.task.service.TaskCenterService;
@@ -70,6 +72,7 @@ public class TaskCenterServiceImpl implements TaskCenterService {
         if (command == null) {
             throw new IllegalArgumentException("任务创建参数不能为空");
         }
+        validateTaskSubmissionQuota(normalizeOwnerId(command.getOwnerId()));
         LocalDateTime now = LocalDateTime.now();
         AsyncTaskRecord record = AsyncTaskRecord.builder()
                 .taskId(UUID.randomUUID().toString().replace("-", ""))
@@ -126,6 +129,9 @@ public class TaskCenterServiceImpl implements TaskCenterService {
         }
         LocalDateTime now = LocalDateTime.now();
         record.setStatus(AsyncTaskStatus.RUNNING.name());
+        record.setFailureType(null);
+        record.setRetryable(null);
+        record.setFailureSuggestion(null);
         record.setWorkerId(normalizeWorkerId(workerId));
         record.setLastHeartbeatAt(now);
         if (record.getStartedAt() == null) {
@@ -174,6 +180,9 @@ public class TaskCenterServiceImpl implements TaskCenterService {
         record.setProgressPercent(100);
         record.setResultPayload(resultPayload);
         record.setErrorMessage(null);
+        record.setFailureType(null);
+        record.setRetryable(null);
+        record.setFailureSuggestion(null);
         record.setLastHeartbeatAt(now);
         record.setUpdatedAt(now);
         record.setFinishedAt(now);
@@ -185,21 +194,70 @@ public class TaskCenterServiceImpl implements TaskCenterService {
     @Override
     @Transactional(rollbackFor = Exception.class)
     public AsyncTaskRecord markFailed(String taskId, String errorMessage) {
-        return markFailed(taskId, errorMessage, null);
+        return markFailed(MarkAsyncTaskFailedCommand.builder()
+                .taskId(taskId)
+                .errorMessage(errorMessage)
+                .failureType(AsyncTaskFailureType.SYSTEM_ERROR)
+                .retryable(true)
+                .failureSuggestion("可稍后重试；若持续失败，请查看服务端日志")
+                .build());
     }
 
     @Override
     @Transactional(rollbackFor = Exception.class)
     public AsyncTaskRecord markFailed(String taskId, String errorMessage, String resultPayload) {
-        AsyncTaskRecord record = findTaskRequired(taskId);
+        return markFailed(MarkAsyncTaskFailedCommand.builder()
+                .taskId(taskId)
+                .errorMessage(errorMessage)
+                .resultPayload(resultPayload)
+                .failureType(AsyncTaskFailureType.SYSTEM_ERROR)
+                .retryable(true)
+                .failureSuggestion("可稍后重试；若持续失败，请查看服务端日志")
+                .build());
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public AsyncTaskRecord markFailed(MarkAsyncTaskFailedCommand command) {
+        if (command == null) {
+            throw new IllegalArgumentException("任务失败参数不能为空");
+        }
+        AsyncTaskRecord record = findTaskRequired(command.getTaskId());
         record = refreshExpiredIfNecessary(record);
         if (isTerminalStatus(record.getStatus())) {
             return record;
         }
         LocalDateTime now = LocalDateTime.now();
         record.setStatus(AsyncTaskStatus.FAILED.name());
+        record.setErrorMessage(normalizeErrorMessage(command.getErrorMessage()));
+        record.setResultPayload(command.getResultPayload());
+        record.setFailureType(normalizeFailureType(command.getFailureType()));
+        record.setRetryable(normalizeRetryable(command.getRetryable(), command.getFailureType()));
+        record.setFailureSuggestion(normalizeFailureSuggestion(command.getFailureSuggestion()));
+        record.setLastHeartbeatAt(now);
+        record.setUpdatedAt(now);
+        record.setFinishedAt(now);
+        updateRequired(record);
+        taskMetricsService.recordStatusChanged(record);
+        return record;
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public AsyncTaskRecord markExpired(String taskId, String errorMessage, String failureSuggestion) {
+        AsyncTaskRecord record = findTaskRequired(taskId);
+        record = refreshExpiredIfNecessary(record);
+        if (AsyncTaskStatus.FAILED.name().equals(record.getStatus())
+                || AsyncTaskStatus.CANCELED.name().equals(record.getStatus())
+                || AsyncTaskStatus.EXPIRED.name().equals(record.getStatus())) {
+            return record;
+        }
+        LocalDateTime now = LocalDateTime.now();
+        record.setStatus(AsyncTaskStatus.EXPIRED.name());
         record.setErrorMessage(normalizeErrorMessage(errorMessage));
-        record.setResultPayload(resultPayload);
+        record.setFailureType(AsyncTaskFailureType.DEPENDENCY_ERROR.name());
+        record.setRetryable(true);
+        record.setFailureSuggestion(normalizeFailureSuggestion(failureSuggestion));
         record.setLastHeartbeatAt(now);
         record.setUpdatedAt(now);
         record.setFinishedAt(now);
@@ -222,10 +280,23 @@ public class TaskCenterServiceImpl implements TaskCenterService {
         record.setUpdatedAt(now);
         record.setFinishedAt(now);
         record.setErrorMessage("任务已取消");
+        record.setFailureType(AsyncTaskFailureType.CANCELED.name());
+        record.setRetryable(true);
+        record.setFailureSuggestion("如需继续处理，可重新发起重试");
         record.setLastHeartbeatAt(now);
         updateRequired(record);
         taskMetricsService.recordStatusChanged(record);
         return true;
+    }
+
+    @Override
+    public long countActiveTasks() {
+        return taskRecordMapper.countActive();
+    }
+
+    @Override
+    public long countActiveTasksByOwner(String ownerId) {
+        return taskRecordMapper.countActiveByOwner(normalizeOwnerId(ownerId));
     }
 
     @Override
@@ -245,6 +316,10 @@ public class TaskCenterServiceImpl implements TaskCenterService {
             throw new IllegalStateException("任务重试次数已达上限，retryCount=" + retryCount
                     + ", maxRetryCount=" + maxRetryCount);
         }
+        if (AsyncTaskStatus.FAILED.name().equals(record.getStatus())
+                && Boolean.FALSE.equals(record.getRetryable())) {
+            throw new IllegalStateException("当前任务失败类型不允许重试，failureType=" + record.getFailureType());
+        }
         LocalDateTime now = LocalDateTime.now();
         record.setStatus(AsyncTaskStatus.CREATED.name());
         record.setProgressPercent(0);
@@ -254,6 +329,9 @@ public class TaskCenterServiceImpl implements TaskCenterService {
         record.setMaxRetryCount(maxRetryCount);
         record.setResultPayload(null);
         record.setErrorMessage(null);
+        record.setFailureType(null);
+        record.setRetryable(null);
+        record.setFailureSuggestion(null);
         record.setStartedAt(null);
         record.setFinishedAt(null);
         record.setWorkerId(null);
@@ -443,6 +521,17 @@ public class TaskCenterServiceImpl implements TaskCenterService {
         }
     }
 
+    private void validateTaskSubmissionQuota(String ownerId) {
+        int maxActiveTasksPerOwner = Math.max(0, properties.getMaxActiveTasksPerOwner());
+        if (maxActiveTasksPerOwner > 0 && countActiveTasksByOwner(ownerId) >= maxActiveTasksPerOwner) {
+            throw new IllegalStateException("当前用户的活跃任务过多，请稍后重试");
+        }
+        int maxActiveTasksTotal = Math.max(0, properties.getMaxActiveTasksTotal());
+        if (maxActiveTasksTotal > 0 && countActiveTasks() >= maxActiveTasksTotal) {
+            throw new IllegalStateException("系统活跃任务过多，请稍后重试");
+        }
+    }
+
     private boolean isActiveStatus(String status) {
         return AsyncTaskStatus.CREATED.name().equals(status) || AsyncTaskStatus.RUNNING.name().equals(status);
     }
@@ -572,5 +661,32 @@ public class TaskCenterServiceImpl implements TaskCenterService {
         }
         String normalized = errorMessage.trim();
         return normalized.length() > 1024 ? normalized.substring(0, 1024) : normalized;
+    }
+
+    private String normalizeFailureType(AsyncTaskFailureType failureType) {
+        if (failureType == null) {
+            return AsyncTaskFailureType.SYSTEM_ERROR.name();
+        }
+        return failureType.name();
+    }
+
+    private Boolean normalizeRetryable(Boolean retryable, AsyncTaskFailureType failureType) {
+        if (retryable != null) {
+            return retryable;
+        }
+        if (failureType == AsyncTaskFailureType.VALIDATION_ERROR
+                || failureType == AsyncTaskFailureType.RESOURCE_LIMIT
+                || failureType == AsyncTaskFailureType.CANCELED) {
+            return Boolean.FALSE;
+        }
+        return Boolean.TRUE;
+    }
+
+    private String normalizeFailureSuggestion(String suggestion) {
+        if (suggestion == null || suggestion.trim().isEmpty()) {
+            return null;
+        }
+        String normalized = suggestion.trim();
+        return normalized.length() > 512 ? normalized.substring(0, 512) : normalized;
     }
 }

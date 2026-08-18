@@ -1,5 +1,6 @@
 package com.huang.demo.excel.controller;
 
+import com.huang.demo.excel.api.dto.ImportErrorPreviewResponse;
 import com.huang.demo.excel.api.dto.ExportTaskResponse;
 import com.huang.demo.excel.api.dto.ImportTaskResponse;
 import com.huang.demo.excel.config.ExcelDemoProperties;
@@ -83,8 +84,13 @@ public class ExcelDemoController {
 
     @ApiOperation("提交学生数据导出任务")
     @PostMapping("/export")
-    public ExportTaskResponse submitExport(HttpServletRequest request) {
-        return ExportTaskResponse.from(exportTaskService.submitExport(taskOwnerResolver.resolve(request)));
+    public ExportTaskResponse submitExport(@RequestParam(value = "format", required = false) String format,
+                                           HttpServletRequest request) {
+        try {
+            return ExportTaskResponse.from(exportTaskService.submitExport(taskOwnerResolver.resolve(request), format));
+        } catch (IllegalArgumentException ex) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, ex.getMessage(), ex);
+        }
     }
 
     @ApiOperation("查询学生数据导出任务状态")
@@ -153,6 +159,16 @@ public class ExcelDemoController {
         return ResponseEntity.status(HttpStatus.FOUND)
                 .location(URI.create(downloadUrl))
                 .build();
+    }
+
+    @ApiOperation("预览学生数据导入错误明细")
+    @GetMapping("/import/{taskId}/errors")
+    public ImportErrorPreviewResponse previewImportErrors(@PathVariable("taskId") String taskId,
+                                                          @RequestParam(value = "limit", required = false, defaultValue = "20") int limit,
+                                                          HttpServletRequest request) {
+        return studentImportTaskService.previewImportErrors(taskId, taskOwnerResolver.resolve(request), limit)
+                .orElseThrow(() -> new ResponseStatusException(
+                        org.springframework.http.HttpStatus.NOT_FOUND, "导入错误明细不存在"));
     }
 
     private void setExcelDownloadHeaders(HttpServletResponse response, String fileName) throws IOException {

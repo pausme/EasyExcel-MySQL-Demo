@@ -1,9 +1,12 @@
 package com.huang.demo.excel.controller;
 
+import com.huang.demo.excel.api.dto.ExportTaskResponse;
+import com.huang.demo.excel.api.dto.ImportErrorPreviewResponse;
 import com.huang.demo.excel.api.dto.ImportTaskResponse;
 import com.huang.demo.excel.config.ExcelDemoProperties;
 import com.huang.demo.excel.domain.model.ExportTask;
 import com.huang.demo.excel.domain.model.ExportTaskStatus;
+import com.huang.demo.excel.domain.model.StudentExportFormat;
 import com.huang.demo.excel.service.ExportTaskService;
 import com.huang.demo.excel.service.StudentImportTaskService;
 import com.huang.demo.excel.service.StudentService;
@@ -24,6 +27,7 @@ import org.springframework.web.server.ResponseStatusException;
 import javax.servlet.http.HttpServletRequest;
 import java.net.URI;
 import java.time.LocalDateTime;
+import java.util.Collections;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -58,6 +62,24 @@ class ExcelDemoControllerTest {
         controller = new ExcelDemoController(
                 studentService, new ExcelDemoProperties(), exportTaskService, studentImportTaskService, taskOwnerResolver);
         when(taskOwnerResolver.resolve(request)).thenReturn("anonymous");
+    }
+
+    @Test
+    void submitExportPassesRequestedFormat() {
+        ExportTask task = ExportTask.builder()
+                .taskId("task-1")
+                .ownerId("anonymous")
+                .status(ExportTaskStatus.QUEUED)
+                .format(StudentExportFormat.CSV)
+                .fileName("student-demo-task-1.csv")
+                .build();
+        when(exportTaskService.submitExport("anonymous", "CSV")).thenReturn(task);
+
+        ExportTaskResponse response = controller.submitExport("CSV", request);
+
+        assertEquals("task-1", response.getTaskId());
+        assertEquals(StudentExportFormat.CSV, response.getFormat());
+        verify(exportTaskService).submitExport("anonymous", "CSV");
     }
 
     @Test
@@ -153,5 +175,23 @@ class ExcelDemoControllerTest {
 
         assertEquals(HttpStatus.FOUND, response.getStatusCode());
         assertEquals(URI.create(downloadUrl), response.getHeaders().getLocation());
+    }
+
+    @Test
+    void previewImportErrorsReturnsRows() {
+        ImportErrorPreviewResponse expected = ImportErrorPreviewResponse.builder()
+                .taskId("task-1")
+                .errorCount(1)
+                .hasErrorFile(true)
+                .errorSummary(Collections.singletonMap("学号不能为空", 1))
+                .rows(Collections.emptyList())
+                .build();
+        when(studentImportTaskService.previewImportErrors("task-1", "anonymous", 10))
+                .thenReturn(Optional.of(expected));
+
+        ImportErrorPreviewResponse response = controller.previewImportErrors("task-1", 10, request);
+
+        assertEquals("task-1", response.getTaskId());
+        assertEquals(Integer.valueOf(1), response.getErrorSummary().get("学号不能为空"));
     }
 }

@@ -3,6 +3,7 @@ package com.huang.demo.excel.service.impl;
 import com.alibaba.excel.EasyExcel;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.huang.demo.excel.api.dto.ImportErrorPreviewResponse;
 import com.huang.demo.excel.api.dto.ImportTaskResponse;
 import com.huang.demo.excel.config.ExcelDemoProperties;
 import com.huang.demo.excel.config.MinioProperties;
@@ -17,9 +18,11 @@ import com.huang.demo.excel.service.StudentImportTaskService;
 import com.huang.demo.excel.service.StudentService;
 import com.huang.demo.task.api.dto.AsyncTaskResponse;
 import com.huang.demo.task.domain.entity.AsyncTaskRecord;
+import com.huang.demo.task.domain.model.AsyncTaskFailureType;
 import com.huang.demo.task.domain.model.AsyncTaskStatus;
 import com.huang.demo.task.domain.model.AsyncTaskType;
 import com.huang.demo.task.domain.model.CreateAsyncTaskCommand;
+import com.huang.demo.task.domain.model.MarkAsyncTaskFailedCommand;
 import com.huang.demo.task.domain.model.TaskCanceledException;
 import com.huang.demo.task.service.TaskCenterService;
 import com.huang.demo.task.service.TaskRecoveryHandler;
@@ -43,7 +46,11 @@ import java.nio.file.Paths;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -56,6 +63,8 @@ public class StudentImportTaskServiceImpl implements StudentImportTaskService, T
     private static final Logger log = LoggerFactory.getLogger(StudentImportTaskServiceImpl.class);
     private static final int MIN_IMPORT_BATCH_SIZE = 500;
     private static final int MAX_IMPORT_BATCH_SIZE = 5000;
+    private static final int DEFAULT_ERROR_PREVIEW_LIMIT = 20;
+    private static final int MAX_ERROR_PREVIEW_LIMIT = 100;
     private static final int MAX_XLSX_ENTRY_SCAN_COUNT = 512;
     private static final int XLSX_SCAN_BUFFER_SIZE = 8192;
     private static final String XLSX_CONTENT_TYPES_ENTRY = "[Content_Types].xml";
@@ -126,7 +135,8 @@ public class StudentImportTaskServiceImpl implements StudentImportTaskService, T
         try {
             submitExecution(task.getTaskId());
         } catch (RuntimeException ex) {
-            task = taskCenterService.markFailed(task.getTaskId(), "导入任务提交失败");
+            task = taskCenterService.markFailed(retryableFailure(task.getTaskId(),
+                    "导入任务提交失败", AsyncTaskFailureType.SYSTEM_ERROR, "导入任务未进入后台执行队列，可稍后重试"));
             log.error("submit import task failed, taskId={}", task.getTaskId(), ex);
         }
         return task;
@@ -143,7 +153,8 @@ public class StudentImportTaskServiceImpl implements StudentImportTaskService, T
         try {
             submitExecution(retriedTask.getTaskId());
         } catch (RuntimeException ex) {
-            retriedTask = taskCenterService.markFailed(retriedTask.getTaskId(), "导入任务提交失败");
+            retriedTask = taskCenterService.markFailed(retryableFailure(retriedTask.getTaskId(),
+                    "导入任务提交失败", AsyncTaskFailureType.SYSTEM_ERROR, "导入任务未进入后台执行队列，可稍后重试"));
             log.error("retry import task submit failed, taskId={}", retriedTask.getTaskId(), ex);
         }
         return retriedTask;
@@ -152,7 +163,10 @@ public class StudentImportTaskServiceImpl implements StudentImportTaskService, T
     @Override
     public void recover(AsyncTaskRecord task) {
         if (!properties.isImportAutoRecoveryEnabled()) {
-            taskCenterService.markFailed(task.getTaskId(), "导入任务执行节点异常退出，请重新提交导入任务");
+            taskCenterService.markFailed(retryableFailure(task.getTaskId(),
+                    "导入任务执行节点异常退出，请重新提交导入任务",
+                    AsyncTaskFailureType.SYSTEM_ERROR,
+                    "当前未启用自动恢复，可手动重试任务"));
             log.warn("import task recovery disabled, taskId={}", task.getTaskId());
             return;
         }
@@ -166,6 +180,16 @@ public class StudentImportTaskServiceImpl implements StudentImportTaskService, T
                 .filter(task -> normalizeOwnerId(ownerId).equals(task.getOwnerId()))
                 .map(task -> ImportTaskResponse.from(
                         AsyncTaskResponse.from(task), readResult(task.getResultPayload())));
+    }
+
+    @Override
+    public Optional<ImportErrorPreviewResponse> previewImportErrors(String taskId, String ownerId, int limit) {
+        int safeLimit = normalizeErrorPreviewLimit(limit);
+        return taskCenterService.findTask(taskId)
+                .filter(task -> AsyncTaskType.IMPORT.name().equals(task.getTaskType()))
+                .filter(task -> normalizeOwnerId(ownerId).equals(task.getOwnerId()))
+                .map(task -> ImportErrorPreviewResponse.from(
+                        task.getTaskId(), readResult(task.getResultPayload()), safeLimit));
     }
 
     @Override
@@ -185,6 +209,11 @@ public class StudentImportTaskServiceImpl implements StudentImportTaskService, T
             return Optional.of(minioObjectStorageService.createDownloadUrl(
                     result.getErrorObjectKey(), result.getErrorFileName()));
         } catch (RuntimeException ex) {
+            if (isMissingImportErrorObject(ex)) {
+                taskCenterService.markExpired(taskOptional.get().getTaskId(),
+                        "导入错误文件不存在或已过期",
+                        "导入错误文件已被清理，可重新提交导入任务");
+            }
             log.warn("create import error file download url failed, taskId={}, objectKey={}",
                     taskOptional.get().getTaskId(), result.getErrorObjectKey(), ex);
             return Optional.empty();
@@ -226,8 +255,9 @@ public class StudentImportTaskServiceImpl implements StudentImportTaskService, T
             log.info("import task validation failed, taskId={}, errorRows={}, elapsedMs={}",
                     taskId, ex.getErrorRows().size(), System.currentTimeMillis() - start);
         } catch (Exception ex) {
-            taskCenterService.markFailed(taskId,
-                    ex.getMessage() == null ? "导入失败，请查看服务端日志" : ex.getMessage());
+            taskCenterService.markFailed(retryableFailure(taskId,
+                    ex.getMessage() == null ? "导入失败，请查看服务端日志" : ex.getMessage(),
+                    classifySystemFailure(ex), "可稍后重试；若持续失败，请检查数据库、MinIO 或服务端日志"));
             log.error("import task failed, taskId={}, elapsedMs={}", taskId, System.currentTimeMillis() - start, ex);
         }
     }
@@ -235,11 +265,53 @@ public class StudentImportTaskServiceImpl implements StudentImportTaskService, T
     private void markValidationFailed(String taskId, StudentImportValidationException exception) {
         try {
             StudentImportTaskResult result = writeAndUploadErrorFile(taskId, exception.getErrorRows());
-            taskCenterService.markFailed(taskId, exception.getMessage(), toJson(result));
+            taskCenterService.markFailed(MarkAsyncTaskFailedCommand.builder()
+                    .taskId(taskId)
+                    .errorMessage(exception.getMessage())
+                    .resultPayload(toJson(result))
+                    .failureType(AsyncTaskFailureType.VALIDATION_ERROR)
+                    .retryable(false)
+                    .failureSuggestion("请下载错误明细，修正 Excel 后重新提交导入")
+                    .build());
         } catch (RuntimeException ex) {
-            taskCenterService.markFailed(taskId, exception.getMessage());
+            taskCenterService.markFailed(MarkAsyncTaskFailedCommand.builder()
+                    .taskId(taskId)
+                    .errorMessage(exception.getMessage())
+                    .failureType(AsyncTaskFailureType.VALIDATION_ERROR)
+                    .retryable(false)
+                    .failureSuggestion("请根据接口返回的错误信息修正 Excel 后重新提交导入")
+                    .build());
             log.error("write import validation error file failed, taskId={}", taskId, ex);
         }
+    }
+
+    private MarkAsyncTaskFailedCommand retryableFailure(String taskId,
+                                                        String errorMessage,
+                                                        AsyncTaskFailureType failureType,
+                                                        String suggestion) {
+        return MarkAsyncTaskFailedCommand.builder()
+                .taskId(taskId)
+                .errorMessage(errorMessage)
+                .failureType(failureType)
+                .retryable(true)
+                .failureSuggestion(suggestion)
+                .build();
+    }
+
+    private AsyncTaskFailureType classifySystemFailure(Exception ex) {
+        String message = ex.getMessage();
+        if (message != null && (message.contains("MinIO") || message.contains("文件不存在") || message.contains("已过期"))) {
+            return AsyncTaskFailureType.DEPENDENCY_ERROR;
+        }
+        if (message != null && (message.contains("超过限制") || message.contains("线程池繁忙") || message.contains("超时"))) {
+            return AsyncTaskFailureType.RESOURCE_LIMIT;
+        }
+        return AsyncTaskFailureType.SYSTEM_ERROR;
+    }
+
+    private boolean isMissingImportErrorObject(RuntimeException ex) {
+        String message = ex.getMessage();
+        return message != null && message.contains("MinIO 文件不存在或已过期");
     }
 
     private StudentImportTaskResult writeAndUploadErrorFile(String taskId, java.util.List<StudentImportErrorRow> errorRows) {
@@ -256,12 +328,54 @@ public class StudentImportTaskServiceImpl implements StudentImportTaskService, T
                     .errorCount(errorRows == null ? 0 : errorRows.size())
                     .errorFileName(errorFileName)
                     .errorObjectKey(errorObjectKey)
+                    .errorSummary(buildErrorSummary(errorRows))
+                    .errorPreviewRows(buildErrorPreviewRows(errorRows))
                     .build();
         } catch (IOException ex) {
             throw new IllegalStateException("创建导入错误文件失败", ex);
         } finally {
             deleteTemporaryFileQuietly(errorFilePath);
         }
+    }
+
+    private int normalizeErrorPreviewLimit(int limit) {
+        if (limit <= 0) {
+            return DEFAULT_ERROR_PREVIEW_LIMIT;
+        }
+        return Math.min(limit, MAX_ERROR_PREVIEW_LIMIT);
+    }
+
+    private Map<String, Integer> buildErrorSummary(List<StudentImportErrorRow> errorRows) {
+        Map<String, Integer> result = new LinkedHashMap<String, Integer>();
+        if (errorRows == null || errorRows.isEmpty()) {
+            return result;
+        }
+        for (StudentImportErrorRow errorRow : errorRows) {
+            String message = errorRow == null ? null : errorRow.getErrorMessage();
+            if (message == null || message.trim().isEmpty()) {
+                incrementErrorSummary(result, "UNKNOWN");
+                continue;
+            }
+            String[] parts = message.split("[;；]");
+            for (String part : parts) {
+                String normalized = part == null ? "" : part.trim();
+                incrementErrorSummary(result, normalized.isEmpty() ? "UNKNOWN" : normalized);
+            }
+        }
+        return result;
+    }
+
+    private void incrementErrorSummary(Map<String, Integer> result, String errorType) {
+        Integer count = result.get(errorType);
+        result.put(errorType, count == null ? 1 : count + 1);
+    }
+
+    private List<StudentImportErrorRow> buildErrorPreviewRows(List<StudentImportErrorRow> errorRows) {
+        if (errorRows == null || errorRows.isEmpty()) {
+            return new ArrayList<StudentImportErrorRow>();
+        }
+        int previewSize = Math.min(errorRows.size(), MAX_ERROR_PREVIEW_LIMIT);
+        return new ArrayList<StudentImportErrorRow>(errorRows.subList(0, previewSize));
     }
 
     private void validateFile(MultipartFile file) {

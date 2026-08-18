@@ -25,11 +25,13 @@ import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
@@ -158,7 +160,51 @@ class StudentServiceImplTest {
 
             assertTrue(exception.getErrorRows().get(0).getErrorMessage().contains("重复"));
             verify(studentMapper, never()).mergeImportStageToStudent(anyString());
-            verify(studentMapper, never()).mergeImportStageRangeToStudent(anyString(), anyInt(), anyInt());
+            verify(studentMapper, never()).mergeImportStageRangeToStudent(anyString(), anyInt(), anyInt(), anyLong());
+            verify(studentMapper).deleteImportStage(anyString());
+        } finally {
+            executor.shutdown();
+        }
+    }
+
+    @Test
+    void importExcelTreatsBlankStudentNoAsValidationError() {
+        ExcelDemoProperties properties = new ExcelDemoProperties();
+        properties.setImportMaxConcurrentTasks(1);
+        properties.setImportWorkerCount(1);
+        properties.setImportQueueCapacity(2);
+        properties.setImportBatchSize(2);
+        properties.setInsertBatchSize(2);
+        properties.setImportWorkerFinishWaitSeconds(5);
+        StudentMapper studentMapper = mock(StudentMapper.class);
+        List<StudentImportStageRecord> stagedRows = new CopyOnWriteArrayList<StudentImportStageRecord>();
+        doAnswer(invocation -> {
+            List<StudentImportStageRecord> rows = invocation.getArgument(0);
+            stagedRows.addAll(rows);
+            return null;
+        }).when(studentMapper).saveImportStageBatch(any());
+        when(studentMapper.countImportStageRows(anyString())).thenAnswer(invocation -> stagedRows.size());
+        when(studentMapper.listInvalidImportStageRows(anyString())).thenAnswer(invocation -> stagedRows);
+        when(studentMapper.listDuplicateImportStageStudentNoRows(anyString())).thenReturn(Collections.emptyList());
+
+        ThreadPoolTaskExecutor executor = newImportWorkerExecutor();
+        try {
+            StudentServiceImpl studentService = new StudentServiceImpl(
+                    studentMapper,
+                    properties,
+                    new ImmediateTransactionManager(),
+                    executor);
+
+            StudentImportValidationException exception = assertThrows(
+                    StudentImportValidationException.class,
+                    () -> studentService.importExcel(new ByteArrayInputStream(buildBlankStudentNoExcel()), 2));
+
+            assertTrue(exception.getMessage().contains("errorRows=1"));
+            assertEquals(1, exception.getErrorRows().size());
+            assertTrue(exception.getErrorRows().get(0).getErrorMessage().contains("学号不能为空"));
+            assertTrue(exception.getErrorRows().get(0).getErrorMessage().contains("姓名不能为空"));
+            verify(studentMapper, never()).mergeImportStageToStudent(anyString());
+            verify(studentMapper, never()).mergeImportStageRangeToStudent(anyString(), anyInt(), anyInt(), anyLong());
             verify(studentMapper).deleteImportStage(anyString());
         } finally {
             executor.shutdown();
@@ -185,8 +231,10 @@ class StudentServiceImplTest {
         when(studentMapper.countImportStageRows(anyString())).thenAnswer(invocation -> stagedRows.size());
         when(studentMapper.listInvalidImportStageRows(anyString())).thenReturn(Collections.emptyList());
         when(studentMapper.listDuplicateImportStageStudentNoRows(anyString())).thenReturn(Collections.emptyList());
-        when(studentMapper.mergeImportStageRangeToStudent(anyString(), anyInt(), anyInt()))
+        when(studentMapper.currentStudentVersion()).thenReturn(100L);
+        when(studentMapper.mergeImportStageRangeToStudent(anyString(), anyInt(), anyInt(), anyLong()))
                 .thenReturn(2);
+        when(studentMapper.promoteStudentVersion(eq(100L), anyLong())).thenReturn(1);
 
         ThreadPoolTaskExecutor executor = newImportWorkerExecutor();
         try {
@@ -198,11 +246,58 @@ class StudentServiceImplTest {
 
             studentService.importExcel(new ByteArrayInputStream(buildStudentExcel(5)), 2);
 
-            verify(studentMapper, times(3)).mergeImportStageRangeToStudent(anyString(), anyInt(), anyInt());
-            verify(studentMapper).mergeImportStageRangeToStudent(anyString(), eq(1), eq(2));
-            verify(studentMapper).mergeImportStageRangeToStudent(anyString(), eq(3), eq(4));
-            verify(studentMapper).mergeImportStageRangeToStudent(anyString(), eq(5), eq(5));
+            verify(studentMapper, times(3)).mergeImportStageRangeToStudent(anyString(), anyInt(), anyInt(), anyLong());
+            verify(studentMapper).mergeImportStageRangeToStudent(anyString(), eq(1), eq(2), anyLong());
+            verify(studentMapper).mergeImportStageRangeToStudent(anyString(), eq(3), eq(4), anyLong());
+            verify(studentMapper).mergeImportStageRangeToStudent(anyString(), eq(5), eq(5), anyLong());
+            verify(studentMapper).promoteStudentVersion(eq(100L), anyLong());
             verify(studentMapper, never()).mergeImportStageToStudent(anyString());
+            verify(studentMapper).deleteImportStage(anyString());
+        } finally {
+            executor.shutdown();
+        }
+    }
+
+    @Test
+    void importExcelDeletesUnpublishedRowsWhenVersionPromotionFails() {
+        ExcelDemoProperties properties = new ExcelDemoProperties();
+        properties.setImportMaxConcurrentTasks(1);
+        properties.setImportWorkerCount(1);
+        properties.setImportQueueCapacity(2);
+        properties.setImportBatchSize(2);
+        properties.setInsertBatchSize(2);
+        properties.setImportMergeChunkSize(2);
+        properties.setImportWorkerFinishWaitSeconds(5);
+        StudentMapper studentMapper = mock(StudentMapper.class);
+        List<StudentImportStageRecord> stagedRows = new CopyOnWriteArrayList<StudentImportStageRecord>();
+        doAnswer(invocation -> {
+            List<StudentImportStageRecord> rows = invocation.getArgument(0);
+            stagedRows.addAll(rows);
+            return null;
+        }).when(studentMapper).saveImportStageBatch(any());
+        when(studentMapper.countImportStageRows(anyString())).thenAnswer(invocation -> stagedRows.size());
+        when(studentMapper.listInvalidImportStageRows(anyString())).thenReturn(Collections.emptyList());
+        when(studentMapper.listDuplicateImportStageStudentNoRows(anyString())).thenReturn(Collections.emptyList());
+        when(studentMapper.currentStudentVersion()).thenReturn(100L);
+        when(studentMapper.mergeImportStageRangeToStudent(anyString(), anyInt(), anyInt(), anyLong()))
+                .thenReturn(2);
+        when(studentMapper.promoteStudentVersion(eq(100L), anyLong())).thenReturn(0);
+        when(studentMapper.deleteStudentRowsByImportTaskId(anyString())).thenReturn(2);
+
+        ThreadPoolTaskExecutor executor = newImportWorkerExecutor();
+        try {
+            StudentServiceImpl studentService = new StudentServiceImpl(
+                    studentMapper,
+                    properties,
+                    new ImmediateTransactionManager(),
+                    executor);
+
+            IllegalStateException exception = assertThrows(
+                    IllegalStateException.class,
+                    () -> studentService.importExcel(new ByteArrayInputStream(buildStudentExcel(2)), 2));
+
+            assertTrue(exception.getMessage().contains("导入版本发布失败"));
+            verify(studentMapper).deleteStudentRowsByImportTaskId(anyString());
             verify(studentMapper).deleteImportStage(anyString());
         } finally {
             executor.shutdown();
@@ -261,6 +356,23 @@ class StudentServiceImplTest {
                                 .className("二班")
                                 .email("s001-b@example.com")
                                 .birthday("2000-01-02")
+                        .build()));
+        return outputStream.toByteArray();
+    }
+
+    private byte[] buildBlankStudentNoExcel() {
+        ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
+        EasyExcel.write(outputStream, StudentExcelRow.class)
+                .sheet("学生数据")
+                .doWrite(Collections.singletonList(
+                        StudentExcelRow.builder()
+                                .studentNo("")
+                                .name("")
+                                .age(18)
+                                .gender("男")
+                                .className("一班")
+                                .email("student@example.com")
+                                .birthday("2000-01-01")
                                 .build()));
         return outputStream.toByteArray();
     }

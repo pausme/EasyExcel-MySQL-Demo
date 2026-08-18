@@ -2,6 +2,7 @@ package com.huang.demo.excel.api.dto;
 
 import com.huang.demo.excel.domain.model.ExportTask;
 import com.huang.demo.excel.domain.model.ExportTaskStatus;
+import com.huang.demo.excel.domain.model.StudentExportFormat;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -35,7 +36,17 @@ public class ExportTaskResponse {
 
     private String fileName;
 
+    private StudentExportFormat format;
+
     private String errorMessage;
+
+    private String failureType;
+
+    private Boolean retryable;
+
+    private String failureSuggestion;
+
+    private Boolean canRetry;
 
     private LocalDateTime createdAt;
 
@@ -53,7 +64,12 @@ public class ExportTaskResponse {
                 .retryCount(task.getRetryCount())
                 .maxRetryCount(task.getMaxRetryCount())
                 .fileName(task.getFileName())
+                .format(task.getFormat())
                 .errorMessage(task.getErrorMessage())
+                .failureType(task.getFailureType())
+                .retryable(task.getRetryable())
+                .failureSuggestion(task.getFailureSuggestion())
+                .canRetry(task.getCanRetry())
                 .createdAt(task.getCreatedAt())
                 .finishedAt(task.getFinishedAt())
                 .build();
