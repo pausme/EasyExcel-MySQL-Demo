@@ -267,6 +267,15 @@ mvn test
 mvn spring-boot:run
 ```
 
+### CI/CD
+
+仓库提供两条 GitHub Actions 工作流：
+
+- `.github/workflows/ci.yml`：push 或 PR 到 `main` 时自动执行 `git diff --check` 和 `mvn -B test`，并上传 surefire 测试报告。
+- `.github/workflows/integration.yml`：支持手动触发和每周定时触发，使用 `docker-compose-test.yml` 启动 MySQL、Redis、MinIO，再执行 `scripts/run_integration_tests.sh` 跑真实依赖接口闭环。
+
+集成测试失败时，可在 Actions 产物中下载 `target/integration-test/`、`target/surefire-reports/` 和 `docs/test/live-test-results.json` 排查。工作流只使用隔离测试账号和本地容器地址，不写入真实服务器地址、Token 或密钥。
+
 大文件导入的 multipart 限制默认是 200MB：
 
 ```bash

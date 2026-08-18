@@ -38,8 +38,49 @@ wait_http() {
   return 1
 }
 
+wait_mysql() {
+  local seconds="$1"
+  local end=$((SECONDS + seconds))
+  while (( SECONDS < end )); do
+    if docker exec easyexcel-mysql-it mysqladmin ping -h 127.0.0.1 -uroot -peasyexcel_test_root --silent >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 2
+  done
+  return 1
+}
+
+wait_redis() {
+  local seconds="$1"
+  local end=$((SECONDS + seconds))
+  while (( SECONDS < end )); do
+    if docker exec easyexcel-redis-it redis-cli ping >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 2
+  done
+  return 1
+}
+
 echo "==> Starting integration middleware"
 docker compose -f "${COMPOSE_FILE}" up -d mysql-it redis-it minio-it
+
+echo "==> Waiting for integration middleware"
+if ! wait_mysql 120; then
+  echo "MySQL test container did not become ready"
+  docker logs easyexcel-mysql-it --tail 120 || true
+  exit 1
+fi
+if ! wait_redis 60; then
+  echo "Redis test container did not become ready"
+  docker logs easyexcel-redis-it --tail 120 || true
+  exit 1
+fi
+if ! wait_http "http://127.0.0.1:${INTEGRATION_MINIO_API_PORT:-29000}/minio/health/live" 60; then
+  echo "MinIO test container did not become ready"
+  docker logs easyexcel-minio-it --tail 120 || true
+  exit 1
+fi
 
 echo "==> Packaging application"
 JAVA_HOME="${JAVA_HOME}" "${MAVEN_BIN}" -q -DskipTests package
