@@ -29,10 +29,13 @@ import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -155,6 +158,51 @@ class StudentServiceImplTest {
 
             assertTrue(exception.getErrorRows().get(0).getErrorMessage().contains("重复"));
             verify(studentMapper, never()).mergeImportStageToStudent(anyString());
+            verify(studentMapper, never()).mergeImportStageRangeToStudent(anyString(), anyInt(), anyInt());
+            verify(studentMapper).deleteImportStage(anyString());
+        } finally {
+            executor.shutdown();
+        }
+    }
+
+    @Test
+    void importExcelMergesStageByConfiguredChunks() {
+        ExcelDemoProperties properties = new ExcelDemoProperties();
+        properties.setImportMaxConcurrentTasks(1);
+        properties.setImportWorkerCount(1);
+        properties.setImportQueueCapacity(2);
+        properties.setImportBatchSize(2);
+        properties.setInsertBatchSize(2);
+        properties.setImportMergeChunkSize(2);
+        properties.setImportWorkerFinishWaitSeconds(5);
+        StudentMapper studentMapper = mock(StudentMapper.class);
+        List<StudentImportStageRecord> stagedRows = new CopyOnWriteArrayList<StudentImportStageRecord>();
+        doAnswer(invocation -> {
+            List<StudentImportStageRecord> rows = invocation.getArgument(0);
+            stagedRows.addAll(rows);
+            return null;
+        }).when(studentMapper).saveImportStageBatch(any());
+        when(studentMapper.countImportStageRows(anyString())).thenAnswer(invocation -> stagedRows.size());
+        when(studentMapper.listInvalidImportStageRows(anyString())).thenReturn(Collections.emptyList());
+        when(studentMapper.listDuplicateImportStageStudentNoRows(anyString())).thenReturn(Collections.emptyList());
+        when(studentMapper.mergeImportStageRangeToStudent(anyString(), anyInt(), anyInt()))
+                .thenReturn(2);
+
+        ThreadPoolTaskExecutor executor = newImportWorkerExecutor();
+        try {
+            StudentServiceImpl studentService = new StudentServiceImpl(
+                    studentMapper,
+                    properties,
+                    new ImmediateTransactionManager(),
+                    executor);
+
+            studentService.importExcel(new ByteArrayInputStream(buildStudentExcel(5)), 2);
+
+            verify(studentMapper, times(3)).mergeImportStageRangeToStudent(anyString(), anyInt(), anyInt());
+            verify(studentMapper).mergeImportStageRangeToStudent(anyString(), eq(1), eq(2));
+            verify(studentMapper).mergeImportStageRangeToStudent(anyString(), eq(3), eq(4));
+            verify(studentMapper).mergeImportStageRangeToStudent(anyString(), eq(5), eq(5));
+            verify(studentMapper, never()).mergeImportStageToStudent(anyString());
             verify(studentMapper).deleteImportStage(anyString());
         } finally {
             executor.shutdown();
@@ -214,6 +262,26 @@ class StudentServiceImplTest {
                                 .email("s001-b@example.com")
                                 .birthday("2000-01-02")
                                 .build()));
+        return outputStream.toByteArray();
+    }
+
+    private byte[] buildStudentExcel(int rows) {
+        ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
+        List<StudentExcelRow> data = new java.util.ArrayList<StudentExcelRow>(rows);
+        for (int i = 1; i <= rows; i++) {
+            data.add(StudentExcelRow.builder()
+                    .studentNo("S" + String.format("%03d", i))
+                    .name("学生" + i)
+                    .age(18 + i)
+                    .gender(i % 2 == 0 ? "女" : "男")
+                    .className("一班")
+                    .email("s" + i + "@example.com")
+                    .birthday("2000-01-01")
+                    .build());
+        }
+        EasyExcel.write(outputStream, StudentExcelRow.class)
+                .sheet("学生数据")
+                .doWrite(data);
         return outputStream.toByteArray();
     }
 

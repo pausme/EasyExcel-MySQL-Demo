@@ -53,4 +53,7 @@ public interface AsyncTaskRecordMapper {
     int claimRecoverable(@Param("taskId") String taskId,
                          @Param("workerId") String workerId,
                          @Param("heartbeatBefore") LocalDateTime heartbeatBefore);
+
+    int deleteTerminalBefore(@Param("updatedBefore") LocalDateTime updatedBefore,
+                             @Param("limit") int limit);
 }

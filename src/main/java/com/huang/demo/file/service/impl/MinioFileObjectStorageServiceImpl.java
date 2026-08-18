@@ -8,6 +8,7 @@ import com.huang.demo.file.service.FileObjectStorageService;
 import io.minio.ComposeObjectArgs;
 import io.minio.ComposeSource;
 import io.minio.GetPresignedObjectUrlArgs;
+import io.minio.GetObjectArgs;
 import io.minio.ListObjectsArgs;
 import io.minio.MinioClient;
 import io.minio.PutObjectArgs;
@@ -128,6 +129,18 @@ public class MinioFileObjectStorageServiceImpl implements FileObjectStorageServi
                     .build();
         } catch (Exception ex) {
             throw new IllegalStateException("读取文件对象信息失败", ex);
+        }
+    }
+
+    @Override
+    public InputStream openObject(String objectKey) {
+        try {
+            return minioClient.getObject(GetObjectArgs.builder()
+                    .bucket(minioProperties.getBucketName())
+                    .object(objectKey)
+                    .build());
+        } catch (Exception ex) {
+            throw new IllegalStateException("读取文件对象内容失败", ex);
         }
     }
 

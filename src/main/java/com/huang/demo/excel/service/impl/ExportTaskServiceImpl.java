@@ -134,6 +134,7 @@ public class ExportTaskServiceImpl implements ExportTaskService, TaskRetryHandle
             return Optional.empty();
         }
         try {
+            minioObjectStorageService.ensureObjectExists(task.getObjectKey());
             return Optional.of(minioObjectStorageService.createDownloadUrl(task.getObjectKey(), task.getFileName()));
         } catch (RuntimeException ex) {
             log.warn("create minio download url failed, taskId={}, objectKey={}", task.getTaskId(), task.getObjectKey(), ex);

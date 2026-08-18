@@ -11,6 +11,8 @@ public interface MinioObjectStorageService {
 
     InputStream openObject(String objectKey);
 
+    void ensureObjectExists(String objectKey);
+
     String createDownloadUrl(String objectKey, String fileName);
 
     void deleteQuietly(String objectKey);

@@ -35,6 +35,7 @@ import org.springframework.web.multipart.MultipartFile;
 import javax.annotation.PostConstruct;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -42,14 +43,23 @@ import java.nio.file.Paths;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.Locale;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
 
 @Service
 public class StudentImportTaskServiceImpl implements StudentImportTaskService, TaskRetryHandler, TaskRecoveryHandler {
 
     private static final Logger log = LoggerFactory.getLogger(StudentImportTaskServiceImpl.class);
+    private static final int MIN_IMPORT_BATCH_SIZE = 500;
+    private static final int MAX_IMPORT_BATCH_SIZE = 5000;
+    private static final int MAX_XLSX_ENTRY_SCAN_COUNT = 512;
+    private static final int XLSX_SCAN_BUFFER_SIZE = 8192;
+    private static final String XLSX_CONTENT_TYPES_ENTRY = "[Content_Types].xml";
+    private static final String XLSX_WORKBOOK_ENTRY = "xl/workbook.xml";
 
     private final StudentService studentService;
     private final ExcelDemoProperties properties;
@@ -98,7 +108,7 @@ public class StudentImportTaskServiceImpl implements StudentImportTaskService, T
                 .originalName(originalName)
                 .sourceObjectKey(sourceObjectKey)
                 .fileSize(file.getSize())
-                .batchSize(Math.max(1, properties.getImportBatchSize()))
+                .batchSize(getImportBatchSize())
                 .build();
         AsyncTaskRecord task;
         try {
@@ -141,6 +151,11 @@ public class StudentImportTaskServiceImpl implements StudentImportTaskService, T
 
     @Override
     public void recover(AsyncTaskRecord task) {
+        if (!properties.isImportAutoRecoveryEnabled()) {
+            taskCenterService.markFailed(task.getTaskId(), "导入任务执行节点异常退出，请重新提交导入任务");
+            log.warn("import task recovery disabled, taskId={}", task.getTaskId());
+            return;
+        }
         submitExecution(task.getTaskId());
     }
 
@@ -165,8 +180,15 @@ public class StudentImportTaskServiceImpl implements StudentImportTaskService, T
         if (result.getErrorObjectKey() == null || result.getErrorObjectKey().trim().isEmpty()) {
             return Optional.empty();
         }
-        return Optional.of(minioObjectStorageService.createDownloadUrl(
-                result.getErrorObjectKey(), result.getErrorFileName()));
+        try {
+            minioObjectStorageService.ensureObjectExists(result.getErrorObjectKey());
+            return Optional.of(minioObjectStorageService.createDownloadUrl(
+                    result.getErrorObjectKey(), result.getErrorFileName()));
+        } catch (RuntimeException ex) {
+            log.warn("create import error file download url failed, taskId={}, objectKey={}",
+                    taskOptional.get().getTaskId(), result.getErrorObjectKey(), ex);
+            return Optional.empty();
+        }
     }
 
     @Scheduled(fixedDelay = 3600000L, initialDelay = 3600000L)
@@ -249,6 +271,28 @@ public class StudentImportTaskServiceImpl implements StudentImportTaskService, T
         if (file.getSize() <= 0L) {
             throw new IllegalArgumentException("导入文件不能为空");
         }
+        long maxFileSize = properties.getImportMaxFileSizeForAsync();
+        if (maxFileSize > 0L && file.getSize() > maxFileSize) {
+            throw new IllegalArgumentException("导入文件大小超过限制，maxBytes="
+                    + maxFileSize + ", actualBytes=" + file.getSize());
+        }
+        if (!hasXlsxExtension(file.getOriginalFilename())) {
+            throw new IllegalArgumentException("导入文件格式错误，请上传 .xlsx 文件");
+        }
+        XlsxInspectionResult inspectionResult;
+        try (InputStream inputStream = file.getInputStream()) {
+            inspectionResult = inspectXlsxPackage(inputStream);
+        } catch (IOException ex) {
+            throw new IllegalArgumentException("导入文件格式错误，请上传 .xlsx 文件", ex);
+        }
+        if (!inspectionResult.isValidXlsx()) {
+            throw new IllegalArgumentException("导入文件格式错误，请上传 .xlsx 文件");
+        }
+        int maxRows = properties.getImportMaxRowsPerTask();
+        if (maxRows > 0 && inspectionResult.getDataRowCount() > maxRows) {
+            throw new IllegalArgumentException("导入文件数据行数超过限制，maxRows="
+                    + maxRows + ", actualRows=" + inspectionResult.getDataRowCount());
+        }
     }
 
     private InputStream openImportInputStream(StudentImportTaskPayload payload) throws IOException {
@@ -299,6 +343,79 @@ public class StudentImportTaskServiceImpl implements StudentImportTaskService, T
     private boolean isCanceledOrExpired(AsyncTaskRecord task) {
         return AsyncTaskStatus.CANCELED.name().equals(task.getStatus())
                 || AsyncTaskStatus.EXPIRED.name().equals(task.getStatus());
+    }
+
+    private int getImportBatchSize() {
+        int batchSize = properties.getImportBatchSize();
+        if (batchSize < MIN_IMPORT_BATCH_SIZE) {
+            return MIN_IMPORT_BATCH_SIZE;
+        }
+        return Math.min(batchSize, MAX_IMPORT_BATCH_SIZE);
+    }
+
+    private boolean hasXlsxExtension(String originalName) {
+        return originalName != null && originalName.trim().toLowerCase(Locale.ROOT).endsWith(".xlsx");
+    }
+
+    private XlsxInspectionResult inspectXlsxPackage(InputStream inputStream) throws IOException {
+        boolean hasContentTypes = false;
+        boolean hasWorkbook = false;
+        long dataRowCount = 0L;
+        int scannedCount = 0;
+        try (ZipInputStream zipInputStream = new ZipInputStream(inputStream)) {
+            ZipEntry entry;
+            while ((entry = zipInputStream.getNextEntry()) != null) {
+                scannedCount++;
+                if (scannedCount > MAX_XLSX_ENTRY_SCAN_COUNT) {
+                    return new XlsxInspectionResult(false, dataRowCount);
+                }
+                String entryName = entry.getName();
+                if (XLSX_CONTENT_TYPES_ENTRY.equals(entryName)) {
+                    hasContentTypes = true;
+                } else if (XLSX_WORKBOOK_ENTRY.equals(entryName)) {
+                    hasWorkbook = true;
+                } else if (isWorksheetEntry(entryName)) {
+                    long sheetRows = countWorksheetRows(zipInputStream);
+                    if (sheetRows > 0) {
+                        dataRowCount += Math.max(0L, sheetRows - 1L);
+                    }
+                }
+            }
+        }
+        return new XlsxInspectionResult(hasContentTypes && hasWorkbook, dataRowCount);
+    }
+
+    private boolean isWorksheetEntry(String entryName) {
+        return entryName != null
+                && entryName.startsWith("xl/worksheets/")
+                && entryName.endsWith(".xml");
+    }
+
+    private long countWorksheetRows(InputStream inputStream) throws IOException {
+        byte[] buffer = new byte[XLSX_SCAN_BUFFER_SIZE];
+        String tail = "";
+        long rowCount = 0L;
+        int readCount;
+        while ((readCount = inputStream.read(buffer)) >= 0) {
+            String chunk = tail + new String(buffer, 0, readCount, StandardCharsets.UTF_8);
+            rowCount += countToken(chunk, "<row");
+            int tailLength = Math.min(3, chunk.length());
+            tail = chunk.substring(chunk.length() - tailLength);
+        }
+        return rowCount;
+    }
+
+    private long countToken(String value, String token) {
+        long count = 0L;
+        int fromIndex = 0;
+        while (true) {
+            int index = value.indexOf(token, fromIndex);
+            if (index < 0) {
+                return count;
+            }
+            count++;
+            fromIndex = index + token.length();
+        }
     }
 
     private Path getImportDirectory() {
@@ -450,6 +567,25 @@ public class StudentImportTaskServiceImpl implements StudentImportTaskService, T
             }
             long progress = imported * 95L / parsed;
             return (int) Math.min(95L, Math.max(0L, progress));
+        }
+    }
+
+    private static class XlsxInspectionResult {
+
+        private final boolean validXlsx;
+        private final long dataRowCount;
+
+        private XlsxInspectionResult(boolean validXlsx, long dataRowCount) {
+            this.validXlsx = validXlsx;
+            this.dataRowCount = dataRowCount;
+        }
+
+        private boolean isValidXlsx() {
+            return validXlsx;
+        }
+
+        private long getDataRowCount() {
+            return dataRowCount;
         }
     }
 }

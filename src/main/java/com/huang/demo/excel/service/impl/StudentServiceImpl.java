@@ -24,6 +24,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import javax.annotation.PostConstruct;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.lang.management.ManagementFactory;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.Collections;
@@ -71,6 +72,7 @@ public class StudentServiceImpl implements StudentService {
     public void init() {
         validateImportTransactionTimeoutSeconds();
         validateImportWorkerFinishWaitSeconds();
+        logImportResourceSummary();
         if (!properties.isInitEnabled()) {
             log.info("student service database initialization skipped");
             return;
@@ -423,6 +425,49 @@ public class StudentServiceImpl implements StudentService {
         return minimumWaitSeconds > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) minimumWaitSeconds;
     }
 
+    private void logImportResourceSummary() {
+        long maxJvmMemoryMb = bytesToMb(Runtime.getRuntime().maxMemory());
+        int workerCount = Math.max(1, properties.getImportWorkerCount());
+        int maxConcurrentTasks = Math.max(1, properties.getImportMaxConcurrentTasks());
+        int totalWorkerCapacity = workerCount * maxConcurrentTasks;
+        java.lang.management.OperatingSystemMXBean mxBean = ManagementFactory.getOperatingSystemMXBean();
+        if (mxBean instanceof com.sun.management.OperatingSystemMXBean) {
+            com.sun.management.OperatingSystemMXBean systemMxBean =
+                    (com.sun.management.OperatingSystemMXBean) mxBean;
+            log.info("student import resource summary, processors={}, maxJvmMemoryMb={}, totalPhysicalMemoryMb={}, "
+                            + "freePhysicalMemoryMb={}, totalSwapMb={}, freeSwapMb={}, workerCount={}, "
+                            + "maxConcurrentTasks={}, totalWorkerCapacity={}, maxRowsPerTask={}, maxFileSizeBytes={}",
+                    systemMxBean.getAvailableProcessors(),
+                    maxJvmMemoryMb,
+                    bytesToMb(systemMxBean.getTotalPhysicalMemorySize()),
+                    bytesToMb(systemMxBean.getFreePhysicalMemorySize()),
+                    bytesToMb(systemMxBean.getTotalSwapSpaceSize()),
+                    bytesToMb(systemMxBean.getFreeSwapSpaceSize()),
+                    workerCount,
+                    maxConcurrentTasks,
+                    totalWorkerCapacity,
+                    properties.getImportMaxRowsPerTask(),
+                    properties.getImportMaxFileSizeForAsync());
+            return;
+        }
+        log.info("student import resource summary, processors={}, maxJvmMemoryMb={}, workerCount={}, "
+                        + "maxConcurrentTasks={}, totalWorkerCapacity={}, maxRowsPerTask={}, maxFileSizeBytes={}",
+                mxBean.getAvailableProcessors(),
+                maxJvmMemoryMb,
+                workerCount,
+                maxConcurrentTasks,
+                totalWorkerCapacity,
+                properties.getImportMaxRowsPerTask(),
+                properties.getImportMaxFileSizeForAsync());
+    }
+
+    private long bytesToMb(long bytes) {
+        if (bytes <= 0L) {
+            return 0L;
+        }
+        return bytes / 1024L / 1024L;
+    }
+
     private static class ImportWorkerHandle {
 
         private final CountDownLatch workerLatch;
@@ -553,35 +598,51 @@ public class StudentServiceImpl implements StudentService {
                                             StudentImportProgressCallback progressCallback) {
         progressCallback.checkCanceled();
         long start = System.currentTimeMillis();
-        newImportTransactionTemplate().executeWithoutResult(status -> {
-            int stagedRows = studentMapper.countImportStageRows(importTaskId);
-            if (stagedRows != expectedRows) {
-                throw new IllegalStateException("导入暂存数据数量不一致，expectedRows="
-                        + expectedRows + ", stagedRows=" + stagedRows);
-            }
-            int invalidRows = studentMapper.countInvalidImportStageRows(importTaskId);
-            if (invalidRows > 0) {
-                throw new IllegalStateException("导入文件存在必填字段为空的数据，invalidRows=" + invalidRows);
-            }
-            int duplicateStudentNoCount = studentMapper.countDuplicateImportStageStudentNo(importTaskId);
-            if (duplicateStudentNoCount > 0) {
-                throw new StudentImportValidationException(
-                        "导入文件校验失败，errorRows=" + duplicateStudentNoCount,
-                        buildImportValidationErrors(importTaskId));
-            }
-            List<StudentImportErrorRow> errorRows = buildImportValidationErrors(importTaskId);
-            if (!errorRows.isEmpty()) {
-                throw new StudentImportValidationException(
-                        "导入文件校验失败，errorRows=" + errorRows.size(), errorRows);
-            }
-            if (stagedRows > 0) {
-                studentMapper.mergeImportStageToStudent(importTaskId);
-            }
-            studentMapper.deleteImportStage(importTaskId);
-        });
-        progressCallback.onCommitted(expectedRows, expectedRows == 0 ? 0 : Math.max(1, (expectedRows + getInsertBatchSize() - 1) / getInsertBatchSize()));
-        log.info("import stage merged atomically, rows={}, elapsedMs={}",
-                expectedRows, System.currentTimeMillis() - start);
+        validateImportStageBeforeMerge(importTaskId, expectedRows);
+        int mergeChunkSize = getImportMergeChunkSize();
+        int mergeChunkCount = expectedRows == 0 ? 0 : Math.max(1, (expectedRows + mergeChunkSize - 1) / mergeChunkSize);
+        int mergedRows = 0;
+        for (int startRowNo = 1; startRowNo <= expectedRows; startRowNo += mergeChunkSize) {
+            progressCallback.checkCanceled();
+            final int chunkStartRowNo = startRowNo;
+            final int chunkEndRowNo = Math.min(expectedRows, chunkStartRowNo + mergeChunkSize - 1);
+            long chunkStart = System.currentTimeMillis();
+            Integer affectedRows = newImportTransactionTemplate()
+                    .execute(status -> studentMapper.mergeImportStageRangeToStudent(
+                            importTaskId, chunkStartRowNo, chunkEndRowNo));
+            mergedRows = chunkEndRowNo;
+            progressCallback.onCommitted(mergedRows, mergeChunkCount);
+            log.info("import stage merge chunk finished, importTaskId={}, startRowNo={}, endRowNo={}, "
+                            + "affectedRows={}, elapsedMs={}",
+                    importTaskId, chunkStartRowNo, chunkEndRowNo,
+                    affectedRows == null ? 0 : affectedRows, System.currentTimeMillis() - chunkStart);
+        }
+        progressCallback.onCommitted(expectedRows, mergeChunkCount);
+        log.info("import stage merged by chunks, rows={}, chunks={}, chunkSize={}, elapsedMs={}",
+                expectedRows, mergeChunkCount, mergeChunkSize, System.currentTimeMillis() - start);
+    }
+
+    private void validateImportStageBeforeMerge(String importTaskId, int expectedRows) {
+        int stagedRows = studentMapper.countImportStageRows(importTaskId);
+        if (stagedRows != expectedRows) {
+            throw new IllegalStateException("导入暂存数据数量不一致，expectedRows="
+                    + expectedRows + ", stagedRows=" + stagedRows);
+        }
+        int invalidRows = studentMapper.countInvalidImportStageRows(importTaskId);
+        if (invalidRows > 0) {
+            throw new IllegalStateException("导入文件存在必填字段为空的数据，invalidRows=" + invalidRows);
+        }
+        int duplicateStudentNoCount = studentMapper.countDuplicateImportStageStudentNo(importTaskId);
+        if (duplicateStudentNoCount > 0) {
+            throw new StudentImportValidationException(
+                    "导入文件校验失败，errorRows=" + duplicateStudentNoCount,
+                    buildImportValidationErrors(importTaskId));
+        }
+        List<StudentImportErrorRow> errorRows = buildImportValidationErrors(importTaskId);
+        if (!errorRows.isEmpty()) {
+            throw new StudentImportValidationException(
+                    "导入文件校验失败，errorRows=" + errorRows.size(), errorRows);
+        }
     }
 
     private void deleteImportStageQuietly(String importTaskId) {
@@ -714,6 +775,14 @@ public class StudentServiceImpl implements StudentService {
 
     private int getInsertBatchSize() {
         return Math.max(1, properties.getInsertBatchSize());
+    }
+
+    private int getImportMergeChunkSize() {
+        int chunkSize = properties.getImportMergeChunkSize();
+        if (chunkSize <= 0) {
+            return getInsertBatchSize();
+        }
+        return Math.max(1, Math.min(20000, chunkSize));
     }
 
     private int getImportProgressLogInterval() {

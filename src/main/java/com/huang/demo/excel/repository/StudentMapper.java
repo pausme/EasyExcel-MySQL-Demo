@@ -7,6 +7,7 @@ import com.huang.demo.excel.model.StudentExcelRow;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 
+import java.time.LocalDateTime;
 import java.util.List;
 
 @Mapper
@@ -61,5 +62,12 @@ public interface StudentMapper {
 
     int mergeImportStageToStudent(@Param("importTaskId") String importTaskId);
 
+    int mergeImportStageRangeToStudent(@Param("importTaskId") String importTaskId,
+                                       @Param("startRowNo") int startRowNo,
+                                       @Param("endRowNo") int endRowNo);
+
     int deleteImportStage(@Param("importTaskId") String importTaskId);
+
+    int deleteImportStageBefore(@Param("createdBefore") LocalDateTime createdBefore,
+                                @Param("limit") int limit);
 }

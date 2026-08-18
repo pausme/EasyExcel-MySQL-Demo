@@ -113,4 +113,20 @@
         ORDER BY id DESC
         LIMIT #{limit} OFFSET #{offset}
     </select>
+
+    <select id="listDeletedBefore" resultMap="FileRecordMap">
+        SELECT id, file_id, owner_id, original_name, object_key, bucket_name, content_type,
+               file_size, file_md5, file_ext, storage_type, status, created_at, updated_at
+        FROM file_record
+        WHERE status = 'DELETED'
+          AND updated_at &lt;= #{updatedBefore}
+        ORDER BY id ASC
+        LIMIT #{limit}
+    </select>
+
+    <delete id="deleteById">
+        DELETE FROM file_record
+        WHERE id = #{id}
+          AND status = 'DELETED'
+    </delete>
 </mapper>

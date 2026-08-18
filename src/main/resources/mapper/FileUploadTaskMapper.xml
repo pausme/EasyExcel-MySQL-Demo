@@ -95,4 +95,13 @@
           AND upload_id = #{uploadId}
           AND status = 'UPLOADING'
     </update>
+
+    <delete id="deleteFinishedBefore">
+        DELETE FROM file_upload_task
+        WHERE status IN ('SUCCESS', 'ABORTED')
+          AND completed_at IS NOT NULL
+          AND completed_at &lt;= #{completedBefore}
+        ORDER BY id ASC
+        LIMIT #{limit}
+    </delete>
 </mapper>

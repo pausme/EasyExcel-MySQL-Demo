@@ -114,7 +114,7 @@ add(EXC, "POST /api/excel/import", [
     ("EXC-IMP-04", "P1", "异常", "上传空文件", "POST", "/api/excel/import", "", "file=@empty.xlsx",
      "400", "“上传文件不能为空”", "Controller/Service 校验"),
     ("EXC-IMP-05", "P1", "异常", "损坏/非 Excel 文件", "POST", "/api/excel/import", "", "file=@not-excel.txt",
-     "200→SUCCESS(0行)", "提交返回 taskId；最终 status=SUCCESS、imported=0（文件被解析为 0 行）", "⚠️F-12：非 Excel 文件未拦截，静默成功，建议加文件头校验"),
+     "400", "提交阶段校验 .xlsx 后缀、zip 文件头和 xlsx 必要结构；非法文件不创建异步任务", "F-12 已修复"),
     ("EXC-IMP-06", "P2", "边界", "空模板（仅表头）", "POST", "/api/excel/import", "", "file=@empty-template.xlsx",
      "200", "imported=0、batchCount=0，任务成功", ""),
     ("EXC-IMP-07", "P1", "业务规则", "同一文件出现重复 student_no", "POST", "/api/excel/import", "", "file=@dup-stdno.xlsx",
@@ -281,6 +281,8 @@ add(FIL, "POST /api/files/upload", [
      "400", "required request part 'file' is not present → 400", ""),
     ("FIL-UP-03", "P1", "异常", "上传空文件", "POST", "/api/files/upload", "", "file=@empty.txt",
      "400", "“上传文件不能为空”", ""),
+    ("FIL-UP-04", "P1", "安全", "伪装可执行文件", "POST", "/api/files/upload", "", "file=@evil.xlsx(MZ头)",
+     "400", "文件安全扫描拦截，不落库不生成 NORMAL 文件", "内容嗅探"),
 ])
 add(FIL, "POST /api/files/instant-check", [
     ("FIL-IC-01", "P0", "正常", "已上传某文件得到 md5/size", "POST", "/api/files/instant-check", "",

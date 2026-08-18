@@ -1,6 +1,6 @@
 # 项目后续优化 TODO
 
-本文档用于沉淀 EasyExcel MySQL Demo 后续可继续演进的任务清单。当前项目已经具备异步导入、全量原子导入、异步导出、MinIO 文件交付、Redis + MySQL 任务中心和文件上传中心能力。后续优化重点从“能跑大数据量”转向“可运营、可恢复、可扩展、可观测”。
+本文档用于沉淀 EasyExcel MySQL Demo 后续可继续演进的任务清单。当前项目已经具备异步导入、暂存校验后分块合并导入、异步导出、MinIO 文件交付、Redis + MySQL 任务中心和文件上传中心能力。后续优化重点从“能跑大数据量”转向“可运营、可恢复、可扩展、可观测”。
 
 ## 状态说明
 
@@ -16,12 +16,7 @@
 
 | 状态 | 优先级 | 任务 | 建议原因 |
 | --- | --- | --- | --- |
-| TODO | P1 | 百万级导入稳定性护栏 | 小规格单机已复现 OOM 和长事务风险，需限制高风险任务并加快失败恢复 |
-| TODO | P1 | 导入分块合并 | 替代百万级单事务合并，降低事务超时、undo/redo 和锁持有风险 |
-| TODO | P1 | 批次和分页参数配置化 | `import-batch-size=2000`、`export-page-size=5000` 仍是代码常量，不利于压测调参 |
-| TODO | P2 | 文件安全治理 | 补齐文件类型校验、内容嗅探、病毒扫描和敏感文件管控 |
-| TODO | P2 | 集成测试和回归数据集 | 用真实 MySQL、Redis、MinIO 覆盖核心链路，减少 H2 差异风险 |
-| TODO | P2 | 数据归档和清理策略 | 清理过期任务、文件记录和对象元数据，控制表体积 |
+| DOING | P2 | 集成测试和回归数据集 | 已补本地真实依赖测试入口，待有 Docker 环境跑完整联调闭环 |
 
 ## 已完成历史任务
 
@@ -37,7 +32,7 @@
 | DONE | 历史 | 文件上传中心 | 普通上传、客户端直传、秒传、分片上传、分页查询和静态测试页 |
 | DONE | 历史 | 统一异步任务中心 | 抽象任务创建、运行中、成功、失败、取消、过期、重试和分页查询 |
 | DONE | 历史 | 真正异步导入 | 导入接口立即返回任务 ID，后台线程解析 Excel 并写库 |
-| DONE | 历史 | 全量原子导入 | 使用 `student_import_stage` 暂存表，校验通过后单事务合并正式表 |
+| DONE | 历史 | 全量原子导入 | 使用 `student_import_stage` 暂存表，校验通过后合并正式表 |
 | DONE | P0 | 导入错误明细文件 | 导入校验失败时生成错误 Excel，上传 MinIO，并提供签名下载入口 |
 | DONE | P0 | 导入文件持久化到 MinIO | 提交导入任务时保存源 Excel 到 MinIO，后台执行和重试从对象存储读取 |
 | DONE | P1 | 报表运行控制中心 | 保存学生报表查询条件，基于运行控制创建导出任务并查看历史运行 |
@@ -48,9 +43,15 @@
 | DONE | P1 | API 权限和用户体系 | 增加当前用户上下文、demo/auth 模式、Bearer token 和 owner 数据隔离 |
 | DONE | P1 | 数据库迁移版本管理 | 增加 Flyway 依赖、版本化迁移脚本、baseline 配置和生产初始化说明 |
 | DONE | P1 | 框架层参数异常映射 | 修复 R7 中 3 个 500，统一映射为 400/415，并补本地回归测试 |
+| DONE | P2 | 数据归档和清理策略 | 增加可配置定时清理，按批清理终态任务、上传任务、逻辑删除文件和暂存数据 |
 | DONE | P1 | 接口扁平化脚本加固 | 导出下载和任务重试按任务实际终态动态断言，避免空库取消竞态和超单 Sheet 边界误判 |
-| DONE | P2 | 性能压测和调优报告 | 固化 R7 标准环境导入导出结论、风险边界和复现脚本 |
+| DONE | P1 | 批次和分页参数配置化 | `IMPORT_BATCH_SIZE`、`EXPORT_PAGE_SIZE` 支持环境变量配置，并对导入批次和导出分页做范围保护 |
+| DONE | P1 | 百万级导入稳定性护栏 | 增加导入行数/文件大小保护、恢复默认失败、连接池容量校验和启动资源摘要日志 |
+| DONE | P1 | 导入分块合并 | 先完整校验暂存表，再按 `IMPORT_MERGE_CHUNK_SIZE` 分块 upsert 正式表，降低长事务风险 |
+| DONE | P2 | Excel 导入文件头校验 | 修复 F-12，提交阶段校验 `.xlsx` 后缀、zip 文件头和 xlsx 必要结构，非法文件直接 400 |
+| DONE | P2 | 性能压测和调优报告 | 固化 R7/R10 标准环境导入导出结论、风险边界和复现脚本 |
 | DONE | P2 | 文档脱敏和测试产物治理 | 删除原始联调 JSON，真实地址、签名 URL 和测试 Token 改为占位符或环境变量 |
+| DONE | P2 | 数据归档和清理策略 | 增加可配置定时清理，按批清理终态任务、上传任务、逻辑删除文件和暂存数据 |
 
 ---
 
@@ -64,7 +65,7 @@
 
 ### 背景
 
-当前全量原子导入已经能保证正式表不被部分写入，但失败信息还比较粗，例如：
+当前导入已经能在写正式表前完整校验暂存数据，但失败信息还比较粗，例如：
 
 - 必填字段为空
 - 文件内存在重复 `student_no`
@@ -431,10 +432,11 @@ public class ReportSheetConfig {
 
 ### 完成记录
 
-- 新增 `docs/performance-report.md`，含测试机器/部署、JVM、数据量、参数矩阵（可调项 vs 代码常量）、结果表格、推荐配置、全量原子导入成本、风险与边界、复现步骤。
+- 新增 `docs/performance-report.md`，含测试机器/部署、JVM、数据量、参数矩阵（可调项 vs 代码常量）、结果表格、推荐配置、暂存校验导入成本、风险与边界、复现步骤。
 - 新增可复现脚本：`scripts/gen_perf_import_file.py`（流式生成百万行导入文件）、`scripts/perf_bench.py`（按任务 `startedAt/finishedAt` 计算纯异步处理吞吐）；沿用 `scripts/import_load_test.py` 并发矩阵。
 - R7 标准环境实测：1M 导出 3/3 成功，平均约 23,317 行/s；100k 导入 3/3 成功，平均约 3,908 行/s。
-- R7 明确百万级导入在当前小规格单机 Docker 环境不可直接执行：已复现 OOM 和长事务风险，swap 只能缓解 100k 级别稳定性。
+- R10 补充验证：放开护栏后 1M 导入 SUCCESS，平均约 4,521 行/s，分块合并消除了单长事务风险。
+- R7 明确小规格单机 Docker 环境默认不适合直接跑百万级导入：已复现 OOM 和长事务风险，swap 只能缓解 100k 级别稳定性。
 - 历史本地 DB 基线仅作为高配参考：4/6/8/16 worker 约 23.4k/30.3k/29.2k/63.8k 行/s，导出约 15.7k 行/s。
 - 完成 README、测试说明、压测说明和复盘文档的脱敏，原始联调 JSON 不再入库。
 
@@ -460,9 +462,9 @@ public class ReportSheetConfig {
    - 5、10、20、30
    - 观察 worker 数与连接池大小的关系
 
-4. 全量原子导入前后对比
+4. 暂存校验导入前后对比
    - 旧方案：批次直接 upsert 正式表
-   - 新方案：暂存表 + 最终单事务合并
+   - 新方案：暂存表 + 校验通过后合并正式表
    - 对比总耗时、失败恢复能力、正式表一致性
 
 5. 导出分页大小
@@ -490,7 +492,7 @@ public class ReportSheetConfig {
 - 至少覆盖 10 万、100 万两个数据量；当 100 万在当前硬件不可行时，要明确给出不可行原因。
 - 关键场景至少重复 3 次，避免单次波动误判。
 - 给出推荐配置和不建议执行的边界，例如当前标准环境单次导入优先控制在 10 万行级别。
-- 明确说明全量原子导入带来的额外成本。
+- 明确说明暂存校验导入带来的额外成本。
 
 ---
 
@@ -768,13 +770,13 @@ Demo 阶段可以接受，但企业项目需要稳定的响应契约，便于前
 - `GlobalExceptionHandler` 补充 `MissingServletRequestPartException`，缺少 multipart `file` 参数返回 HTTP 400。
 - `GlobalExceptionHandler` 补充 `HttpMediaTypeNotSupportedException`，不支持的 Content-Type 返回 HTTP 415。
 - 新增本地 MockMvc 回归用例，覆盖 `seed/abc`、Excel 导入缺 file、文件中心上传缺 file。
-- 本地 `mvn test` 通过：10 个测试类 / 40 用例全部通过。
+- 本地 `mvn test` 通过：12 个测试类 / 54 用例全部通过。
 
 ---
 
 ## 12. 百万级导入稳定性护栏
 
-状态：TODO
+状态：DONE
 
 ### 目标
 
@@ -782,11 +784,11 @@ Demo 阶段可以接受，但企业项目需要稳定的响应契约，便于前
 
 ### 背景
 
-R7 标准环境已验证：
+R7 标准环境已验证，R10 已补充百万级成功验证：
 
 - 100k 导入 3/3 成功，平均约 25.6s。
-- 1M 导入在当前小规格单机环境不可直接执行，已复现 OOM 和长事务风险。
-- swap 可以缓解 100k 稳定性，但不能让百万级单文件导入自然变安全。
+- 1M 导入默认受容量护栏限制；放开后在标准环境 SUCCESS，平均约 4,521 行/s。
+- swap 可以缓解 100k 稳定性，百万级导入还需要分块合并和容量护栏共同兜底。
 
 ### 需求范围
 
@@ -812,19 +814,29 @@ R7 标准环境已验证：
 - 小文件和 100k 文件导入不受影响。
 - 崩溃恢复不会反复重派同一高风险导入任务。
 
+### 完成记录
+
+- 新增 `IMPORT_MAX_ROWS_PER_TASK`，提交阶段扫描 xlsx 工作表行数，超过限制直接 400，不创建异步任务。
+- 新增 `IMPORT_MAX_FILE_SIZE_FOR_ASYNC`，导入文件超过配置字节数时直接拒绝。
+- 提交阶段已校验 `.xlsx` 后缀、zip 文件头和 xlsx 必要结构，避免非 Excel 文件进入后台任务。
+- `IMPORT_AUTO_RECOVERY_ENABLED` 默认 `false`，异常退出后的导入任务会标记失败并要求用户重新提交，避免大文件自动反复重跑。
+- 导入 worker 总容量继续受 `HIKARI_MAXIMUM_POOL_SIZE` 约束，防止写库线程数超过数据库连接池。
+- `StudentServiceImpl` 启动时输出导入资源摘要，包括 JVM 内存、物理内存、swap、worker 配置、行数上限和文件大小上限，方便标准环境判断容量边界。
+- 新增单元测试覆盖非 Excel 拒绝、行数超限、文件大小超限、恢复默认失败和批次限幅。
+
 ---
 
 ## 13. 导入分块合并
 
-状态：TODO
+状态：DONE
 
 ### 目标
 
-替代当前百万级导入的单事务合并方式，降低长事务、事务超时、undo/redo 压力和锁持有时间，同时尽量保持正式表一致性。
+替代历史百万级导入的单事务合并方式，降低长事务、事务超时、undo/redo 压力和锁持有时间，同时尽量保持正式表一致性。
 
 ### 背景
 
-当前全量原子导入的最终阶段是单事务：
+历史实现的最终阶段是单事务：
 
 ```text
 student_import_stage -> student_record
@@ -832,43 +844,43 @@ student_import_stage -> student_record
 
 100k 级别已稳定，但按 R7 吞吐外推，1M 暂存和合并很可能超过 `IMPORT_TRANSACTION_TIMEOUT_SECONDS=60`。如果单纯把事务超时调大，会延长锁持有和失败恢复时间。
 
-### 可选方案
+### 方案取舍
 
-1. 严格全量原子
-   - 保留单事务合并。
-   - 将事务超时提高到 300s 以上。
-   - 仅推荐高配数据库或数据量受控场景。
+本次选择“暂存表完整校验 + 分块事务 upsert”：
 
-2. 分块合并 + 版本标记
-   - 为导入增加 `import_version` 或批次版本。
-   - 分块写入正式表的新版本数据。
-   - 所有分块成功后切换可见版本或提交运行批次。
-   - 失败时删除本次版本数据。
-
-3. 临时正式表替换
-   - 先合并到新表或影子表。
-   - 校验通过后 rename/swap 或按业务键切换。
-   - 适合报表型数据，不一定适合在线业务表。
+- 解析、暂存、必填字段、长度、格式和文件内重复 `student_no` 全部校验通过后，才允许进入正式表合并。
+- 合并阶段按 `IMPORT_MERGE_CHUNK_SIZE` 切块，每块一个短事务，默认 `5000` 行。
+- 该方案能显著降低单个长事务的锁持有、undo/redo 和超时风险。
+- 该方案不是严格的单事务全量原子：如果已经进入合并阶段后发生数据库异常，已提交的合并块不会自动回滚。严格全量原子仍需要版本切换或影子表方案。
 
 ### 需求范围
 
-- 明确选择一致性语义：严格原子、最终可补偿、还是版本切换。
-- 设计新增字段或新表。
-- 支持失败清理和重试。
-- 记录每个合并块耗时、影响行数和失败原因。
+- 增加 `IMPORT_MERGE_CHUNK_SIZE` 配置。
+- Mapper 支持按 `row_no` 范围从 `student_import_stage` upsert 到 `student_record`。
+- 合并前统一校验暂存行数、必填字段、长度、格式和文件内重复学号。
+- 记录每个合并块耗时、影响行数和行号范围。
+- 文档明确说明当前一致性语义和严格全量原子的差异。
 
 ### 验收标准
 
 - 100k 导入耗时不明显退化。
 - 1M 导入不再依赖单个超长事务。
-- 合并中途失败时，有明确补偿策略，不留下不可见垃圾数据或半可见数据。
+- 合并中途失败时，任务会失败并清理暂存表；已提交正式表分块不会自动回滚，文档需明确该边界。
 - 文档明确说明新的“一致性语义”。
+
+### 完成记录
+
+- `StudentMapper` 新增 `mergeImportStageRangeToStudent(importTaskId, startRowNo, endRowNo)`。
+- `StudentServiceImpl` 的最终合并改为先校验暂存表，再按 `IMPORT_MERGE_CHUNK_SIZE` 分块执行短事务。
+- 分块合并日志包含 `importTaskId`、`startRowNo`、`endRowNo`、`affectedRows` 和耗时。
+- 成功、失败、取消统一在外层清理本次 `student_import_stage` 数据，成功路径不再重复删除暂存表。
+- 新增单元测试验证 5 行数据在 chunkSize=2 时按 `1-2`、`3-4`、`5-5` 三块合并，且校验失败不会进入合并。
 
 ---
 
 ## 14. 批次和分页参数配置化
 
-状态：TODO
+状态：DONE
 
 ### 目标
 
@@ -906,11 +918,18 @@ student_import_stage -> student_record
 - 压测报告能记录配置值。
 - 错误配置不会导致单页内存过高或 SQL 过大。
 
+### 完成记录
+
+- `application.yml` 已支持 `IMPORT_BATCH_SIZE` 和 `EXPORT_PAGE_SIZE` 环境变量。
+- 导入批次在提交任务时归一化到 `500` 到 `5000`。
+- 导出分页已有 `1000` 到 `10000` 的范围保护。
+- 新增单元测试覆盖导入批次过大时被限制到 `5000`。
+
 ---
 
 ## 15. 文件安全治理
 
-状态：TODO
+状态：DONE
 
 ### 目标
 
@@ -953,11 +972,21 @@ student_import_stage -> student_record
 - 下载别人的文件返回 404 或 403。
 - 安全扫描失败时文件不会变成 `NORMAL` 状态。
 
+### 完成记录
+
+- 新增 `FileSecurityScanner` 接口和规则型实现 `RuleBasedFileSecurityScanner`。
+- 文件中心普通上传、直传完成、分片完成都接入了内容扫描。
+- 新增文件后缀白名单、MIME 白名单和内容嗅探配置，默认开启安全扫描。
+- 补充文件中心单测，覆盖合法文本文件、合法 ZIP 型 Office 文件和伪装可执行文件的拦截。
+- 本地验证通过：
+  - `JAVA_HOME=/Users/dingli/Dependent/JDK/jdk8u482-b08/Contents/Home /Users/dingli/Dependent/apache-maven-3.6.3/bin/mvn -q -Dtest=FileCenterServiceImplTest,RuleBasedFileSecurityScannerTest test`
+  - `JAVA_HOME=/Users/dingli/Dependent/JDK/jdk8u482-b08/Contents/Home /Users/dingli/Dependent/apache-maven-3.6.3/bin/mvn -q test`
+
 ---
 
 ## 16. 集成测试和回归数据集
 
-状态：TODO
+状态：DOING
 
 ### 目标
 
@@ -1001,11 +1030,19 @@ student_import_stage -> student_record
 - 测试结束后能清理容器和临时对象。
 - README 有清晰的集成测试执行说明。
 
+### 当前进展
+
+- 新增 `docker-compose-test.yml`，使用本地隔离端口启动 MySQL、Redis、MinIO。
+- 新增 `scripts/run_integration_tests.sh`，支持一键启动测试依赖、打包应用、启动应用、执行 `scripts/run_flat_tests.py`，完成后默认清理容器和数据卷。
+- `scripts/run_flat_tests.py` 已补充文件安全回归用例，并修正直传测试文件类型，避免把文本内容伪装为 ZIP。
+- `scripts/gen_api_test_cases.py` 和 `docs/test/接口扁平化测试用例.xlsx` 已同步到 135 条用例。
+- 本机已验证脚本语法、Python 编译和相关单测；当前环境没有 `docker` 命令，真实容器联调待 Docker 环境执行。
+
 ---
 
 ## 17. 数据归档和清理策略
 
-状态：TODO
+状态：DONE
 
 ### 目标
 
@@ -1050,15 +1087,24 @@ student_import_stage -> student_record
 - 对象已过期时，下载接口返回明确错误。
 - 清理日志包含数量和耗时，便于审计。
 
+### 完成记录
+
+- 新增 `CleanupProperties`，支持 `DATA_CLEANUP_*` 环境变量配置启停、调度间隔、批大小和各类数据保留时间。
+- 新增 `RetentionCleanupService`，定时按批清理：
+  - `async_task_record` 中 `SUCCESS`、`FAILED`、`CANCELED`、`EXPIRED` 终态任务
+  - `file_upload_task` 中 `SUCCESS`、`ABORTED` 上传任务
+  - `file_record` 中 `DELETED` 文件记录，并同步删除 MinIO 对象
+  - `student_import_stage` 中超过保留期的暂存数据
+- 清理逻辑不会删除运行中的异步任务，也不会删除 `UPLOADING` 状态的上传任务。
+- 下载前会先校验对象是否仍存在；若对象已被生命周期清理或手工删除，下载接口返回空地址并由 Controller 按 404 处理。
+- README 已补充数据清理环境变量说明。
+- 本地验证通过：
+  - `JAVA_HOME=/Users/dingli/Dependent/JDK/jdk8u482-b08/Contents/Home /Users/dingli/Dependent/apache-maven-3.6.3/bin/mvn -q -Dtest=RetentionCleanupServiceTest,FileCenterServiceImplTest,RuleBasedFileSecurityScannerTest test`
+
 ---
 
 ## 建议实施顺序
 
-1. `P1` 百万级导入稳定性护栏
-2. `P1` 批次和分页参数配置化
-3. `P1` 导入分块合并
-4. `P2` 集成测试和回归数据集
-5. `P2` 文件安全治理
-6. `P2` 数据归档和清理策略
+1. `P2` 集成测试和回归数据集
 
-这个顺序的原因是：当前接口契约问题已经修复，下一步应先给高风险导入加护栏；随后把关键参数配置化，方便在同一环境下继续压测；再推进分块合并、真实依赖集成测试和长期治理。
+当前只剩集成测试真实容器联调需要在具备 Docker 的环境中执行；本机环境缺少 `docker` 命令，因此暂保留为 DOING。

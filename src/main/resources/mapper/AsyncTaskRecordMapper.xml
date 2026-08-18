@@ -222,4 +222,12 @@
                 )
           )
     </update>
+
+    <delete id="deleteTerminalBefore">
+        DELETE FROM async_task_record
+        WHERE status IN ('SUCCESS', 'FAILED', 'CANCELED', 'EXPIRED')
+          AND updated_at &lt;= #{updatedBefore}
+        ORDER BY id ASC
+        LIMIT #{limit}
+    </delete>
 </mapper>

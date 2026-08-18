@@ -52,9 +52,13 @@ app:
     recovery-fixed-delay-millis: ${TASK_RECOVERY_FIXED_DELAY_MILLIS:60000}
   excel:
     init-enabled: ${EXCEL_INIT_ENABLED:true}
-    export-page-size: 5000
+    export-page-size: ${EXPORT_PAGE_SIZE:5000}
     sheet-row-limit: 1048575
-    import-batch-size: 2000
+    import-batch-size: ${IMPORT_BATCH_SIZE:2000}
+    import-max-rows-per-task: ${IMPORT_MAX_ROWS_PER_TASK:200000}
+    import-max-file-size-for-async: ${IMPORT_MAX_FILE_SIZE_FOR_ASYNC:104857600}
+    import-merge-chunk-size: ${IMPORT_MERGE_CHUNK_SIZE:5000}
+    import-auto-recovery-enabled: ${IMPORT_AUTO_RECOVERY_ENABLED:false}
     import-worker-count: ${IMPORT_WORKER_COUNT:4}
     import-max-concurrent-tasks: ${IMPORT_MAX_CONCURRENT_TASKS:1}
     import-queue-capacity: ${IMPORT_QUEUE_CAPACITY:20}
@@ -103,6 +107,18 @@ app:
     max-page-size: ${FILE_CENTER_MAX_PAGE_SIZE:100}
     cors-enabled: ${FILE_CENTER_CORS_ENABLED:true}
     cors-allowed-origin-patterns: ${FILE_CENTER_CORS_ALLOWED_ORIGIN_PATTERNS:http://localhost:*,http://127.0.0.1:*,null}
+    security-scan-enabled: ${FILE_CENTER_SECURITY_SCAN_ENABLED:true}
+    allowed-upload-extensions: ${FILE_CENTER_ALLOWED_UPLOAD_EXTENSIONS:txt,csv,json,xml,md,log,properties,yaml,yml,pdf,png,jpg,jpeg,gif,bmp,zip,docx,xlsx,pptx,bin,mp3,mp4,rar,7z}
+    allowed-upload-mime-types: ${FILE_CENTER_ALLOWED_UPLOAD_MIME_TYPES:text/plain,text/csv,application/json,application/xml,text/xml,application/pdf,image/png,image/jpeg,image/gif,image/bmp,application/zip,application/x-zip-compressed,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/octet-stream,application/x-rar-compressed,application/x-7z-compressed,audio/mpeg,video/mp4}
+  cleanup:
+    enabled: ${DATA_CLEANUP_ENABLED:true}
+    initial-delay-millis: ${DATA_CLEANUP_INITIAL_DELAY_MILLIS:300000}
+    fixed-delay-millis: ${DATA_CLEANUP_FIXED_DELAY_MILLIS:3600000}
+    batch-size: ${DATA_CLEANUP_BATCH_SIZE:200}
+    task-retention-hours: ${DATA_CLEANUP_TASK_RETENTION_HOURS:168}
+    upload-task-retention-hours: ${DATA_CLEANUP_UPLOAD_TASK_RETENTION_HOURS:24}
+    deleted-file-retention-hours: ${DATA_CLEANUP_DELETED_FILE_RETENTION_HOURS:24}
+    import-stage-retention-hours: ${DATA_CLEANUP_IMPORT_STAGE_RETENTION_HOURS:24}
 
 management:
   endpoints:

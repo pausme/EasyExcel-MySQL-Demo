@@ -24,6 +24,7 @@ import com.huang.demo.file.repository.FileRecordMapper;
 import com.huang.demo.file.repository.FileUploadTaskMapper;
 import com.huang.demo.file.service.FileCenterService;
 import com.huang.demo.file.service.FileObjectStorageService;
+import com.huang.demo.file.service.FileSecurityScanner;
 import com.huang.demo.security.domain.CurrentUser;
 import com.huang.demo.security.domain.UserContextHolder;
 import org.slf4j.Logger;
@@ -56,15 +57,18 @@ public class FileCenterServiceImpl implements FileCenterService {
     private final FileRecordMapper fileRecordMapper;
     private final FileUploadTaskMapper fileUploadTaskMapper;
     private final FileObjectStorageService fileObjectStorageService;
+    private final FileSecurityScanner fileSecurityScanner;
     private final FileCenterProperties properties;
 
     public FileCenterServiceImpl(FileRecordMapper fileRecordMapper,
                                  FileUploadTaskMapper fileUploadTaskMapper,
                                  FileObjectStorageService fileObjectStorageService,
+                                 FileSecurityScanner fileSecurityScanner,
                                  FileCenterProperties properties) {
         this.fileRecordMapper = fileRecordMapper;
         this.fileUploadTaskMapper = fileUploadTaskMapper;
         this.fileObjectStorageService = fileObjectStorageService;
+        this.fileSecurityScanner = fileSecurityScanner;
         this.properties = properties;
     }
 
@@ -90,6 +94,10 @@ public class FileCenterServiceImpl implements FileCenterService {
         StoredFile storedFile = null;
 
         try {
+            validateUploadMetadata(originalName, file.getContentType());
+            try (java.io.InputStream scanStream = file.getInputStream()) {
+                fileSecurityScanner.scan(scanStream, originalName, file.getContentType(), file.getSize());
+            }
             storedFile = fileObjectStorageService.upload(
                     file.getInputStream(), file.getSize(), objectKey, file.getContentType());
             FileRecord record = buildFileRecord(fileId, originalName, fileExt, file.getContentType(), storedFile);
@@ -122,6 +130,7 @@ public class FileCenterServiceImpl implements FileCenterService {
         validateDirectUploadInitRequest(request);
         String fileMd5 = normalizeFileMd5(request.getFileMd5());
         long fileSize = normalizePositiveFileSize(request.getFileSize());
+        validateUploadMetadata(normalizeOriginalName(request.getOriginalName()), request.getContentType());
         Optional<FileRecord> existingRecord = fileRecordMapper.findNormalByMd5AndSize(currentOwnerId(), fileMd5, fileSize);
         if (existingRecord.isPresent()) {
             return DirectUploadInitResponse.builder()
@@ -156,12 +165,21 @@ public class FileCenterServiceImpl implements FileCenterService {
         FileUploadTask task = findUploadingTask(uploadId, FileUploadType.DIRECT);
         StoredObject object = fileObjectStorageService.statObject(task.getObjectKey());
         validateObjectSize(task, object);
-        FileRecord record = buildFileRecord(task, object);
-        fileRecordMapper.insert(record);
-        markTaskSuccess(task.getUploadId());
-        log.info("direct upload completed, uploadId={}, fileId={}, size={}",
-                task.getUploadId(), record.getFileId(), record.getFileSize());
-        return record;
+        try (java.io.InputStream inputStream = fileObjectStorageService.openObject(task.getObjectKey())) {
+            fileSecurityScanner.scan(inputStream, task.getOriginalName(), object.getContentType(), object.getSize());
+            FileRecord record = buildFileRecord(task, object);
+            fileRecordMapper.insert(record);
+            markTaskSuccess(task.getUploadId());
+            log.info("direct upload completed, uploadId={}, fileId={}, size={}",
+                    task.getUploadId(), record.getFileId(), record.getFileSize());
+            return record;
+        } catch (RuntimeException ex) {
+            fileObjectStorageService.deleteQuietly(task.getObjectKey());
+            throw ex;
+        } catch (IOException ex) {
+            fileObjectStorageService.deleteQuietly(task.getObjectKey());
+            throw new IllegalStateException("读取直传文件内容失败", ex);
+        }
     }
 
     @Override
@@ -170,6 +188,7 @@ public class FileCenterServiceImpl implements FileCenterService {
         validateMultipartUploadInitRequest(request);
         String fileMd5 = normalizeFileMd5(request.getFileMd5());
         long fileSize = normalizePositiveFileSize(request.getFileSize());
+        validateUploadMetadata(normalizeOriginalName(request.getOriginalName()), request.getContentType());
         Optional<FileRecord> existingRecord = fileRecordMapper.findNormalByMd5AndSize(currentOwnerId(), fileMd5, fileSize);
         if (existingRecord.isPresent()) {
             return MultipartUploadInitResponse.builder()
@@ -255,18 +274,28 @@ public class FileCenterServiceImpl implements FileCenterService {
             composed = true;
             StoredObject object = fileObjectStorageService.statObject(task.getObjectKey());
             validateObjectSize(task, object);
-            FileRecord record = buildFileRecord(task, object);
-            fileRecordMapper.insert(record);
-            markTaskSuccess(task.getUploadId());
-            registerDeleteAfterCommit(partObjectKeys);
-            log.info("multipart upload completed, uploadId={}, fileId={}, partCount={}, size={}",
-                    task.getUploadId(), record.getFileId(), task.getPartCount(), record.getFileSize());
-            return record;
+            try (java.io.InputStream inputStream = fileObjectStorageService.openObject(task.getObjectKey())) {
+                fileSecurityScanner.scan(inputStream, task.getOriginalName(), object.getContentType(), object.getSize());
+                FileRecord record = buildFileRecord(task, object);
+                fileRecordMapper.insert(record);
+                markTaskSuccess(task.getUploadId());
+                registerDeleteAfterCommit(partObjectKeys);
+                log.info("multipart upload completed, uploadId={}, fileId={}, partCount={}, size={}",
+                        task.getUploadId(), record.getFileId(), task.getPartCount(), record.getFileSize());
+                return record;
+            }
         } catch (RuntimeException ex) {
             if (composed) {
                 fileObjectStorageService.deleteQuietly(task.getObjectKey());
             }
+            fileObjectStorageService.deleteQuietly(partObjectKeys);
             throw ex;
+        } catch (IOException ex) {
+            if (composed) {
+                fileObjectStorageService.deleteQuietly(task.getObjectKey());
+            }
+            fileObjectStorageService.deleteQuietly(partObjectKeys);
+            throw new IllegalStateException("读取分片合并文件内容失败", ex);
         }
     }
 
@@ -294,7 +323,13 @@ public class FileCenterServiceImpl implements FileCenterService {
             return Optional.empty();
         }
         FileRecord record = recordOptional.get();
-        return Optional.of(fileObjectStorageService.createDownloadUrl(record.getObjectKey(), record.getOriginalName()));
+        try {
+            fileObjectStorageService.statObject(record.getObjectKey());
+            return Optional.of(fileObjectStorageService.createDownloadUrl(record.getObjectKey(), record.getOriginalName()));
+        } catch (RuntimeException ex) {
+            log.warn("create file download url failed, fileId={}, objectKey={}", record.getFileId(), record.getObjectKey(), ex);
+            return Optional.empty();
+        }
     }
 
     @Override
@@ -453,6 +488,10 @@ public class FileCenterServiceImpl implements FileCenterService {
         if (file.getSize() <= 0L) {
             throw new IllegalArgumentException("上传文件不能为空");
         }
+    }
+
+    private void validateUploadMetadata(String originalName, String contentType) {
+        fileSecurityScanner.validateMetadata(originalName, contentType);
     }
 
     private void validateDirectUploadInitRequest(DirectUploadInitRequest request) {

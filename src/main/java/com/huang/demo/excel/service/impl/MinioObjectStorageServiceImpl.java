@@ -9,6 +9,7 @@ import io.minio.MinioClient;
 import io.minio.PutObjectArgs;
 import io.minio.RemoveObjectArgs;
 import io.minio.SetBucketLifecycleArgs;
+import io.minio.StatObjectArgs;
 import io.minio.errors.ErrorResponseException;
 import io.minio.http.Method;
 import io.minio.messages.Expiration;
@@ -138,6 +139,18 @@ public class MinioObjectStorageServiceImpl implements MinioObjectStorageService 
                     .build());
         } catch (Exception ex) {
             throw new IllegalStateException("读取 MinIO 文件失败", ex);
+        }
+    }
+
+    @Override
+    public void ensureObjectExists(String objectKey) {
+        try {
+            minioClient.statObject(StatObjectArgs.builder()
+                    .bucket(properties.getBucketName())
+                    .object(objectKey)
+                    .build());
+        } catch (Exception ex) {
+            throw new IllegalStateException("MinIO 文件不存在或已过期", ex);
         }
     }
 

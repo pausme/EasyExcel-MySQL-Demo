@@ -16,9 +16,11 @@ import com.huang.demo.file.domain.model.StoredObject;
 import com.huang.demo.file.repository.FileRecordMapper;
 import com.huang.demo.file.repository.FileUploadTaskMapper;
 import com.huang.demo.file.service.FileObjectStorageService;
+import com.huang.demo.file.service.FileSecurityScanner;
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.MockMultipartFile;
 
+import java.io.ByteArrayInputStream;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -37,12 +39,12 @@ class FileCenterServiceImplTest {
         FileUploadTaskMapper taskMapper = mock(FileUploadTaskMapper.class);
         FileObjectStorageService storageService = mock(FileObjectStorageService.class);
         FileCenterServiceImpl service = newService(mapper, taskMapper, storageService);
-        MockMultipartFile file = new MockMultipartFile("file", "demo.xlsx",
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "hello".getBytes());
+        MockMultipartFile file = new MockMultipartFile("file", "demo.txt",
+                "text/plain", "hello".getBytes());
         when(storageService.upload(any(), any(Long.class), any(String.class), any(String.class))).thenReturn(
                 StoredFile.builder()
                         .bucketName("student-excel")
-                        .objectKey("files/general/2026/08/05/file-id.xlsx")
+                        .objectKey("files/general/2026/08/05/file-id.txt")
                         .fileMd5("5d41402abc4b2a76b9719d911017c592")
                         .fileSize(file.getSize())
                         .build());
@@ -50,10 +52,28 @@ class FileCenterServiceImplTest {
 
         FileRecord record = service.upload(file);
 
-        assertEquals("demo.xlsx", record.getOriginalName());
+        assertEquals("demo.txt", record.getOriginalName());
         assertEquals("NORMAL", record.getStatus());
         assertNotNull(record.getFileId());
         verify(mapper).insert(any(FileRecord.class));
+    }
+
+    @Test
+    void uploadRejectsExecutableContentEvenIfExtensionLooksSafe() throws Exception {
+        FileRecordMapper mapper = mock(FileRecordMapper.class);
+        FileUploadTaskMapper taskMapper = mock(FileUploadTaskMapper.class);
+        FileObjectStorageService storageService = mock(FileObjectStorageService.class);
+        FileCenterServiceImpl service = newService(mapper, taskMapper, storageService);
+        MockMultipartFile file = new MockMultipartFile("file", "evil.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                new byte[]{'M', 'Z', 0, 0, 0, 0});
+
+        IllegalArgumentException exception = org.junit.jupiter.api.Assertions.assertThrows(
+                IllegalArgumentException.class, () -> service.upload(file));
+
+        assertTrue(exception.getMessage().contains("可执行程序"));
+        verify(storageService, org.mockito.Mockito.never()).upload(any(), any(Long.class), any(String.class), any(String.class));
+        verify(mapper, org.mockito.Mockito.never()).insert(any(FileRecord.class));
     }
 
     @Test
@@ -140,6 +160,25 @@ class FileCenterServiceImplTest {
     }
 
     @Test
+    void initDirectUploadRejectsDangerousExtension() {
+        FileRecordMapper mapper = mock(FileRecordMapper.class);
+        FileUploadTaskMapper taskMapper = mock(FileUploadTaskMapper.class);
+        FileObjectStorageService storageService = mock(FileObjectStorageService.class);
+        FileCenterServiceImpl service = newService(mapper, taskMapper, storageService);
+        DirectUploadInitRequest request = new DirectUploadInitRequest();
+        request.setOriginalName("demo.exe");
+        request.setContentType("application/octet-stream");
+        request.setFileMd5("5d41402abc4b2a76b9719d911017c592");
+        request.setFileSize(5L);
+
+        IllegalArgumentException exception = org.junit.jupiter.api.Assertions.assertThrows(
+                IllegalArgumentException.class, () -> service.initDirectUpload(request));
+
+        assertTrue(exception.getMessage().contains("不被允许"));
+        verify(taskMapper, org.mockito.Mockito.never()).insert(any(FileUploadTask.class));
+    }
+
+    @Test
     void completeDirectUploadCreatesFileRecord() {
         FileRecordMapper mapper = mock(FileRecordMapper.class);
         FileUploadTaskMapper taskMapper = mock(FileUploadTaskMapper.class);
@@ -161,12 +200,70 @@ class FileCenterServiceImplTest {
         when(taskMapper.findByUploadId("anonymous", "upload-1")).thenReturn(Optional.of(task));
         when(storageService.statObject("files/general/file-1.txt")).thenReturn(
                 StoredObject.builder().objectKey("files/general/file-1.txt").size(5L).etag("etag").build());
+        when(storageService.openObject("files/general/file-1.txt")).thenReturn(new ByteArrayInputStream("hello".getBytes()));
         when(taskMapper.markSuccess("anonymous", "upload-1")).thenReturn(1);
 
         FileRecord record = service.completeDirectUpload("upload-1");
 
         assertEquals("file-1", record.getFileId());
         verify(mapper).insert(any(FileRecord.class));
+    }
+
+    @Test
+    void completeDirectUploadRejectsSuspiciousStoredObject() {
+        FileRecordMapper mapper = mock(FileRecordMapper.class);
+        FileUploadTaskMapper taskMapper = mock(FileUploadTaskMapper.class);
+        FileObjectStorageService storageService = mock(FileObjectStorageService.class);
+        FileCenterServiceImpl service = newService(mapper, taskMapper, storageService);
+        FileUploadTask task = FileUploadTask.builder()
+                .uploadId("upload-1")
+                .fileId("file-1")
+                .uploadType("DIRECT")
+                .originalName("evil.xlsx")
+                .objectKey("files/general/file-1.xlsx")
+                .bucketName("student-excel")
+                .contentType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                .fileSize(6L)
+                .fileMd5("5d41402abc4b2a76b9719d911017c592")
+                .fileExt("xlsx")
+                .status("UPLOADING")
+                .build();
+        when(taskMapper.findByUploadId("anonymous", "upload-1")).thenReturn(Optional.of(task));
+        when(storageService.statObject("files/general/file-1.xlsx")).thenReturn(
+                StoredObject.builder().objectKey("files/general/file-1.xlsx").size(6L)
+                        .contentType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                        .etag("etag").build());
+        when(storageService.openObject("files/general/file-1.xlsx")).thenReturn(new ByteArrayInputStream(
+                new byte[]{'M', 'Z', 0, 0, 0, 0}));
+
+        IllegalArgumentException exception = org.junit.jupiter.api.Assertions.assertThrows(
+                IllegalArgumentException.class, () -> service.completeDirectUpload("upload-1"));
+
+        assertTrue(exception.getMessage().contains("可执行程序"));
+        verify(mapper, org.mockito.Mockito.never()).insert(any(FileRecord.class));
+        verify(taskMapper, org.mockito.Mockito.never()).markSuccess("anonymous", "upload-1");
+    }
+
+    @Test
+    void createDownloadUrlRejectsExpiredObject() {
+        FileRecordMapper mapper = mock(FileRecordMapper.class);
+        FileUploadTaskMapper taskMapper = mock(FileUploadTaskMapper.class);
+        FileObjectStorageService storageService = mock(FileObjectStorageService.class);
+        FileCenterServiceImpl service = newService(mapper, taskMapper, storageService);
+        FileRecord record = FileRecord.builder()
+                .fileId("file-1")
+                .originalName("demo.txt")
+                .objectKey("files/general/file-1.txt")
+                .status("NORMAL")
+                .build();
+        when(mapper.findNormalByFileId("anonymous", "file-1")).thenReturn(Optional.of(record));
+        when(storageService.statObject("files/general/file-1.txt"))
+                .thenThrow(new IllegalStateException("not found"));
+
+        Optional<String> downloadUrl = service.createDownloadUrl("file-1");
+
+        assertTrue(!downloadUrl.isPresent());
+        verify(storageService, org.mockito.Mockito.never()).createDownloadUrl(any(String.class), any(String.class));
     }
 
     @Test
@@ -223,6 +320,7 @@ class FileCenterServiceImplTest {
                                              FileObjectStorageService storageService) {
         FileCenterProperties properties = new FileCenterProperties();
         properties.setInitEnabled(false);
-        return new FileCenterServiceImpl(mapper, taskMapper, storageService, properties);
+        FileSecurityScanner scanner = new RuleBasedFileSecurityScanner(properties);
+        return new FileCenterServiceImpl(mapper, taskMapper, storageService, scanner, properties);
     }
 }

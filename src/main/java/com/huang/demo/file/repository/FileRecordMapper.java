@@ -4,6 +4,7 @@ import com.huang.demo.file.domain.entity.FileRecord;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 
@@ -33,4 +34,9 @@ public interface FileRecordMapper {
                                     @Param("fileExt") String fileExt,
                                     @Param("offset") int offset,
                                     @Param("limit") int limit);
+
+    List<FileRecord> listDeletedBefore(@Param("updatedBefore") LocalDateTime updatedBefore,
+                                       @Param("limit") int limit);
+
+    int deleteById(@Param("id") Long id);
 }

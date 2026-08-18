@@ -268,8 +268,32 @@
             birthday = VALUES(birthday)
     </insert>
 
+    <insert id="mergeImportStageRangeToStudent">
+        INSERT INTO student_record (student_no, name, age, gender, class_name, email, birthday)
+        SELECT student_no, name, age, gender, class_name, email, birthday
+        FROM student_import_stage
+        WHERE import_task_id = #{importTaskId}
+          AND row_no &gt;= #{startRowNo}
+          AND row_no &lt;= #{endRowNo}
+        ORDER BY row_no
+        ON DUPLICATE KEY UPDATE
+            name = VALUES(name),
+            age = VALUES(age),
+            gender = VALUES(gender),
+            class_name = VALUES(class_name),
+            email = VALUES(email),
+            birthday = VALUES(birthday)
+    </insert>
+
     <delete id="deleteImportStage">
         DELETE FROM student_import_stage
         WHERE import_task_id = #{importTaskId}
+    </delete>
+
+    <delete id="deleteImportStageBefore">
+        DELETE FROM student_import_stage
+        WHERE created_at &lt;= #{createdBefore}
+        ORDER BY id ASC
+        LIMIT #{limit}
     </delete>
 </mapper>

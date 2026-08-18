@@ -17,6 +17,14 @@ public class ExcelDemoProperties {
 
     private int importBatchSize;
 
+    private int importMaxRowsPerTask = 200000;
+
+    private long importMaxFileSizeForAsync = 104857600L;
+
+    private int importMergeChunkSize = 5000;
+
+    private boolean importAutoRecoveryEnabled = false;
+
     private int importWorkerCount = 4;
 
     private int importMaxConcurrentTasks = 1;

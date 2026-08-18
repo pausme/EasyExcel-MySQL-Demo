@@ -222,7 +222,8 @@ if have_xlsx:
     # 非 Excel
     txt = os.path.join(TMP, "notexcel.txt"); open(txt, "w").write("not an excel file")
     r = curl("POST", "/api/excel/import", headers={"X-User-Id": "user-a"}, form_file=txt)
-    resp, row = record("EXC-IMP-05", "POST", "/api/excel/import (not excel)", "200", r, note="提交返回 taskId，异步解析应 FAILED")
+    resp, row = record("EXC-IMP-05", "POST", "/api/excel/import (not excel)", "400", r,
+                       note="提交阶段校验文件头和 xlsx 结构，非法文件不创建异步任务")
     bad_task_id = ""
     try: bad_task_id = P(resp).get("taskId", "")
     except Exception: pass
@@ -385,6 +386,11 @@ record("FIL-UP-02", "POST", "/api/files/upload (no file)", "400/415", r)
 empty2 = os.path.join(TMP, "empty.txt"); open(empty2, "wb").close()
 r = curl("POST", "/api/files/upload", form_file=empty2)
 record("FIL-UP-03", "POST", "/api/files/upload (empty)", "400", r)
+evil = os.path.join(TMP, "evil.xlsx")
+open(evil, "wb").write(b"MZ\x00\x00\x00\x00")
+r = curl("POST", "/api/files/upload", form_file=evil)
+record("FIL-UP-04", "POST", "/api/files/upload (fake executable xlsx)", "400", r,
+       note="文件安全扫描应在落库前拦截伪装可执行内容")
 
 # 秒传
 r = curl("POST", "/api/files/instant-check", data='{"fileMd5":"%s","fileSize":%d}' % (demo_md5, demo_size))
@@ -412,7 +418,7 @@ if up_file_id:
 
 # 直传
 r = curl("POST", "/api/files/direct/init",
-         data='{"originalName":"demo.zip","contentType":"application/zip","fileSize":%d,"fileMd5":"%s"}' % (demo_size, demo_md5))
+         data='{"originalName":"demo.txt","contentType":"text/plain","fileSize":%d,"fileMd5":"%s"}' % (demo_size, demo_md5))
 resp, row = record("FIL-DI-01", "POST", "/api/files/direct/init", "200", r)
 direct_upload_id = direct_url = ""
 try:

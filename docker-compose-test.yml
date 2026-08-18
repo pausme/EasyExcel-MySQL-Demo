@@ -1,0 +1,65 @@
+services:
+  mysql-it:
+    image: ${INTEGRATION_MYSQL_IMAGE:-mysql:8.0.32}
+    container_name: easyexcel-mysql-it
+    environment:
+      MYSQL_ROOT_PASSWORD: easyexcel_test_root
+      MYSQL_DATABASE: demo
+      TZ: Asia/Shanghai
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --max_allowed_packet=128M
+    ports:
+      - "${INTEGRATION_MYSQL_PORT:-23306}:3306"
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -peasyexcel_test_root --silent"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - mysql-it-data:/var/lib/mysql
+    networks:
+      - easyexcel-it
+
+  redis-it:
+    image: ${INTEGRATION_REDIS_IMAGE:-redis:6.2}
+    container_name: easyexcel-redis-it
+    ports:
+      - "${INTEGRATION_REDIS_PORT:-26379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    networks:
+      - easyexcel-it
+
+  minio-it:
+    image: ${INTEGRATION_MINIO_IMAGE:-minio/minio:latest}
+    container_name: easyexcel-minio-it
+    environment:
+      MINIO_ROOT_USER: easyexcel_test_access
+      MINIO_ROOT_PASSWORD: easyexcel_test_secret
+      TZ: Asia/Shanghai
+    command: server /data --address ":9000" --console-address ":9001"
+    ports:
+      - "${INTEGRATION_MINIO_API_PORT:-29000}:9000"
+      - "${INTEGRATION_MINIO_CONSOLE_PORT:-29001}:9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:9000/minio/health/live"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - minio-it-data:/data
+    networks:
+      - easyexcel-it
+
+networks:
+  easyexcel-it:
+    name: easyexcel-it
+
+volumes:
+  mysql-it-data:
+  minio-it-data:

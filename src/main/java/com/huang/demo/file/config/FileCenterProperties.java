@@ -37,4 +37,34 @@ public class FileCenterProperties {
             "http://localhost:*",
             "http://127.0.0.1:*",
             "null"));
+
+    private boolean securityScanEnabled = true;
+
+    private List<String> allowedUploadExtensions = new ArrayList<String>(Arrays.asList(
+            "txt", "csv", "json", "xml", "md", "log", "properties", "yaml", "yml",
+            "pdf", "png", "jpg", "jpeg", "gif", "bmp",
+            "zip", "docx", "xlsx", "pptx",
+            "bin", "mp3", "mp4", "rar", "7z"));
+
+    private List<String> allowedUploadMimeTypes = new ArrayList<String>(Arrays.asList(
+            "text/plain",
+            "text/csv",
+            "application/json",
+            "application/xml",
+            "text/xml",
+            "application/pdf",
+            "image/png",
+            "image/jpeg",
+            "image/gif",
+            "image/bmp",
+            "application/zip",
+            "application/x-zip-compressed",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            "application/octet-stream",
+            "application/x-rar-compressed",
+            "application/x-7z-compressed",
+            "audio/mpeg",
+            "video/mp4"));
 }

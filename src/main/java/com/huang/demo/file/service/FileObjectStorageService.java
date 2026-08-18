@@ -18,6 +18,8 @@ public interface FileObjectStorageService {
 
     StoredObject statObject(String objectKey);
 
+    InputStream openObject(String objectKey);
+
     void composeObject(String objectKey, List<String> sourceObjectKeys, String contentType);
 
     List<String> listObjectKeys(String objectPrefix);

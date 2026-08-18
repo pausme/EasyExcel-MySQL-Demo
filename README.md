@@ -5,7 +5,7 @@
 
 ## 功能概览
 
-- Excel 导入：上传后先创建 IMPORT 任务，后台流式读取 Excel，分批放入有界队列，由多个 worker 批量写入 MySQL。
+- Excel 导入：提交阶段校验 `.xlsx` 结构和容量边界，上传后创建 IMPORT 任务，后台流式读取 Excel，分批放入有界队列，由多个 worker 批量写入 MySQL 暂存表。
 - Excel 导出：异步提交任务，使用游标分页读取数据库，生成单 Sheet Excel 后上传 MinIO。
 - 异步任务中心：统一记录任务状态、进度、失败原因和重试次数，状态缓存 Redis，任务记录持久化 MySQL。
 - 任务恢复和监控：任务执行写入 worker 心跳，应用定时恢复悬挂任务，并暴露 Actuator/Micrometer 指标。
@@ -21,21 +21,21 @@
 
 ## 当前验证结论
 
-当前以内部标准测试环境的 R7 轮为权威结果。历史本机和历史云端测试只作为参考，不再作为容量结论。
+当前以内部标准测试环境的 R11 轮为当前权威结果。R7~R10 保留为历史过程记录，本机和历史云端测试只作为参考，不再作为容量结论。
 
 | 项目 | 数据量 | 结果 |
 | --- | ---: | --- |
-| 单元/切片测试 | 40 用例 | 全部通过 |
-| 接口扁平化测试 | 76 用例 | R7 历史记录为 72 通过 / 4 失败；F-02 已本地回归修复，脚本已加固导出超限和取消竞态误判 |
+| 单元/切片测试 | 12 类 / 54 用例 | 全部通过 |
+| 接口扁平化测试 | 77 用例 | R11 标准环境 77/77 通过；F-02/F-09/F-12 已关闭，F-11 受控，新增文件安全扫描用例通过 |
 | 异步导出 | 1,000,006 行 × 3 | 全部成功，平均约 23,317 行/s |
-| 异步导入 | 100,000 行 × 3 | 全部成功，平均约 3,908 行/s |
-| 异步导入 | 1,000,000 行 | 当前小规格单机 Docker 环境不可直接压测，存在内存和长事务风险 |
+| 异步导入 | 100,000 行 × 3 | 全部成功，平均约 4,511 行/s |
+| 异步导入 | 1,000,000 行 | 默认护栏拦截超 20 万行任务；放开护栏后在标准环境已实测成功，平均约 4,521 行/s |
 
 重要边界：
 
 - 导出为了保证“导出文件可直接回导”，当前只生成单 Sheet；超过 Excel 单 Sheet 数据行上限 `1,048,575` 时会失败并提示缩小范围或改用 CSV。
-- 全量原子导入采用“暂存表 + 校验 + 单事务合并”，正式表不会被半成功污染；代价是写入链路比直接批量 upsert 更重。
-- 标准环境已经通过 swap 缓解小规格机器 OOM，但百万级导入仍建议拆分任务、降低并发或改为分块合并。
+- 导入采用“暂存表 + 全量校验 + 分块事务合并”，可以在写正式表前拦截坏数据，并降低百万级长事务风险。
+- 标准环境已经通过 swap 缓解小规格机器 OOM；默认还会用最大行数和文件大小限制拒绝超出当前环境容量的导入任务。
 
 ## 实现思路
 
@@ -43,6 +43,9 @@
 
 ```text
 HTTP 上传 Excel
+        |
+        v
+校验 .xlsx 后缀、zip 文件头和 xlsx 必要结构
         |
         v
 上传原始导入文件到 MinIO
@@ -57,7 +60,7 @@ HTTP 上传 Excel
 EasyExcel 流式解析
         |
         v
-每 2000 行组成一个批次 -> 有界 BlockingQueue
+每 `IMPORT_BATCH_SIZE` 行组成一个批次 -> 有界 BlockingQueue
         |
         v
 多个导入 worker 消费批次并写入 student_import_stage
@@ -66,14 +69,14 @@ EasyExcel 流式解析
 校验必填字段和文件内重复 student_no
         |
         v
-单个事务从暂存表 upsert 到 student_record
+按 `IMPORT_MERGE_CHUNK_SIZE` 从暂存表分块 upsert 到 student_record
 ```
 
 导入任务的原始 Excel 会先保存到 MinIO 的 `excel/student/import-source/` 前缀，任务 payload 记录 `sourceObjectKey`、原始文件名和文件大小。
 后台执行和任务重试都从 MinIO 读取源文件，不依赖本机临时目录；如果源文件生命周期过期或被删除，重试会明确失败并提示源文件不存在或已过期。
 导入不会把整份 Excel 加载到内存中。解析线程只保留当前批次，队列容量有限，队列满时解析会产生背压。
-解析后的批次先写入 `student_import_stage` 暂存表，全部解析和暂存成功后，再通过一个数据库事务合并到 `student_record`。
-如果 Excel 后半段解析失败、暂存失败、必填字段为空、文件内出现重复 `student_no`，正式表都不会被修改。
+解析后的批次先写入 `student_import_stage` 暂存表，全部解析和暂存成功后，先统一校验必填、长度、格式和文件内重复 `student_no`，再按 `IMPORT_MERGE_CHUNK_SIZE` 分块合并到 `student_record`。
+如果 Excel 后半段解析失败、暂存失败或最终校验失败，正式表都不会被修改；如果已经进入分块合并阶段后数据库异常，已提交的合并块不会自动回滚，这是用短事务稳定性换取的容量边界。
 如果导入校验失败，系统会生成错误明细 Excel 上传到 MinIO，用户可以通过导入任务状态接口查看错误文件信息，并通过签名地址下载。
 导入任务进度会写入统一任务中心：`totalCount` 表示已经解析的行数，`completedCount` 表示已经暂存的行数，任务完成前进度最高到 95%，成功后为 100%。
 
@@ -203,12 +206,26 @@ export FILE_CENTER_MULTIPART_MAX_PART_COUNT='1000'
 export FILE_CENTER_MAX_PAGE_SIZE='100'
 export FILE_CENTER_CORS_ENABLED='true'
 export FILE_CENTER_CORS_ALLOWED_ORIGIN_PATTERNS='http://localhost:*,http://127.0.0.1:*,null'
+export FILE_CENTER_SECURITY_SCAN_ENABLED='true'
+export FILE_CENTER_ALLOWED_UPLOAD_EXTENSIONS='txt,csv,json,xml,md,log,properties,yaml,yml,pdf,png,jpg,jpeg,gif,bmp,zip,docx,xlsx,pptx,bin,mp3,mp4,rar,7z'
+export FILE_CENTER_ALLOWED_UPLOAD_MIME_TYPES='text/plain,text/csv,application/json,application/xml,text/xml,application/pdf,image/png,image/jpeg,image/gif,image/bmp,application/zip,application/x-zip-compressed,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/octet-stream,application/x-rar-compressed,application/x-7z-compressed,audio/mpeg,video/mp4'
+
+# 数据清理
+export DATA_CLEANUP_ENABLED='true'
+export DATA_CLEANUP_INITIAL_DELAY_MILLIS='300000'
+export DATA_CLEANUP_FIXED_DELAY_MILLIS='3600000'
+export DATA_CLEANUP_BATCH_SIZE='200'
+export DATA_CLEANUP_TASK_RETENTION_HOURS='168'
+export DATA_CLEANUP_UPLOAD_TASK_RETENTION_HOURS='24'
+export DATA_CLEANUP_DELETED_FILE_RETENTION_HOURS='24'
+export DATA_CLEANUP_IMPORT_STAGE_RETENTION_HOURS='24'
 ```
 
 建议将 MinIO Bucket 设置为私有。导出下载接口返回有效期默认 30 分钟的签名地址，避免大文件流量经过应用服务器。
 导出对象默认写入 `excel/student/` 前缀，生命周期规则默认在 1 天后清理对象。
 导入源文件默认写入 `excel/student/import-source/` 前缀，生命周期规则默认在 1 天后清理对象，用于失败任务重试和多实例部署下的任务恢复。
 通用文件中心默认写入 `files/general/` 前缀，可通过 `FILE_CENTER_OBJECT_PREFIX` 调整。
+数据清理任务默认每小时执行一次，按配置清理终态任务、已完成上传任务、逻辑删除文件记录和异常残留导入暂存数据。
 
 ## 数据库初始化
 
@@ -623,6 +640,11 @@ export IMPORT_MAX_RETRY_TIMES='3'
 export IMPORT_RETRY_BACKOFF_MILLIS='200'
 export IMPORT_PROGRESS_LOG_INTERVAL='50'
 export IMPORT_BATCH_SORT_ENABLED='true'
+export IMPORT_BATCH_SIZE='2000'
+export IMPORT_MAX_ROWS_PER_TASK='200000'
+export IMPORT_MAX_FILE_SIZE_FOR_ASYNC='104857600'
+export IMPORT_MERGE_CHUNK_SIZE='5000'
+export IMPORT_AUTO_RECOVERY_ENABLED='false'
 export IMPORT_TASK_CORE_POOL_SIZE='1'
 export IMPORT_TASK_MAX_POOL_SIZE='1'
 export IMPORT_TASK_QUEUE_CAPACITY='10'
@@ -633,6 +655,9 @@ export IMPORT_TEMP_DIR='/tmp/student-excel-import'
 `IMPORT_TASK_*` 控制真正执行异步导入任务的外层线程池；每个导入任务内部还会按 `IMPORT_WORKER_COUNT` 启动写库 worker。
 `IMPORT_WORKER_FINISH_WAIT_SECONDS` 控制导入任务等待 worker 收尾，默认 `0` 表示不主动超时。
 如果设置为正数，应用启动时会校验它覆盖单批事务和重试时间窗口。
+`IMPORT_MAX_ROWS_PER_TASK` 和 `IMPORT_MAX_FILE_SIZE_FOR_ASYNC` 是导入提交阶段的容量护栏，超过限制会直接返回 400，不会创建后台任务。
+`IMPORT_MERGE_CHUNK_SIZE` 控制暂存表合并正式表的单块行数，默认 `5000`，代码会限制在 `1-20000`。
+`IMPORT_AUTO_RECOVERY_ENABLED` 默认关闭，应用异常退出后的导入任务会标记失败，避免大文件在恢复协调器中自动反复重跑。
 
 导出线程池可以通过以下变量调整：
 
@@ -642,14 +667,17 @@ export EXPORT_MAX_POOL_SIZE='2'
 export EXPORT_QUEUE_CAPACITY='10'
 export EXPORT_AWAIT_TERMINATION_SECONDS='30'
 export EXPORT_REJECTED_EXECUTION_POLICY='abort'
+export EXPORT_PAGE_SIZE='5000'
 ```
 
 ## 一致性和容量边界
 
-- 导入采用“暂存表 + 校验后单事务合并”策略，正式表层面满足全量原子性。
-- 暂存表写入可以分批完成；只要最终校验或合并失败，本次导入不会修改 `student_record`。
+- 导入采用“暂存表 + 全量校验 + 分块合并”策略，正式表写入前会完整校验本次导入数据。
+- 暂存表写入可以分批完成；只要解析、暂存或最终校验失败，本次导入不会修改 `student_record`。
+- 合并阶段使用多个短事务降低百万级长事务风险；进入合并阶段后如果中途失败，已提交分块不会自动回滚，严格全量原子场景需要版本切换或影子表方案。
 - 同一个文件内出现重复 `student_no` 会直接失败，避免不同批次提交顺序影响最终结果。
 - 导入源文件会持久化到 MinIO，任务执行和重试不依赖本机临时目录。
+- 导入提交阶段会校验 `.xlsx` 后缀和文件真实结构，非 Excel 文件直接返回 400，不创建异步任务。
 - 导入校验失败会生成错误明细文件，错误文件通过 MinIO 私有对象和签名 URL 下载。
 - 当前导出只使用一个 Sheet，单 Sheet 数据行上限为 `1048575`。
 - MinIO 对象由 Bucket 生命周期规则清理，Redis 任务状态过期不会自动删除已经上传的对象。
@@ -657,14 +685,14 @@ export EXPORT_REJECTED_EXECUTION_POLICY='abort'
 
 ## 性能基线和压测
 
-标准环境 R7 权威结果：
+标准环境当前权威结果（R11，文件安全扫描版）：
 
 | 场景 | 数据量 | 结果 | 吞吐 |
 | --- | ---: | ---: | ---: |
 | 服务端播种 | 1,000,000 行 | 88.5 s | 约 11,300 行/s |
 | 异步导出 | 1,000,006 行，3 次 | 平均 43.05 s | 约 23,317 行/s |
-| 异步导入 | 100,000 行，3 次 | 平均 25.6 s | 约 3,908 行/s |
-| 异步导入 | 1,000,000 行 | 不建议在当前小规格单机直接执行 | 需先治理内存与长事务 |
+| 异步导入 | 100,000 行，3 次 | 平均 22.42 s | 约 4,511 行/s |
+| 异步导入 | 1,000,000 行 | 默认护栏拦截；放开护栏后在标准环境成功，平均约 4,521 行/s |
 
 本机高配或本地 DB 历史参考：
 
@@ -680,7 +708,7 @@ export EXPORT_REJECTED_EXECUTION_POLICY='abort'
 
 - worker 数增加不等于线性提速。高配本地 DB 中 16 worker 最快，但标准小规格云服务器瓶颈在内存、云盘 fsync 和长事务。
 - `IMPORT_WORKER_COUNT * IMPORT_MAX_CONCURRENT_TASKS <= HIKARI_MAXIMUM_POOL_SIZE` 只是硬约束；生产还要给查询、导出、健康检查和普通接口预留连接。
-- 当前标准环境建议单次导入控制在 10 万行级别；百万级导入需要拆分任务、提高合并事务超时，或实现分块合并。
+- 当前标准环境默认单次导入上限为 20 万行；百万级导入需要拆分任务，或在确认机器资源后放开 `IMPORT_MAX_ROWS_PER_TASK` 并重新压测。
 - 导出 100 万级稳定，超过单 Sheet 上限会按设计失败。
 
 运行压测脚本：
