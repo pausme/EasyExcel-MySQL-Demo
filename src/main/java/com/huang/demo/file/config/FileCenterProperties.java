@@ -25,11 +25,23 @@ public class FileCenterProperties {
 
     private int uploadUrlExpireMinutes = 30;
 
+    private String uploadOperationLockKeyPrefix = "file:upload:operation:";
+
+    private int uploadOperationLockTtlSeconds = 1800;
+
     private long multipartPartSize = 8L * 1024L * 1024L;
 
     private int multipartMaxPartCount = 1000;
 
     private int maxPageSize = 100;
+
+    private long maxFileSizeBytes = 0L;
+
+    private long maxTotalStorageBytesPerOwner = 0L;
+
+    private int maxActiveUploadTasksPerOwner = 20;
+
+    private int maxDailyUploadCountPerOwner = 0;
 
     private boolean corsEnabled = true;
 

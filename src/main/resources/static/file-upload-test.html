@@ -425,8 +425,11 @@
         uploadId: '',
         fileId: '',
         multipartParts: [],
-        currentMultipartInit: null
+        currentMultipartInit: null,
+        multipartDraft: null
     };
+
+    var multipartDraftKey = 'file-center-multipart-draft-v1';
 
     var els = {
         fileInput: document.getElementById('fileInput'),
@@ -463,6 +466,7 @@
         state.fileId = '';
         state.multipartParts = [];
         state.currentMultipartInit = null;
+        state.multipartDraft = loadMultipartDraft();
         els.fileSizeText.textContent = state.file ? formatBytes(state.file.size) : '-';
         els.md5Text.textContent = '-';
         els.uploadIdText.textContent = '-';
@@ -472,6 +476,9 @@
         renderPartTable();
         if (state.file) {
             log('已选择文件：' + state.file.name + '，大小：' + formatBytes(state.file.size));
+            if (state.multipartDraft) {
+                log('检测到待恢复分片草稿：' + state.multipartDraft.originalName + '，uploadId=' + state.multipartDraft.uploadId);
+            }
         }
     });
 
@@ -512,6 +519,12 @@
     loadFiles().catch(function (error) {
         log('刷新列表失败：' + error.message);
     });
+    state.multipartDraft = loadMultipartDraft();
+    if (state.multipartDraft) {
+        log('检测到待恢复分片草稿：' + state.multipartDraft.originalName
+            + '，uploadId=' + state.multipartDraft.uploadId
+            + '，重新选择同名同内容文件后可恢复');
+    }
 
     async function uploadDirect() {
         var file = requireFile();
@@ -545,16 +558,9 @@
         var file = requireFile();
         var md5 = await ensureMd5(file);
         var partSize = normalizePartSize();
-        setStatus('初始化分片', '');
-        var init = await postJson('/api/files/multipart/init', {
-            originalName: file.name,
-            contentType: file.type || 'application/octet-stream',
-            fileSize: file.size,
-            fileMd5: md5,
-            partSize: partSize
-        });
-        logJson('分片初始化响应', init);
+        var init = await prepareMultipartSession(file, md5, partSize);
         if (init.instant) {
+            clearMultipartDraft();
             markCompleted(init.fileId, init.file);
             return;
         }
@@ -564,10 +570,12 @@
         state.multipartParts = prepareParts(init.parts || []);
         renderIds();
         renderPartTable();
+        saveMultipartDraft(init, file, md5);
         await uploadParts(file, init);
         setStatus('合并分片', '');
         var completed = await postJson('/api/files/multipart/' + encodeURIComponent(init.uploadId) + '/complete');
         logJson('分片完成响应', completed);
+        clearMultipartDraft();
         markCompleted(completed.fileId, completed);
         await loadFiles();
     }
@@ -599,20 +607,28 @@
     }
 
     async function resumeMultipart() {
-        if (!state.uploadId) {
+        var file = requireFile();
+        var md5 = await ensureMd5(file);
+        var uploadId = state.uploadId || (state.multipartDraft && state.multipartDraft.uploadId);
+        if (!uploadId) {
             throw new Error('当前没有 uploadId');
         }
-        var file = requireFile();
-        if (!state.currentMultipartInit) {
-            throw new Error('当前没有可恢复的分片元数据，请重新初始化上传');
-        }
-        var result = await getJson('/api/files/multipart/' + encodeURIComponent(state.uploadId) + '/parts');
+        var init = await postJson('/api/files/multipart/' + encodeURIComponent(uploadId) + '/resume');
+        logJson('分片恢复响应', init);
+        state.uploadId = init.uploadId;
+        state.fileId = init.fileId;
+        state.currentMultipartInit = init;
+        renderIds();
+        saveMultipartDraft(init, file, md5);
+        var result = await getJson('/api/files/multipart/' + encodeURIComponent(uploadId) + '/parts');
         logJson('继续上传前的分片状态', result);
         updatePartProgress(result);
-        await uploadParts(file, state.currentMultipartInit, result.uploadedParts || []);
+        renderPartTable();
+        await uploadParts(file, init, result.uploadedParts || []);
         setStatus('合并分片', '');
         var completed = await postJson('/api/files/multipart/' + encodeURIComponent(state.uploadId) + '/complete');
         logJson('分片完成响应', completed);
+        clearMultipartDraft();
         markCompleted(completed.fileId, completed);
         await loadFiles();
     }
@@ -648,7 +664,33 @@
         }
         var result = await postJson('/api/files/multipart/' + encodeURIComponent(state.uploadId) + '/abort');
         logJson('取消分片响应', result);
+        clearMultipartDraft();
         setStatus('已取消', 'warn');
+    }
+
+    async function prepareMultipartSession(file, md5, partSize) {
+        var draft = loadMultipartDraft();
+        if (draft && isMatchingMultipartDraft(draft, file, md5, partSize)) {
+            try {
+                setStatus('恢复分片', '');
+                var resumed = await postJson('/api/files/multipart/' + encodeURIComponent(draft.uploadId) + '/resume');
+                logJson('分片恢复响应', resumed);
+                return resumed;
+            } catch (error) {
+                log('恢复分片失败，改为重新初始化：' + error.message);
+                clearMultipartDraft();
+            }
+        }
+        setStatus('初始化分片', '');
+        var init = await postJson('/api/files/multipart/init', {
+            originalName: file.name,
+            contentType: file.type || 'application/octet-stream',
+            fileSize: file.size,
+            fileMd5: md5,
+            partSize: partSize
+        });
+        logJson('分片初始化响应', init);
+        return init;
     }
 
     async function uploadParts(file, init, uploadedPartNumbers) {
@@ -1006,6 +1048,59 @@
     function renderIds() {
         els.uploadIdText.textContent = state.uploadId || '-';
         els.fileIdText.textContent = state.fileId || '-';
+    }
+
+    function loadMultipartDraft() {
+        try {
+            var text = window.localStorage.getItem(multipartDraftKey);
+            return text ? JSON.parse(text) : null;
+        } catch (error) {
+            log('读取分片草稿失败：' + error.message);
+            return null;
+        }
+    }
+
+    function saveMultipartDraft(init, file, fileMd5) {
+        if (!init || !init.uploadId || !file) {
+            return;
+        }
+        var draft = {
+            uploadId: init.uploadId,
+            fileId: init.fileId || '',
+            originalName: file.name,
+            contentType: file.type || 'application/octet-stream',
+            fileSize: file.size,
+            fileMd5: fileMd5 || '',
+            partSize: init.partSize || normalizePartSize(),
+            partCount: init.partCount || 0,
+            expireMinutes: init.expireMinutes || 0,
+            savedAt: new Date().toISOString()
+        };
+        state.multipartDraft = draft;
+        try {
+            window.localStorage.setItem(multipartDraftKey, JSON.stringify(draft));
+        } catch (error) {
+            log('保存分片草稿失败：' + error.message);
+        }
+    }
+
+    function clearMultipartDraft() {
+        state.multipartDraft = null;
+        try {
+            window.localStorage.removeItem(multipartDraftKey);
+        } catch (error) {
+            log('清理分片草稿失败：' + error.message);
+        }
+    }
+
+    function isMatchingMultipartDraft(draft, file, md5, partSize) {
+        if (!draft || !file) {
+            return false;
+        }
+        return draft.originalName === file.name
+            && Number(draft.fileSize) === Number(file.size)
+            && String(draft.fileMd5 || '') === String(md5 || '')
+            && Number(draft.partSize) === Number(partSize);
     }
 
     function setProgress(el, value) {

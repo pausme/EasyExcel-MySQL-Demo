@@ -1,5 +1,7 @@
 package com.huang.demo.excel.api.dto;
 
+import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
+import com.fasterxml.jackson.databind.annotation.JsonPOJOBuilder;
 import com.huang.demo.excel.domain.model.StudentImportTaskResult;
 import com.huang.demo.excel.model.StudentImportErrorRow;
 import com.huang.demo.task.api.dto.AsyncTaskResponse;
@@ -13,6 +15,7 @@ import java.util.Map;
 
 @Getter
 @Builder
+@JsonDeserialize(builder = ImportTaskResponse.ImportTaskResponseBuilder.class)
 public class ImportTaskResponse {
 
     private final String taskId;
@@ -91,5 +94,9 @@ public class ImportTaskResponse {
                 .startedAt(task.getStartedAt())
                 .finishedAt(task.getFinishedAt())
                 .build();
+    }
+
+    @JsonPOJOBuilder(withPrefix = "")
+    public static class ImportTaskResponseBuilder {
     }
 }

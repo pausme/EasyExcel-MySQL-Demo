@@ -1,13 +1,16 @@
 package com.huang.demo.excel.service.impl;
 
+import com.alibaba.excel.EasyExcel;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huang.demo.excel.api.dto.ImportErrorPreviewResponse;
+import com.huang.demo.excel.api.dto.ImportPrecheckResponse;
 import com.huang.demo.excel.config.ExcelDemoProperties;
 import com.huang.demo.excel.config.MinioProperties;
 import com.huang.demo.excel.domain.model.StudentImportProgressCallback;
 import com.huang.demo.excel.domain.model.StudentImportResult;
 import com.huang.demo.excel.domain.model.StudentImportTaskResult;
 import com.huang.demo.excel.domain.model.StudentImportValidationException;
+import com.huang.demo.excel.model.StudentExcelRow;
 import com.huang.demo.excel.model.StudentImportErrorRow;
 import com.huang.demo.excel.service.MinioObjectStorageService;
 import com.huang.demo.excel.service.StudentService;
@@ -29,6 +32,7 @@ import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.nio.file.Path;
 import java.time.LocalDateTime;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.Optional;
 import java.util.zip.ZipEntry;
@@ -337,6 +341,40 @@ class StudentImportTaskServiceImplTest {
     }
 
     @Test
+    void precheckImportReturnsPreviewErrorsWithoutCreatingTask() throws Exception {
+        StudentService studentService = mock(StudentService.class);
+        TaskCenterService taskCenterService = mock(TaskCenterService.class);
+        MinioObjectStorageService minioObjectStorageService = mock(MinioObjectStorageService.class);
+        ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
+        ExcelDemoProperties properties = new ExcelDemoProperties();
+        properties.setImportTempDir(tempDir.toString());
+        properties.setImportBatchSize(2000);
+        properties.setImportMaxRowsPerTask(100);
+        MinioProperties minioProperties = new MinioProperties();
+        minioProperties.setImportErrorObjectPrefix("excel/student/import-error");
+        minioProperties.setImportSourceObjectPrefix("excel/student/import-source");
+        StudentImportTaskServiceImpl service = new StudentImportTaskServiceImpl(
+                studentService, properties, new NoopThreadPoolTaskExecutor(), taskCenterService, objectMapper,
+                minioObjectStorageService, minioProperties);
+        byte[] excelBytes = buildStudentExcelBytes(
+                StudentExcelRow.builder().studentNo("").name("张三").email("bad-email").build(),
+                StudentExcelRow.builder().studentNo("S001").name("李四").email("lisi@example.com").build(),
+                StudentExcelRow.builder().studentNo("S001").name("王五").email("wangwu@example.com").build());
+        MockMultipartFile file = new MockMultipartFile("file", "student.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", excelBytes);
+
+        ImportPrecheckResponse response = service.precheckImport(file);
+
+        assertFalse(response.getValid());
+        assertEquals(Long.valueOf(3L), response.getDataRowCount());
+        assertEquals(2, response.getErrorPreviewRows().size());
+        assertTrue(response.getErrorSummary().containsKey("学号不能为空"));
+        assertTrue(response.getErrorSummary().containsKey("邮箱格式不正确"));
+        verify(taskCenterService, never()).createTask(any(CreateAsyncTaskCommand.class));
+        verify(minioObjectStorageService, never()).uploadExcel(any(InputStream.class), anyLong(), anyString());
+    }
+
+    @Test
     void submitImportRejectsRowsExceedingLimitBeforeCreatingTask() throws Exception {
         StudentService studentService = mock(StudentService.class);
         TaskCenterService taskCenterService = mock(TaskCenterService.class);
@@ -488,6 +526,14 @@ class StudentImportTaskServiceImplTest {
             worksheet.append("</sheetData></worksheet>");
             writeZipEntry(zipOutputStream, "xl/worksheets/sheet1.xml", worksheet.toString());
         }
+        return outputStream.toByteArray();
+    }
+
+    private byte[] buildStudentExcelBytes(StudentExcelRow... rows) {
+        ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
+        EasyExcel.write(outputStream, StudentExcelRow.class)
+                .sheet("学生")
+                .doWrite(Arrays.asList(rows));
         return outputStream.toByteArray();
     }
 

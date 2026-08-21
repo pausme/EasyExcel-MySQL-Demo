@@ -17,6 +17,10 @@ public interface AsyncTaskRecordMapper {
 
     int update(AsyncTaskRecord record);
 
+    int claimRunning(@Param("taskId") String taskId,
+                     @Param("workerId") String workerId,
+                     @Param("heartbeatAt") LocalDateTime heartbeatAt);
+
     Optional<AsyncTaskRecord> findByTaskId(@Param("taskId") String taskId);
 
     long countActive();
@@ -25,11 +29,21 @@ public interface AsyncTaskRecordMapper {
 
     long countByOwner(@Param("ownerId") String ownerId,
                       @Param("taskType") String taskType,
-                      @Param("status") String status);
+                      @Param("status") String status,
+                      @Param("businessKey") String businessKey,
+                      @Param("failureType") String failureType,
+                      @Param("keyword") String keyword,
+                      @Param("createdFrom") LocalDateTime createdFrom,
+                      @Param("createdTo") LocalDateTime createdTo);
 
     List<AsyncTaskRecord> listByOwnerPage(@Param("ownerId") String ownerId,
                                           @Param("taskType") String taskType,
                                           @Param("status") String status,
+                                          @Param("businessKey") String businessKey,
+                                          @Param("failureType") String failureType,
+                                          @Param("keyword") String keyword,
+                                          @Param("createdFrom") LocalDateTime createdFrom,
+                                          @Param("createdTo") LocalDateTime createdTo,
                                           @Param("offset") int offset,
                                           @Param("limit") int limit);
 

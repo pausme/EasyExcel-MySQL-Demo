@@ -369,7 +369,7 @@ add(FIL, "POST /api/files/multipart/{uploadId}/abort", [
     ("FIL-MA-01", "P1", "正常", "已 init 的分片任务", "POST", "/api/files/multipart/{uploadId}/abort", "", "",
      "200", "aborted=true；任务 ABORTED，提交后清理临时分片", ""),
     ("FIL-MA-02", "P2", "业务规则", "任务已 ABORTED/SUCCESS", "POST", "/api/files/multipart/{uploadId}/abort", "", "",
-     "409", "非 UPLOADING 抛 IllegalStateException", ""),
+     "200", "重复 abort 幂等（R19 起设计变更）：ABORTED 态返回 200 aborted=true；SUCCESS 态跳过", "幂等重试安全"),
     ("FIL-MA-03", "P1", "异常", "uploadId 不存在", "POST", "/api/files/multipart/not-exist/abort", "", "",
      "404", "“上传任务不存在”", ""),
 ])

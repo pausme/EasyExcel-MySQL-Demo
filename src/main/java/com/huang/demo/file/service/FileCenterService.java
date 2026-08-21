@@ -27,6 +27,8 @@ public interface FileCenterService {
 
     MultipartUploadInitResponse initMultipartUpload(MultipartUploadInitRequest request);
 
+    MultipartUploadInitResponse resumeMultipartUpload(String uploadId);
+
     MultipartPartsResponse listMultipartParts(String uploadId);
 
     FileRecord completeMultipartUpload(String uploadId);

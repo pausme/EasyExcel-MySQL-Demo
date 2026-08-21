@@ -1,7 +1,10 @@
 package com.huang.demo.excel.controller;
 
+import com.huang.demo.common.audit.service.DownloadAuditService;
+import com.huang.demo.common.idempotency.service.IdempotencyService;
 import com.huang.demo.excel.api.dto.ImportErrorPreviewResponse;
 import com.huang.demo.excel.api.dto.ExportTaskResponse;
+import com.huang.demo.excel.api.dto.ImportPrecheckResponse;
 import com.huang.demo.excel.api.dto.ImportTaskResponse;
 import com.huang.demo.excel.config.ExcelDemoProperties;
 import com.huang.demo.excel.domain.model.ExportTask;
@@ -24,6 +27,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -47,17 +51,23 @@ public class ExcelDemoController {
     private final ExportTaskService exportTaskService;
     private final StudentImportTaskService studentImportTaskService;
     private final TaskOwnerResolver taskOwnerResolver;
+    private final DownloadAuditService downloadAuditService;
+    private final IdempotencyService idempotencyService;
 
     public ExcelDemoController(StudentService studentService,
                                ExcelDemoProperties properties,
                                ExportTaskService exportTaskService,
                                StudentImportTaskService studentImportTaskService,
-                               TaskOwnerResolver taskOwnerResolver) {
+                               TaskOwnerResolver taskOwnerResolver,
+                               DownloadAuditService downloadAuditService,
+                               IdempotencyService idempotencyService) {
         this.studentService = studentService;
         this.properties = properties;
         this.exportTaskService = exportTaskService;
         this.studentImportTaskService = studentImportTaskService;
         this.taskOwnerResolver = taskOwnerResolver;
+        this.downloadAuditService = downloadAuditService;
+        this.idempotencyService = idempotencyService;
     }
 
     @ApiOperation("查询学生数据总数")
@@ -85,9 +95,14 @@ public class ExcelDemoController {
     @ApiOperation("提交学生数据导出任务")
     @PostMapping("/export")
     public ExportTaskResponse submitExport(@RequestParam(value = "format", required = false) String format,
+                                           @RequestHeader(value = IdempotencyService.HEADER_NAME, required = false) String idempotencyKey,
                                            HttpServletRequest request) {
         try {
-            return ExportTaskResponse.from(exportTaskService.submitExport(taskOwnerResolver.resolve(request), format));
+            String ownerId = taskOwnerResolver.resolve(request);
+            return executeIdempotent(ownerId, "EXCEL_EXPORT_SUBMIT", idempotencyKey,
+                    idempotencyService.fingerprint("format", format),
+                    ExportTaskResponse.class,
+                    () -> ExportTaskResponse.from(exportTaskService.submitExport(ownerId, format)));
         } catch (IllegalArgumentException ex) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, ex.getMessage(), ex);
         }
@@ -111,6 +126,13 @@ public class ExcelDemoController {
         String downloadUrl = exportTaskService.createDownloadUrl(task)
                 .orElseThrow(() -> new ResponseStatusException(
                         org.springframework.http.HttpStatus.NOT_FOUND, "导出文件不存在"));
+        downloadAuditService.recordSignedDownload(
+                taskOwnerResolver.resolve(request),
+                "EXPORT",
+                task.getTaskId(),
+                task.getObjectKey(),
+                task.getFileName(),
+                request);
         return ResponseEntity.status(HttpStatus.FOUND)
                 .location(URI.create(downloadUrl))
                 .build();
@@ -128,16 +150,34 @@ public class ExcelDemoController {
     @ApiOperation("提交学生数据异步导入任务")
     @PostMapping(value = "/import", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ImportTaskResponse importExcel(@RequestParam("file") MultipartFile file,
+                                          @RequestHeader(value = IdempotencyService.HEADER_NAME, required = false) String idempotencyKey,
                                           HttpServletRequest request) throws IOException {
         long start = System.currentTimeMillis();
         try {
-            AsyncTaskRecord task = studentImportTaskService.submitImport(file, taskOwnerResolver.resolve(request));
-            log.info("import task submitted, taskId={}, fileName={}, elapsedMs={}",
-                    task.getTaskId(), file.getOriginalFilename(), System.currentTimeMillis() - start);
-            return ImportTaskResponse.from(AsyncTaskResponse.from(task));
+            String ownerId = taskOwnerResolver.resolve(request);
+            ImportTaskResponse response = executeIdempotentWithIOException(ownerId, "EXCEL_IMPORT_SUBMIT", idempotencyKey,
+                    idempotencyService.fingerprint(
+                            "file",
+                            file == null ? null : file.getOriginalFilename(),
+                            file == null ? null : file.getContentType(),
+                            file == null ? null : file.getSize()),
+                    ImportTaskResponse.class,
+                    () -> {
+                        AsyncTaskRecord task = studentImportTaskService.submitImport(file, ownerId);
+                        log.info("import task submitted, taskId={}, fileName={}, elapsedMs={}",
+                                task.getTaskId(), file.getOriginalFilename(), System.currentTimeMillis() - start);
+                        return ImportTaskResponse.from(AsyncTaskResponse.from(task));
+                    });
+            return response;
         } catch (IllegalArgumentException ex) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, ex.getMessage(), ex);
         }
+    }
+
+    @ApiOperation("预检学生数据导入文件")
+    @PostMapping(value = "/import/precheck", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ImportPrecheckResponse precheckImport(@RequestParam("file") MultipartFile file) throws IOException {
+        return studentImportTaskService.precheckImport(file);
     }
 
     @ApiOperation("查询学生数据导入任务状态")
@@ -156,6 +196,13 @@ public class ExcelDemoController {
                         taskId, taskOwnerResolver.resolve(request))
                 .orElseThrow(() -> new ResponseStatusException(
                         org.springframework.http.HttpStatus.NOT_FOUND, "导入错误明细文件不存在"));
+        downloadAuditService.recordSignedDownload(
+                taskOwnerResolver.resolve(request),
+                "IMPORT_ERROR",
+                taskId,
+                null,
+                null,
+                request);
         return ResponseEntity.status(HttpStatus.FOUND)
                 .location(URI.create(downloadUrl))
                 .build();
@@ -188,5 +235,38 @@ public class ExcelDemoController {
             throw new ResponseStatusException(org.springframework.http.HttpStatus.NOT_FOUND, "导出任务不存在");
         }
         return task;
+    }
+
+    private <T> T executeIdempotent(String ownerId,
+                                    String operation,
+                                    String idempotencyKey,
+                                    String requestFingerprint,
+                                    Class<T> responseType,
+                                    com.huang.demo.common.idempotency.service.IdempotentAction<T> action) {
+        try {
+            return idempotencyService.execute(ownerId, operation, idempotencyKey, requestFingerprint, responseType, action);
+        } catch (RuntimeException ex) {
+            throw ex;
+        } catch (Exception ex) {
+            throw new IllegalStateException("执行幂等请求失败", ex);
+        }
+    }
+
+    private <T> T executeIdempotentWithIOException(String ownerId,
+                                                   String operation,
+                                                   String idempotencyKey,
+                                                   String requestFingerprint,
+                                                   Class<T> responseType,
+                                                   com.huang.demo.common.idempotency.service.IdempotentAction<T> action)
+            throws IOException {
+        try {
+            return idempotencyService.execute(ownerId, operation, idempotencyKey, requestFingerprint, responseType, action);
+        } catch (IOException ex) {
+            throw ex;
+        } catch (RuntimeException ex) {
+            throw ex;
+        } catch (Exception ex) {
+            throw new IllegalStateException("执行幂等请求失败", ex);
+        }
     }
 }

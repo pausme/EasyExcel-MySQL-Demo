@@ -2,6 +2,8 @@ package com.huang.demo.task.service.impl;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huang.demo.task.config.TaskCenterProperties;
+import com.huang.demo.task.api.dto.AsyncTaskPageQueryRequest;
+import com.huang.demo.task.api.dto.AsyncTaskPageResponse;
 import com.huang.demo.task.api.dto.AsyncTaskResponse;
 import com.huang.demo.task.domain.entity.AsyncTaskRecord;
 import com.huang.demo.task.domain.model.AsyncTaskFailureType;
@@ -19,6 +21,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 
 import java.time.LocalDateTime;
+import java.util.Arrays;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -195,6 +198,10 @@ class TaskCenterServiceImplTest {
     @Test
     void asyncTaskResponseExposesRetryDecision() {
         AsyncTaskRecord record = buildTask(AsyncTaskStatus.FAILED);
+        record.setStartedAt(LocalDateTime.now().minusSeconds(10));
+        record.setFinishedAt(LocalDateTime.now());
+        record.setWorkerId("worker-1");
+        record.setLastHeartbeatAt(LocalDateTime.now().minusSeconds(1));
         record.setFailureType(AsyncTaskFailureType.VALIDATION_ERROR.name());
         record.setRetryable(false);
         record.setFailureSuggestion("请下载错误明细，修正 Excel 后重新提交导入");
@@ -205,6 +212,39 @@ class TaskCenterServiceImplTest {
         assertFalse(response.getRetryable());
         assertFalse(response.getCanRetry());
         assertEquals("请下载错误明细，修正 Excel 后重新提交导入", response.getFailureSuggestion());
+        assertEquals(3, response.getRemainingRetryCount().intValue());
+        assertEquals("worker-1", response.getWorkerId());
+        assertTrue(response.getDurationMs() >= 0L);
+        assertTrue(response.getLifecycleEvents().size() >= 3);
+    }
+
+    @Test
+    void pageMyTasksPassesExtendedFiltersToMapper() {
+        AsyncTaskPageQueryRequest request = new AsyncTaskPageQueryRequest();
+        request.setPageNo(2);
+        request.setPageSize(5);
+        request.setTaskType("export");
+        request.setStatus("failed");
+        request.setBusinessKey("biz-1");
+        request.setFailureType("validation_error");
+        request.setKeyword("学生");
+        LocalDateTime createdFrom = LocalDateTime.now().minusDays(1);
+        LocalDateTime createdTo = LocalDateTime.now();
+        request.setCreatedFrom(createdFrom);
+        request.setCreatedTo(createdTo);
+        AsyncTaskRecord record = buildTask(AsyncTaskStatus.FAILED);
+        when(taskRecordMapper.countByOwner("user-1", "EXPORT", "FAILED", "biz-1",
+                "VALIDATION_ERROR", "学生", createdFrom, createdTo)).thenReturn(1L);
+        when(taskRecordMapper.listByOwnerPage("user-1", "EXPORT", "FAILED", "biz-1",
+                "VALIDATION_ERROR", "学生", createdFrom, createdTo, 5, 5))
+                .thenReturn(Arrays.asList(record));
+
+        AsyncTaskPageResponse response = taskCenterService.pageMyTasks("user-1", request);
+
+        assertEquals(1L, response.getTotal());
+        assertEquals(2, response.getPageNo());
+        assertEquals(5, response.getPageSize());
+        assertEquals(1, response.getRecords().size());
     }
 
     private AsyncTaskRecord buildTask(AsyncTaskStatus status) {

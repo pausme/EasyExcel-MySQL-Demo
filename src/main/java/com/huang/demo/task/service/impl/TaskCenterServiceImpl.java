@@ -122,25 +122,31 @@ public class TaskCenterServiceImpl implements TaskCenterService {
     @Override
     @Transactional(rollbackFor = Exception.class)
     public AsyncTaskRecord markRunning(String taskId, String workerId) {
-        AsyncTaskRecord record = findTaskRequired(taskId);
-        record = refreshExpiredIfNecessary(record);
-        if (isTerminalStatus(record.getStatus())) {
-            return record;
+        Optional<AsyncTaskRecord> claimedTask = claimRunning(taskId, workerId);
+        if (claimedTask.isPresent()) {
+            return claimedTask.get();
         }
+        return findTaskRequired(taskId);
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public Optional<AsyncTaskRecord> claimRunning(String taskId, String workerId) {
+        String normalizedTaskId = normalizeTaskId(taskId);
+        String normalizedWorkerId = normalizeWorkerId(workerId);
         LocalDateTime now = LocalDateTime.now();
-        record.setStatus(AsyncTaskStatus.RUNNING.name());
-        record.setFailureType(null);
-        record.setRetryable(null);
-        record.setFailureSuggestion(null);
-        record.setWorkerId(normalizeWorkerId(workerId));
-        record.setLastHeartbeatAt(now);
-        if (record.getStartedAt() == null) {
-            record.setStartedAt(now);
+        int claimed = taskRecordMapper.claimRunning(normalizedTaskId, normalizedWorkerId, now);
+        if (claimed == 0) {
+            return Optional.empty();
         }
-        record.setUpdatedAt(now);
-        updateRequired(record);
+        Optional<AsyncTaskRecord> claimedTask = taskRecordMapper.findByTaskId(normalizedTaskId);
+        if (!claimedTask.isPresent()) {
+            throw new IllegalStateException("任务抢占成功但读取任务失败，taskId=" + normalizedTaskId);
+        }
+        AsyncTaskRecord record = claimedTask.get();
+        cacheTaskQuietly(record);
         taskMetricsService.recordStatusChanged(record);
-        return record;
+        return Optional.of(record);
     }
 
     @Override
@@ -350,11 +356,19 @@ public class TaskCenterServiceImpl implements TaskCenterService {
         int pageSize = normalizePageSize(safeRequest.getPageSize());
         String taskType = normalizeOptionalTaskType(safeRequest.getTaskType());
         String status = normalizeOptionalStatus(safeRequest.getStatus());
+        String businessKey = normalizeBusinessKey(safeRequest.getBusinessKey());
+        String failureType = normalizeOptionalFailureType(safeRequest.getFailureType());
+        String keyword = normalizeKeyword(safeRequest.getKeyword());
+        LocalDateTime createdFrom = safeRequest.getCreatedFrom();
+        LocalDateTime createdTo = safeRequest.getCreatedTo();
+        validateTimeRange(createdFrom, createdTo);
         int offset = (pageNo - 1) * pageSize;
 
-        long total = taskRecordMapper.countByOwner(normalizedOwnerId, taskType, status);
+        long total = taskRecordMapper.countByOwner(
+                normalizedOwnerId, taskType, status, businessKey, failureType, keyword, createdFrom, createdTo);
         List<AsyncTaskRecord> records = taskRecordMapper.listByOwnerPage(
-                normalizedOwnerId, taskType, status, offset, pageSize);
+                normalizedOwnerId, taskType, status, businessKey, failureType, keyword, createdFrom, createdTo,
+                offset, pageSize);
         List<AsyncTaskResponse> responses = new ArrayList<AsyncTaskResponse>(records.size());
         for (AsyncTaskRecord record : records) {
             responses.add(AsyncTaskResponse.from(refreshExpiredIfNecessary(record)));
@@ -584,6 +598,15 @@ public class TaskCenterServiceImpl implements TaskCenterService {
         return normalized;
     }
 
+    private String normalizeOptionalFailureType(String failureType) {
+        if (failureType == null || failureType.trim().isEmpty()) {
+            return null;
+        }
+        String normalized = failureType.trim().toUpperCase();
+        AsyncTaskFailureType.valueOf(normalized);
+        return normalized;
+    }
+
     private String normalizeTaskName(String taskName) {
         if (taskName == null || taskName.trim().isEmpty()) {
             return "异步任务";
@@ -598,6 +621,20 @@ public class TaskCenterServiceImpl implements TaskCenterService {
         }
         String normalized = businessKey.trim();
         return normalized.length() > 128 ? normalized.substring(0, 128) : normalized;
+    }
+
+    private String normalizeKeyword(String keyword) {
+        if (keyword == null || keyword.trim().isEmpty()) {
+            return null;
+        }
+        String normalized = keyword.trim();
+        return normalized.length() > 128 ? normalized.substring(0, 128) : normalized;
+    }
+
+    private void validateTimeRange(LocalDateTime createdFrom, LocalDateTime createdTo) {
+        if (createdFrom != null && createdTo != null && createdTo.isBefore(createdFrom)) {
+            throw new IllegalArgumentException("任务创建时间范围不正确");
+        }
     }
 
     private String normalizeBusinessKeyRequired(String businessKey) {

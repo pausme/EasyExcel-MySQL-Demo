@@ -1,5 +1,7 @@
 package com.huang.demo.file.controller;
 
+import com.huang.demo.common.audit.service.DownloadAuditService;
+import com.huang.demo.common.idempotency.service.IdempotencyService;
 import com.huang.demo.file.api.dto.DirectUploadInitRequest;
 import com.huang.demo.file.api.dto.DirectUploadInitResponse;
 import com.huang.demo.file.api.dto.FilePageQueryRequest;
@@ -13,6 +15,7 @@ import com.huang.demo.file.api.dto.MultipartUploadInitRequest;
 import com.huang.demo.file.api.dto.MultipartUploadInitResponse;
 import com.huang.demo.file.domain.entity.FileRecord;
 import com.huang.demo.file.service.FileCenterService;
+import com.huang.demo.task.service.TaskOwnerResolver;
 import io.swagger.annotations.ApiOperation;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -25,12 +28,14 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.io.IOException;
 import java.net.URI;
+import javax.servlet.http.HttpServletRequest;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -41,9 +46,18 @@ public class FileCenterController {
     private static final Logger log = LoggerFactory.getLogger(FileCenterController.class);
 
     private final FileCenterService fileCenterService;
+    private final TaskOwnerResolver taskOwnerResolver;
+    private final DownloadAuditService downloadAuditService;
+    private final IdempotencyService idempotencyService;
 
-    public FileCenterController(FileCenterService fileCenterService) {
+    public FileCenterController(FileCenterService fileCenterService,
+                                TaskOwnerResolver taskOwnerResolver,
+                                DownloadAuditService downloadAuditService,
+                                IdempotencyService idempotencyService) {
         this.fileCenterService = fileCenterService;
+        this.taskOwnerResolver = taskOwnerResolver;
+        this.downloadAuditService = downloadAuditService;
+        this.idempotencyService = idempotencyService;
     }
 
     @ApiOperation("上传通用文件")
@@ -72,9 +86,18 @@ public class FileCenterController {
 
     @ApiOperation("初始化客户端直传")
     @PostMapping("/direct/init")
-    public DirectUploadInitResponse initDirectUpload(@RequestBody DirectUploadInitRequest request) {
+    public DirectUploadInitResponse initDirectUpload(@RequestBody DirectUploadInitRequest request,
+                                                     @RequestHeader(value = IdempotencyService.HEADER_NAME, required = false) String idempotencyKey,
+                                                     HttpServletRequest servletRequest) {
         try {
-            return fileCenterService.initDirectUpload(request);
+            String ownerId = taskOwnerResolver.resolve(servletRequest);
+            return executeIdempotent(ownerId, "FILE_DIRECT_INIT", idempotencyKey,
+                    idempotencyService.fingerprint("direct", request == null ? null : request.getOriginalName(),
+                            request == null ? null : request.getContentType(),
+                            request == null ? null : request.getFileSize(),
+                            request == null ? null : request.getFileMd5()),
+                    DirectUploadInitResponse.class,
+                    () -> fileCenterService.initDirectUpload(request));
         } catch (IllegalArgumentException ex) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, ex.getMessage(), ex);
         }
@@ -94,11 +117,33 @@ public class FileCenterController {
 
     @ApiOperation("初始化客户端分片上传")
     @PostMapping("/multipart/init")
-    public MultipartUploadInitResponse initMultipartUpload(@RequestBody MultipartUploadInitRequest request) {
+    public MultipartUploadInitResponse initMultipartUpload(@RequestBody MultipartUploadInitRequest request,
+                                                           @RequestHeader(value = IdempotencyService.HEADER_NAME, required = false) String idempotencyKey,
+                                                           HttpServletRequest servletRequest) {
         try {
-            return fileCenterService.initMultipartUpload(request);
+            String ownerId = taskOwnerResolver.resolve(servletRequest);
+            return executeIdempotent(ownerId, "FILE_MULTIPART_INIT", idempotencyKey,
+                    idempotencyService.fingerprint("multipart", request == null ? null : request.getOriginalName(),
+                            request == null ? null : request.getContentType(),
+                            request == null ? null : request.getFileSize(),
+                            request == null ? null : request.getFileMd5(),
+                            request == null ? null : request.getPartSize()),
+                    MultipartUploadInitResponse.class,
+                    () -> fileCenterService.initMultipartUpload(request));
         } catch (IllegalArgumentException ex) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, ex.getMessage(), ex);
+        }
+    }
+
+    @ApiOperation("恢复客户端分片上传")
+    @PostMapping("/multipart/{uploadId}/resume")
+    public MultipartUploadInitResponse resumeMultipartUpload(@PathVariable("uploadId") String uploadId) {
+        try {
+            return fileCenterService.resumeMultipartUpload(uploadId);
+        } catch (IllegalArgumentException ex) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, ex.getMessage(), ex);
+        } catch (IllegalStateException ex) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, ex.getMessage(), ex);
         }
     }
 
@@ -150,9 +195,18 @@ public class FileCenterController {
 
     @ApiOperation("下载通用文件")
     @GetMapping("/{fileId}/download")
-    public ResponseEntity<Void> download(@PathVariable("fileId") String fileId) {
+    public ResponseEntity<Void> download(@PathVariable("fileId") String fileId, HttpServletRequest request) {
+        FileRecord record = fileCenterService.findNormalFile(fileId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "文件不存在"));
         String downloadUrl = fileCenterService.createDownloadUrl(fileId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "文件不存在"));
+        downloadAuditService.recordSignedDownload(
+                taskOwnerResolver.resolve(request),
+                "FILE",
+                record.getFileId(),
+                record.getObjectKey(),
+                record.getOriginalName(),
+                request);
         return ResponseEntity.status(HttpStatus.FOUND)
                 .location(URI.create(downloadUrl))
                 .build();
@@ -174,5 +228,20 @@ public class FileCenterController {
     @PostMapping("/page")
     public FilePageResponse page(@RequestBody(required = false) FilePageQueryRequest request) {
         return fileCenterService.page(request);
+    }
+
+    private <T> T executeIdempotent(String ownerId,
+                                    String operation,
+                                    String idempotencyKey,
+                                    String requestFingerprint,
+                                    Class<T> responseType,
+                                    com.huang.demo.common.idempotency.service.IdempotentAction<T> action) {
+        try {
+            return idempotencyService.execute(ownerId, operation, idempotencyKey, requestFingerprint, responseType, action);
+        } catch (RuntimeException ex) {
+            throw ex;
+        } catch (Exception ex) {
+            throw new IllegalStateException("执行幂等请求失败", ex);
+        }
     }
 }

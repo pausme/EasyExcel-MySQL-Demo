@@ -34,4 +34,12 @@ public class TaskCenterProperties {
     private int recoveryHeartbeatTimeoutSeconds = 120;
 
     private int recoveryBatchSize = 20;
+
+    private String recoveryLockKey = "task:recovery:lock";
+
+    private int recoveryLockTtlSeconds = 300;
+
+    private String executionLockKeyPrefix = "task:execution:";
+
+    private int executionLockTtlSeconds = 3600;
 }

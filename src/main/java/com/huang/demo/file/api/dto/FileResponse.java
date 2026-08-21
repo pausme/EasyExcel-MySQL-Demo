@@ -1,5 +1,7 @@
 package com.huang.demo.file.api.dto;
 
+import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
+import com.fasterxml.jackson.databind.annotation.JsonPOJOBuilder;
 import com.huang.demo.file.domain.entity.FileRecord;
 import lombok.Builder;
 import lombok.Getter;
@@ -8,6 +10,7 @@ import java.time.LocalDateTime;
 
 @Getter
 @Builder
+@JsonDeserialize(builder = FileResponse.FileResponseBuilder.class)
 public class FileResponse {
 
     private final String fileId;
@@ -43,5 +46,9 @@ public class FileResponse {
                 .createdAt(record.getCreatedAt())
                 .updatedAt(record.getUpdatedAt())
                 .build();
+    }
+
+    @JsonPOJOBuilder(withPrefix = "")
+    public static class FileResponseBuilder {
     }
 }

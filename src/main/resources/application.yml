@@ -52,6 +52,10 @@ app:
     recovery-batch-size: ${TASK_RECOVERY_BATCH_SIZE:20}
     recovery-initial-delay-millis: ${TASK_RECOVERY_INITIAL_DELAY_MILLIS:30000}
     recovery-fixed-delay-millis: ${TASK_RECOVERY_FIXED_DELAY_MILLIS:60000}
+    recovery-lock-key: ${TASK_RECOVERY_LOCK_KEY:task:recovery:lock}
+    recovery-lock-ttl-seconds: ${TASK_RECOVERY_LOCK_TTL_SECONDS:300}
+    execution-lock-key-prefix: ${TASK_EXECUTION_LOCK_KEY_PREFIX:task:execution:}
+    execution-lock-ttl-seconds: ${TASK_EXECUTION_LOCK_TTL_SECONDS:3600}
   excel:
     init-enabled: ${EXCEL_INIT_ENABLED:true}
     export-page-size: ${EXPORT_PAGE_SIZE:5000}
@@ -104,9 +108,15 @@ app:
     multipart-object-prefix: ${FILE_CENTER_MULTIPART_OBJECT_PREFIX:files/multipart}
     download-url-expire-minutes: ${FILE_CENTER_DOWNLOAD_URL_EXPIRE_MINUTES:30}
     upload-url-expire-minutes: ${FILE_CENTER_UPLOAD_URL_EXPIRE_MINUTES:30}
+    upload-operation-lock-key-prefix: ${FILE_CENTER_UPLOAD_OPERATION_LOCK_KEY_PREFIX:file:upload:operation:}
+    upload-operation-lock-ttl-seconds: ${FILE_CENTER_UPLOAD_OPERATION_LOCK_TTL_SECONDS:1800}
     multipart-part-size: ${FILE_CENTER_MULTIPART_PART_SIZE:8388608}
     multipart-max-part-count: ${FILE_CENTER_MULTIPART_MAX_PART_COUNT:1000}
     max-page-size: ${FILE_CENTER_MAX_PAGE_SIZE:100}
+    max-file-size-bytes: ${FILE_CENTER_MAX_FILE_SIZE_BYTES:0}
+    max-total-storage-bytes-per-owner: ${FILE_CENTER_MAX_TOTAL_STORAGE_BYTES_PER_OWNER:0}
+    max-active-upload-tasks-per-owner: ${FILE_CENTER_MAX_ACTIVE_UPLOAD_TASKS_PER_OWNER:20}
+    max-daily-upload-count-per-owner: ${FILE_CENTER_MAX_DAILY_UPLOAD_COUNT_PER_OWNER:0}
     cors-enabled: ${FILE_CENTER_CORS_ENABLED:true}
     cors-allowed-origin-patterns: ${FILE_CENTER_CORS_ALLOWED_ORIGIN_PATTERNS:http://localhost:*,http://127.0.0.1:*,null}
     security-scan-enabled: ${FILE_CENTER_SECURITY_SCAN_ENABLED:true}

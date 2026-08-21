@@ -1,9 +1,13 @@
 package com.huang.demo.excel.service.impl;
 
 import com.alibaba.excel.EasyExcel;
+import com.alibaba.excel.context.AnalysisContext;
+import com.alibaba.excel.event.AnalysisEventListener;
+import com.alibaba.excel.exception.ExcelAnalysisStopException;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huang.demo.excel.api.dto.ImportErrorPreviewResponse;
+import com.huang.demo.excel.api.dto.ImportPrecheckResponse;
 import com.huang.demo.excel.api.dto.ImportTaskResponse;
 import com.huang.demo.excel.config.ExcelDemoProperties;
 import com.huang.demo.excel.config.MinioProperties;
@@ -12,6 +16,7 @@ import com.huang.demo.excel.domain.model.StudentImportResult;
 import com.huang.demo.excel.domain.model.StudentImportTaskPayload;
 import com.huang.demo.excel.domain.model.StudentImportTaskResult;
 import com.huang.demo.excel.domain.model.StudentImportValidationException;
+import com.huang.demo.excel.model.StudentExcelRow;
 import com.huang.demo.excel.model.StudentImportErrorRow;
 import com.huang.demo.excel.service.MinioObjectStorageService;
 import com.huang.demo.excel.service.StudentImportTaskService;
@@ -25,10 +30,12 @@ import com.huang.demo.task.domain.model.CreateAsyncTaskCommand;
 import com.huang.demo.task.domain.model.MarkAsyncTaskFailedCommand;
 import com.huang.demo.task.domain.model.TaskCanceledException;
 import com.huang.demo.task.service.TaskCenterService;
+import com.huang.demo.task.service.TaskExecutionGuard;
 import com.huang.demo.task.service.TaskRecoveryHandler;
 import com.huang.demo.task.service.TaskRetryHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
@@ -47,11 +54,13 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.StringJoiner;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.zip.ZipEntry;
@@ -65,6 +74,7 @@ public class StudentImportTaskServiceImpl implements StudentImportTaskService, T
     private static final int MAX_IMPORT_BATCH_SIZE = 5000;
     private static final int DEFAULT_ERROR_PREVIEW_LIMIT = 20;
     private static final int MAX_ERROR_PREVIEW_LIMIT = 100;
+    private static final int IMPORT_PRECHECK_PREVIEW_LIMIT = 100;
     private static final int MAX_XLSX_ENTRY_SCAN_COUNT = 512;
     private static final int XLSX_SCAN_BUFFER_SIZE = 8192;
     private static final String XLSX_CONTENT_TYPES_ENTRY = "[Content_Types].xml";
@@ -77,14 +87,17 @@ public class StudentImportTaskServiceImpl implements StudentImportTaskService, T
     private final ObjectMapper objectMapper;
     private final MinioObjectStorageService minioObjectStorageService;
     private final MinioProperties minioProperties;
+    private final TaskExecutionGuard taskExecutionGuard;
 
+    @Autowired
     public StudentImportTaskServiceImpl(StudentService studentService,
                                         ExcelDemoProperties properties,
                                         @Qualifier("importTaskExecutor") ThreadPoolTaskExecutor importTaskExecutor,
                                         TaskCenterService taskCenterService,
                                         ObjectMapper objectMapper,
                                         MinioObjectStorageService minioObjectStorageService,
-                                        MinioProperties minioProperties) {
+                                        MinioProperties minioProperties,
+                                        TaskExecutionGuard taskExecutionGuard) {
         this.studentService = studentService;
         this.properties = properties;
         this.importTaskExecutor = importTaskExecutor;
@@ -92,6 +105,18 @@ public class StudentImportTaskServiceImpl implements StudentImportTaskService, T
         this.objectMapper = objectMapper;
         this.minioObjectStorageService = minioObjectStorageService;
         this.minioProperties = minioProperties;
+        this.taskExecutionGuard = taskExecutionGuard;
+    }
+
+    public StudentImportTaskServiceImpl(StudentService studentService,
+                                        ExcelDemoProperties properties,
+                                        ThreadPoolTaskExecutor importTaskExecutor,
+                                        TaskCenterService taskCenterService,
+                                        ObjectMapper objectMapper,
+                                        MinioObjectStorageService minioObjectStorageService,
+                                        MinioProperties minioProperties) {
+        this(studentService, properties, importTaskExecutor, taskCenterService,
+                objectMapper, minioObjectStorageService, minioProperties, new TaskExecutionGuard(taskCenterService));
     }
 
     @PostConstruct
@@ -140,6 +165,51 @@ public class StudentImportTaskServiceImpl implements StudentImportTaskService, T
             log.error("submit import task failed, taskId={}", task.getTaskId(), ex);
         }
         return task;
+    }
+
+    @Override
+    public ImportPrecheckResponse precheckImport(MultipartFile file) throws IOException {
+        List<String> messages = new ArrayList<String>();
+        List<StudentImportErrorRow> errorRows = new ArrayList<StudentImportErrorRow>();
+        String originalName = file == null ? null : normalizeOriginalName(file.getOriginalFilename());
+        Long fileSize = file == null ? null : file.getSize();
+        Long dataRowCount = null;
+        int maxRows = properties.getImportMaxRowsPerTask();
+        long maxFileSize = properties.getImportMaxFileSizeForAsync();
+
+        if (file == null || file.isEmpty() || file.getSize() <= 0L) {
+            messages.add("导入文件不能为空");
+            return buildPrecheckResponse(originalName, fileSize, dataRowCount, maxRows, maxFileSize, messages, errorRows);
+        }
+        if (maxFileSize > 0L && file.getSize() > maxFileSize) {
+            messages.add("导入文件大小超过限制，maxBytes=" + maxFileSize + ", actualBytes=" + file.getSize());
+        }
+        if (!hasXlsxExtension(file.getOriginalFilename())) {
+            messages.add("导入文件格式错误，请上传 .xlsx 文件");
+            return buildPrecheckResponse(originalName, fileSize, dataRowCount, maxRows, maxFileSize, messages, errorRows);
+        }
+
+        XlsxInspectionResult inspectionResult;
+        try (InputStream inputStream = file.getInputStream()) {
+            inspectionResult = inspectXlsxPackage(inputStream);
+        }
+        if (!inspectionResult.isValidXlsx()) {
+            messages.add("导入文件格式错误，请上传 .xlsx 文件");
+            return buildPrecheckResponse(originalName, fileSize, dataRowCount, maxRows, maxFileSize, messages, errorRows);
+        }
+        dataRowCount = inspectionResult.getDataRowCount();
+        if (maxRows > 0 && inspectionResult.getDataRowCount() > maxRows) {
+            messages.add("导入文件数据行数超过限制，maxRows="
+                    + maxRows + ", actualRows=" + inspectionResult.getDataRowCount());
+        }
+
+        try (InputStream inputStream = file.getInputStream()) {
+            errorRows = previewImportRowErrors(inputStream, IMPORT_PRECHECK_PREVIEW_LIMIT);
+        } catch (RuntimeException ex) {
+            messages.add("导入文件内容解析失败，请确认文件表头和内容格式正确");
+            log.warn("precheck import content failed, fileName={}", originalName, ex);
+        }
+        return buildPrecheckResponse(originalName, fileSize, dataRowCount, maxRows, maxFileSize, messages, errorRows);
     }
 
     @Override
@@ -231,34 +301,38 @@ public class StudentImportTaskServiceImpl implements StudentImportTaskService, T
 
     private void executeImport(String taskId) {
         long start = System.currentTimeMillis();
-        AsyncTaskRecord task = taskCenterService.markRunning(taskId, taskCenterService.currentWorkerId());
-        if (isCanceledOrExpired(task)) {
+        Optional<TaskExecutionGuard.TaskExecutionLease> leaseOptional = taskExecutionGuard.tryStart(
+                taskId, AsyncTaskType.IMPORT.name(), taskCenterService.currentWorkerId());
+        if (!leaseOptional.isPresent()) {
             return;
         }
-        StudentImportTaskPayload payload = readPayload(task.getRequestPayload());
-        try (InputStream inputStream = openImportInputStream(payload)) {
-            ImportTaskProgressCallback callback = new ImportTaskProgressCallback(taskId);
-            StudentImportResult result = studentService.importExcel(inputStream, payload.getBatchSize(), callback);
-            AsyncTaskRecord completedTask = taskCenterService.markSuccess(taskId, toJson(StudentImportTaskResult.builder()
-                    .importedCount(result.getImportedCount())
-                    .batchCount(result.getBatchCount())
-                    .build()));
-            if (AsyncTaskStatus.SUCCESS.name().equals(completedTask.getStatus())) {
-                deleteLegacyTemporaryFile(payload);
+        try (TaskExecutionGuard.TaskExecutionLease lease = leaseOptional.get()) {
+            AsyncTaskRecord task = lease.getTask();
+            StudentImportTaskPayload payload = readPayload(task.getRequestPayload());
+            try (InputStream inputStream = openImportInputStream(payload)) {
+                ImportTaskProgressCallback callback = new ImportTaskProgressCallback(taskId);
+                StudentImportResult result = studentService.importExcel(inputStream, payload.getBatchSize(), callback);
+                AsyncTaskRecord completedTask = taskCenterService.markSuccess(taskId, toJson(StudentImportTaskResult.builder()
+                        .importedCount(result.getImportedCount())
+                        .batchCount(result.getBatchCount())
+                        .build()));
+                if (AsyncTaskStatus.SUCCESS.name().equals(completedTask.getStatus())) {
+                    deleteLegacyTemporaryFile(payload);
+                }
+                log.info("import task finished, taskId={}, imported={}, batchCount={}, elapsedMs={}",
+                        taskId, result.getImportedCount(), result.getBatchCount(), System.currentTimeMillis() - start);
+            } catch (TaskCanceledException ex) {
+                log.info("import task canceled, taskId={}, elapsedMs={}", taskId, System.currentTimeMillis() - start);
+            } catch (StudentImportValidationException ex) {
+                markValidationFailed(taskId, ex);
+                log.info("import task validation failed, taskId={}, errorRows={}, elapsedMs={}",
+                        taskId, ex.getErrorRows().size(), System.currentTimeMillis() - start);
+            } catch (Exception ex) {
+                taskCenterService.markFailed(retryableFailure(taskId,
+                        ex.getMessage() == null ? "导入失败，请查看服务端日志" : ex.getMessage(),
+                        classifySystemFailure(ex), "可稍后重试；若持续失败，请检查数据库、MinIO 或服务端日志"));
+                log.error("import task failed, taskId={}, elapsedMs={}", taskId, System.currentTimeMillis() - start, ex);
             }
-            log.info("import task finished, taskId={}, imported={}, batchCount={}, elapsedMs={}",
-                    taskId, result.getImportedCount(), result.getBatchCount(), System.currentTimeMillis() - start);
-        } catch (TaskCanceledException ex) {
-            log.info("import task canceled, taskId={}, elapsedMs={}", taskId, System.currentTimeMillis() - start);
-        } catch (StudentImportValidationException ex) {
-            markValidationFailed(taskId, ex);
-            log.info("import task validation failed, taskId={}, errorRows={}, elapsedMs={}",
-                    taskId, ex.getErrorRows().size(), System.currentTimeMillis() - start);
-        } catch (Exception ex) {
-            taskCenterService.markFailed(retryableFailure(taskId,
-                    ex.getMessage() == null ? "导入失败，请查看服务端日志" : ex.getMessage(),
-                    classifySystemFailure(ex), "可稍后重试；若持续失败，请检查数据库、MinIO 或服务端日志"));
-            log.error("import task failed, taskId={}, elapsedMs={}", taskId, System.currentTimeMillis() - start, ex);
         }
     }
 
@@ -376,6 +450,118 @@ public class StudentImportTaskServiceImpl implements StudentImportTaskService, T
         }
         int previewSize = Math.min(errorRows.size(), MAX_ERROR_PREVIEW_LIMIT);
         return new ArrayList<StudentImportErrorRow>(errorRows.subList(0, previewSize));
+    }
+
+    private ImportPrecheckResponse buildPrecheckResponse(String originalName,
+                                                         Long fileSize,
+                                                         Long dataRowCount,
+                                                         int maxRows,
+                                                         long maxFileSize,
+                                                         List<String> messages,
+                                                         List<StudentImportErrorRow> errorRows) {
+        List<StudentImportErrorRow> previewRows = buildErrorPreviewRows(errorRows);
+        Map<String, Integer> errorSummary = buildErrorSummary(previewRows);
+        List<String> safeMessages = messages == null ? new ArrayList<String>() : messages;
+        for (String message : safeMessages) {
+            incrementErrorSummary(errorSummary, message);
+        }
+        return ImportPrecheckResponse.of(
+                safeMessages.isEmpty() && previewRows.isEmpty(),
+                originalName,
+                fileSize,
+                dataRowCount,
+                maxRows,
+                maxFileSize,
+                IMPORT_PRECHECK_PREVIEW_LIMIT,
+                safeMessages,
+                errorSummary,
+                previewRows);
+    }
+
+    private List<StudentImportErrorRow> previewImportRowErrors(InputStream inputStream, int limit) {
+        final List<StudentImportErrorRow> errorRows = new ArrayList<StudentImportErrorRow>();
+        final Map<String, Integer> studentNoFirstRows = new HashMap<String, Integer>();
+        try {
+            EasyExcel.read(inputStream, StudentExcelRow.class, new AnalysisEventListener<StudentExcelRow>() {
+                private int dataIndex = 0;
+
+                @Override
+                public void invoke(StudentExcelRow data, AnalysisContext context) {
+                    dataIndex++;
+                    int rowNo = dataIndex + 1;
+                    StudentImportErrorRow errorRow = validatePreviewRow(data, rowNo, studentNoFirstRows);
+                    if (errorRow != null) {
+                        errorRows.add(errorRow);
+                    }
+                    if (dataIndex >= limit) {
+                        throw new ExcelAnalysisStopException();
+                    }
+                }
+
+                @Override
+                public void doAfterAllAnalysed(AnalysisContext context) {
+                    // no-op
+                }
+            }).sheet().doRead();
+        } catch (ExcelAnalysisStopException ex) {
+            return errorRows;
+        }
+        return errorRows;
+    }
+
+    private StudentImportErrorRow validatePreviewRow(StudentExcelRow row,
+                                                     int rowNo,
+                                                     Map<String, Integer> studentNoFirstRows) {
+        StudentExcelRow safeRow = row == null ? new StudentExcelRow() : row;
+        StringJoiner errors = new StringJoiner("; ");
+        if (isBlank(safeRow.getStudentNo())) {
+            errors.add("学号不能为空");
+        } else if (safeRow.getStudentNo().length() > 32) {
+            errors.add("学号长度不能超过32");
+        } else {
+            String normalizedStudentNo = safeRow.getStudentNo().trim();
+            Integer firstRowNo = studentNoFirstRows.putIfAbsent(normalizedStudentNo, rowNo);
+            if (firstRowNo != null) {
+                errors.add("文件预览范围内学号重复，首次出现行号=" + firstRowNo);
+            }
+        }
+        if (isBlank(safeRow.getName())) {
+            errors.add("姓名不能为空");
+        } else if (safeRow.getName().length() > 64) {
+            errors.add("姓名长度不能超过64");
+        }
+        if (safeRow.getAge() != null && (safeRow.getAge() < 0 || safeRow.getAge() > 150)) {
+            errors.add("年龄必须在0到150之间");
+        }
+        if (safeRow.getGender() != null && safeRow.getGender().length() > 16) {
+            errors.add("性别长度不能超过16");
+        }
+        if (safeRow.getClassName() != null && safeRow.getClassName().length() > 64) {
+            errors.add("班级长度不能超过64");
+        }
+        if (safeRow.getEmail() != null && safeRow.getEmail().length() > 128) {
+            errors.add("邮箱长度不能超过128");
+        } else if (!isBlank(safeRow.getEmail()) && !isSimpleEmail(safeRow.getEmail())) {
+            errors.add("邮箱格式不正确");
+        }
+        if (safeRow.getBirthday() != null && safeRow.getBirthday().length() > 32) {
+            errors.add("生日长度不能超过32");
+        }
+        String errorMessage = errors.toString();
+        if (errorMessage.isEmpty()) {
+            return null;
+        }
+        return StudentImportErrorRow.builder()
+                .rowNo(rowNo)
+                .studentNo(safeRow.getStudentNo())
+                .name(safeRow.getName())
+                .age(safeRow.getAge())
+                .gender(safeRow.getGender())
+                .className(safeRow.getClassName())
+                .email(safeRow.getEmail())
+                .birthday(safeRow.getBirthday())
+                .errorMessage(errorMessage)
+                .build();
     }
 
     private void validateFile(MultipartFile file) {
@@ -622,6 +808,17 @@ public class StudentImportTaskServiceImpl implements StudentImportTaskService, T
 
     private boolean hasText(String value) {
         return value != null && !value.trim().isEmpty();
+    }
+
+    private boolean isBlank(String value) {
+        return value == null || value.trim().isEmpty();
+    }
+
+    private boolean isSimpleEmail(String value) {
+        String trimmed = value == null ? "" : value.trim();
+        int atIndex = trimmed.indexOf('@');
+        int dotIndex = trimmed.lastIndexOf('.');
+        return atIndex > 0 && dotIndex > atIndex + 1 && dotIndex < trimmed.length() - 1;
     }
 
     private String normalizeOwnerId(String ownerId) {

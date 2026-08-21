@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.huang.demo.common.audit.repository.DownloadAuditRecordMapper">
+
+    <update id="createTableIfAbsent">
+        CREATE TABLE IF NOT EXISTS download_audit_record (
+            id BIGINT AUTO_INCREMENT PRIMARY KEY,
+            audit_id VARCHAR(64) NOT NULL,
+            owner_id VARCHAR(64) NOT NULL,
+            resource_type VARCHAR(32) NOT NULL,
+            resource_id VARCHAR(128) NOT NULL,
+            object_key VARCHAR(512),
+            file_name VARCHAR(255),
+            request_ip VARCHAR(64),
+            user_agent VARCHAR(512),
+            created_at DATETIME NOT NULL,
+            UNIQUE KEY uk_download_audit_record_audit_id (audit_id),
+            KEY idx_download_audit_record_owner_created_at (owner_id, created_at),
+            KEY idx_download_audit_record_resource_created_at (resource_type, resource_id, created_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    </update>
+
+    <insert id="insert" parameterType="com.huang.demo.common.audit.domain.entity.DownloadAuditRecord">
+        INSERT INTO download_audit_record (
+            audit_id, owner_id, resource_type, resource_id, object_key, file_name,
+            request_ip, user_agent, created_at
+        )
+        VALUES (
+            #{auditId}, #{ownerId}, #{resourceType}, #{resourceId}, #{objectKey}, #{fileName},
+            #{requestIp}, #{userAgent}, #{createdAt}
+        )
+    </insert>
+</mapper>

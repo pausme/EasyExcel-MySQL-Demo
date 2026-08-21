@@ -1,23 +1,25 @@
 package com.huang.demo.cleanup.service;
 
+import com.huang.demo.common.compensation.domain.model.CompensationFailureType;
+import com.huang.demo.common.compensation.service.CompensationService;
 import com.huang.demo.cleanup.config.CleanupProperties;
 import com.huang.demo.cleanup.domain.CleanupResult;
 import com.huang.demo.excel.repository.StudentMapper;
 import com.huang.demo.file.domain.entity.FileRecord;
+import com.huang.demo.file.domain.entity.FileUploadTask;
 import com.huang.demo.file.repository.FileRecordMapper;
 import com.huang.demo.file.repository.FileUploadTaskMapper;
 import com.huang.demo.file.service.FileObjectStorageService;
+import com.huang.demo.common.lock.DistributedLockService;
 import com.huang.demo.task.repository.AsyncTaskRecordMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.data.redis.core.script.DefaultRedisScript;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
-import java.util.Collections;
 import java.util.List;
 import java.util.UUID;
 
@@ -32,7 +34,27 @@ public class RetentionCleanupService {
     private final FileRecordMapper fileRecordMapper;
     private final StudentMapper studentMapper;
     private final FileObjectStorageService fileObjectStorageService;
-    private final StringRedisTemplate stringRedisTemplate;
+    private final DistributedLockService distributedLockService;
+    private final CompensationService compensationService;
+
+    @Autowired
+    public RetentionCleanupService(CleanupProperties properties,
+                                   AsyncTaskRecordMapper asyncTaskRecordMapper,
+                                   FileUploadTaskMapper fileUploadTaskMapper,
+                                   FileRecordMapper fileRecordMapper,
+                                   StudentMapper studentMapper,
+                                   FileObjectStorageService fileObjectStorageService,
+                                   DistributedLockService distributedLockService,
+                                   CompensationService compensationService) {
+        this.properties = properties;
+        this.asyncTaskRecordMapper = asyncTaskRecordMapper;
+        this.fileUploadTaskMapper = fileUploadTaskMapper;
+        this.fileRecordMapper = fileRecordMapper;
+        this.studentMapper = studentMapper;
+        this.fileObjectStorageService = fileObjectStorageService;
+        this.distributedLockService = distributedLockService;
+        this.compensationService = compensationService;
+    }
 
     public RetentionCleanupService(CleanupProperties properties,
                                    AsyncTaskRecordMapper asyncTaskRecordMapper,
@@ -40,14 +62,10 @@ public class RetentionCleanupService {
                                    FileRecordMapper fileRecordMapper,
                                    StudentMapper studentMapper,
                                    FileObjectStorageService fileObjectStorageService,
-                                   StringRedisTemplate stringRedisTemplate) {
-        this.properties = properties;
-        this.asyncTaskRecordMapper = asyncTaskRecordMapper;
-        this.fileUploadTaskMapper = fileUploadTaskMapper;
-        this.fileRecordMapper = fileRecordMapper;
-        this.studentMapper = studentMapper;
-        this.fileObjectStorageService = fileObjectStorageService;
-        this.stringRedisTemplate = stringRedisTemplate;
+                                   DistributedLockService distributedLockService) {
+        this(properties, asyncTaskRecordMapper, fileUploadTaskMapper, fileRecordMapper,
+                studentMapper, fileObjectStorageService, distributedLockService,
+                CompensationService.noop());
     }
 
     @Scheduled(
@@ -67,14 +85,15 @@ public class RetentionCleanupService {
         }
         String lockKey = normalizeLockKey(properties.getLockKey());
         String lockValue = UUID.randomUUID().toString().replace("-", "");
-        if (!tryAcquireLock(lockKey, lockValue)) {
+        if (!distributedLockService.tryLock(lockKey, lockValue,
+                Duration.ofSeconds(normalizeLockTtlSeconds(properties.getLockTtlSeconds())))) {
             log.info("retention cleanup skipped, lock is held by another worker");
             return CleanupResult.builder().build();
         }
         try {
             return cleanupOnce();
         } finally {
-            releaseLockQuietly(lockKey, lockValue);
+            distributedLockService.release(lockKey, lockValue);
         }
     }
 
@@ -86,9 +105,10 @@ public class RetentionCleanupService {
         int expiredTasks = asyncTaskRecordMapper.deleteTerminalBefore(
                 now.minusHours(normalizeRetentionHours(properties.getTaskRetentionHours())),
                 batchSize);
-        int uploadTasks = fileUploadTaskMapper.deleteFinishedBefore(
-                now.minusHours(normalizeRetentionHours(properties.getUploadTaskRetentionHours())),
-                batchSize);
+        LocalDateTime uploadTaskExpireBefore =
+                now.minusHours(normalizeRetentionHours(properties.getUploadTaskRetentionHours()));
+        int uploadTasks = cleanupExpiredUploadingTasks(uploadTaskExpireBefore, batchSize)
+                + fileUploadTaskMapper.deleteFinishedBefore(uploadTaskExpireBefore, batchSize);
         int deletedFiles = cleanupDeletedFiles(
                 now.minusHours(normalizeRetentionHours(properties.getDeletedFileRetentionHours())),
                 batchSize);
@@ -128,6 +148,60 @@ public class RetentionCleanupService {
         return deletedCount;
     }
 
+    private int cleanupExpiredUploadingTasks(LocalDateTime createdBefore, int batchSize) {
+        List<FileUploadTask> expiredTasks = fileUploadTaskMapper.listUploadingBefore(createdBefore, batchSize);
+        if (expiredTasks == null || expiredTasks.isEmpty()) {
+            return 0;
+        }
+        int deletedCount = 0;
+        for (FileUploadTask task : expiredTasks) {
+            cleanupUploadTaskObjects(task);
+            deletedCount += fileUploadTaskMapper.deleteById(task.getId());
+        }
+        return deletedCount;
+    }
+
+    private void cleanupUploadTaskObjects(FileUploadTask task) {
+        if (task == null) {
+            return;
+        }
+        try {
+            fileObjectStorageService.deleteQuietly(task.getObjectKey());
+        } catch (RuntimeException ex) {
+            recordCleanupFailure(task, task.getObjectKey(), ex);
+            log.warn("cleanup expired upload object failed, uploadId={}, objectKey={}",
+                    task.getUploadId(), task.getObjectKey(), ex);
+        }
+        String partObjectPrefix = task.getPartObjectPrefix();
+        if (partObjectPrefix == null || partObjectPrefix.trim().isEmpty()) {
+            return;
+        }
+        try {
+            List<String> objectKeys = fileObjectStorageService.listObjectKeys(partObjectPrefix);
+            fileObjectStorageService.deleteQuietly(objectKeys);
+        } catch (RuntimeException ex) {
+            recordCleanupFailure(task, partObjectPrefix, ex);
+            log.warn("cleanup expired multipart parts failed, uploadId={}, partPrefix={}",
+                    task.getUploadId(), partObjectPrefix, ex);
+        }
+    }
+
+    private void recordCleanupFailure(FileUploadTask task, String objectKey, RuntimeException ex) {
+        compensationService.recordPending(
+                "FILE_UPLOAD",
+                task.getUploadId(),
+                CompensationFailureType.CLEANUP_OBJECT_FAILED.name(),
+                "objectKey=" + objectKey + ",error=" + safeErrorMessage(ex));
+    }
+
+    private String safeErrorMessage(RuntimeException ex) {
+        if (ex == null || ex.getMessage() == null) {
+            return "unknown";
+        }
+        String message = ex.getMessage().replace('\n', ' ').replace('\r', ' ');
+        return message.length() > 512 ? message.substring(0, 512) : message;
+    }
+
     private int normalizeRetentionHours(int retentionHours) {
         return Math.max(1, retentionHours);
     }
@@ -137,28 +211,6 @@ public class RetentionCleanupService {
             return 100;
         }
         return Math.min(batchSize, 1000);
-    }
-
-    private boolean tryAcquireLock(String lockKey, String lockValue) {
-        try {
-            Boolean locked = stringRedisTemplate.opsForValue().setIfAbsent(
-                    lockKey, lockValue, Duration.ofSeconds(normalizeLockTtlSeconds(properties.getLockTtlSeconds())));
-            return Boolean.TRUE.equals(locked);
-        } catch (RuntimeException ex) {
-            log.warn("acquire retention cleanup lock failed, lockKey={}", lockKey, ex);
-            return false;
-        }
-    }
-
-    private void releaseLockQuietly(String lockKey, String lockValue) {
-        try {
-            DefaultRedisScript<Long> script = new DefaultRedisScript<Long>();
-            script.setResultType(Long.class);
-            script.setScriptText("if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end");
-            stringRedisTemplate.execute(script, Collections.singletonList(lockKey), lockValue);
-        } catch (RuntimeException ex) {
-            log.warn("release retention cleanup lock failed, lockKey={}", lockKey, ex);
-        }
     }
 
     private String normalizeLockKey(String lockKey) {

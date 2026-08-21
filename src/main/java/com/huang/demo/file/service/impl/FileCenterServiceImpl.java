@@ -1,5 +1,7 @@
 package com.huang.demo.file.service.impl;
 
+import com.huang.demo.common.compensation.domain.model.CompensationFailureType;
+import com.huang.demo.common.compensation.service.CompensationService;
 import com.huang.demo.file.api.dto.FilePageQueryRequest;
 import com.huang.demo.file.api.dto.FilePageResponse;
 import com.huang.demo.file.api.dto.FileResponse;
@@ -25,10 +27,12 @@ import com.huang.demo.file.repository.FileUploadTaskMapper;
 import com.huang.demo.file.service.FileCenterService;
 import com.huang.demo.file.service.FileObjectStorageService;
 import com.huang.demo.file.service.FileSecurityScanner;
+import com.huang.demo.common.lock.DistributedLockService;
 import com.huang.demo.security.domain.CurrentUser;
 import com.huang.demo.security.domain.UserContextHolder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
@@ -53,23 +57,62 @@ public class FileCenterServiceImpl implements FileCenterService {
     private static final Logger log = LoggerFactory.getLogger(FileCenterServiceImpl.class);
     private static final int DEFAULT_PAGE_SIZE = 20;
     private static final long MIN_MULTIPART_PART_SIZE = 5L * 1024L * 1024L;
+    private static final int PART_STAT_MAX_ATTEMPTS = 3;
+    private static final long PART_STAT_RETRY_INTERVAL_MS = 200L;
+    private static final DistributedLockService NOOP_LOCK_SERVICE = new DistributedLockService() {
+        @Override
+        public boolean tryLock(String lockKey, String ownerToken, java.time.Duration ttl) {
+            return true;
+        }
+
+        @Override
+        public boolean release(String lockKey, String ownerToken) {
+            return true;
+        }
+    };
 
     private final FileRecordMapper fileRecordMapper;
     private final FileUploadTaskMapper fileUploadTaskMapper;
     private final FileObjectStorageService fileObjectStorageService;
     private final FileSecurityScanner fileSecurityScanner;
     private final FileCenterProperties properties;
+    private final DistributedLockService distributedLockService;
+    private final CompensationService compensationService;
+
+    @Autowired
+    public FileCenterServiceImpl(FileRecordMapper fileRecordMapper,
+                                 FileUploadTaskMapper fileUploadTaskMapper,
+                                 FileObjectStorageService fileObjectStorageService,
+                                 FileSecurityScanner fileSecurityScanner,
+                                 FileCenterProperties properties,
+                                 DistributedLockService distributedLockService,
+                                 CompensationService compensationService) {
+        this.fileRecordMapper = fileRecordMapper;
+        this.fileUploadTaskMapper = fileUploadTaskMapper;
+        this.fileObjectStorageService = fileObjectStorageService;
+        this.fileSecurityScanner = fileSecurityScanner;
+        this.properties = properties;
+        this.distributedLockService = distributedLockService;
+        this.compensationService = compensationService;
+    }
 
     public FileCenterServiceImpl(FileRecordMapper fileRecordMapper,
                                  FileUploadTaskMapper fileUploadTaskMapper,
                                  FileObjectStorageService fileObjectStorageService,
                                  FileSecurityScanner fileSecurityScanner,
                                  FileCenterProperties properties) {
-        this.fileRecordMapper = fileRecordMapper;
-        this.fileUploadTaskMapper = fileUploadTaskMapper;
-        this.fileObjectStorageService = fileObjectStorageService;
-        this.fileSecurityScanner = fileSecurityScanner;
-        this.properties = properties;
+        this(fileRecordMapper, fileUploadTaskMapper, fileObjectStorageService,
+                fileSecurityScanner, properties, NOOP_LOCK_SERVICE, CompensationService.noop());
+    }
+
+    public FileCenterServiceImpl(FileRecordMapper fileRecordMapper,
+                                 FileUploadTaskMapper fileUploadTaskMapper,
+                                 FileObjectStorageService fileObjectStorageService,
+                                 FileSecurityScanner fileSecurityScanner,
+                                 FileCenterProperties properties,
+                                 DistributedLockService distributedLockService) {
+        this(fileRecordMapper, fileUploadTaskMapper, fileObjectStorageService,
+                fileSecurityScanner, properties, distributedLockService, CompensationService.noop());
     }
 
     @PostConstruct
@@ -87,6 +130,7 @@ public class FileCenterServiceImpl implements FileCenterService {
     @Transactional(rollbackFor = Exception.class)
     public FileRecord upload(MultipartFile file) throws IOException {
         validateUploadFile(file);
+        validateQuotaForNewFile(file.getSize(), false, false);
         String fileId = UUID.randomUUID().toString().replace("-", "");
         String originalName = normalizeOriginalName(file.getOriginalFilename());
         String fileExt = resolveFileExt(originalName);
@@ -139,6 +183,7 @@ public class FileCenterServiceImpl implements FileCenterService {
                     .file(FileResponse.from(existingRecord.get()))
                     .build();
         }
+        validateQuotaForNewFile(fileSize, true, true);
 
         FileUploadTask task = buildUploadTask(
                 FileUploadType.DIRECT,
@@ -162,9 +207,28 @@ public class FileCenterServiceImpl implements FileCenterService {
     @Override
     @Transactional(rollbackFor = Exception.class)
     public FileRecord completeDirectUpload(String uploadId) {
-        FileUploadTask task = findUploadingTask(uploadId, FileUploadType.DIRECT);
+        return withUploadOperationLock(uploadId, FileUploadType.DIRECT, new UploadOperation<FileRecord>() {
+            @Override
+            public FileRecord execute(FileUploadTask task) {
+                return completeDirectUploadInternal(task);
+            }
+
+            @Override
+            public FileRecord onSuccess(FileUploadTask task) {
+                return findCompletedFileRecord(task);
+            }
+
+            @Override
+            public FileRecord onAborted(FileUploadTask task) {
+                throw new IllegalStateException("上传任务已取消，不能继续完成");
+            }
+        });
+    }
+
+    private FileRecord completeDirectUploadInternal(FileUploadTask task) {
         StoredObject object = fileObjectStorageService.statObject(task.getObjectKey());
         validateObjectSize(task, object);
+        validateQuotaForNewFile(task.getFileSize(), false, false);
         try (java.io.InputStream inputStream = fileObjectStorageService.openObject(task.getObjectKey())) {
             fileSecurityScanner.scan(inputStream, task.getOriginalName(), object.getContentType(), object.getSize());
             FileRecord record = buildFileRecord(task, object);
@@ -197,6 +261,7 @@ public class FileCenterServiceImpl implements FileCenterService {
                     .file(FileResponse.from(existingRecord.get()))
                     .build();
         }
+        validateQuotaForNewFile(fileSize, true, true);
 
         long partSize = normalizePartSize(request.getPartSize());
         int partCount = calculatePartCount(fileSize, partSize);
@@ -210,26 +275,13 @@ public class FileCenterServiceImpl implements FileCenterService {
                 partCount);
         fileUploadTaskMapper.insert(task);
 
-        List<PartUploadUrlResponse> parts = new ArrayList<PartUploadUrlResponse>(partCount);
-        for (int partNumber = 1; partNumber <= partCount; partNumber++) {
-            String partObjectKey = buildPartObjectKey(task, partNumber);
-            parts.add(PartUploadUrlResponse.builder()
-                    .partNumber(partNumber)
-                    .objectKey(partObjectKey)
-                    .uploadUrl(fileObjectStorageService.createUploadUrl(partObjectKey))
-                    .expectedSize(calculateExpectedPartSize(fileSize, partSize, partNumber, partCount))
-                    .build());
-        }
-        return MultipartUploadInitResponse.builder()
-                .instant(false)
-                .uploadId(task.getUploadId())
-                .fileId(task.getFileId())
-                .fileSize(task.getFileSize())
-                .partSize(task.getPartSize())
-                .partCount(task.getPartCount())
-                .expireMinutes(Math.max(1, properties.getUploadUrlExpireMinutes()))
-                .parts(parts)
-                .build();
+        return buildMultipartUploadInitResponse(task);
+    }
+
+    @Override
+    public MultipartUploadInitResponse resumeMultipartUpload(String uploadId) {
+        FileUploadTask task = findUploadingTask(uploadId, FileUploadType.MULTIPART);
+        return buildMultipartUploadInitResponse(task);
     }
 
     @Override
@@ -254,11 +306,29 @@ public class FileCenterServiceImpl implements FileCenterService {
     @Override
     @Transactional(rollbackFor = Exception.class)
     public FileRecord completeMultipartUpload(String uploadId) {
-        FileUploadTask task = findUploadingTask(uploadId, FileUploadType.MULTIPART);
+        return withUploadOperationLock(uploadId, FileUploadType.MULTIPART, new UploadOperation<FileRecord>() {
+            @Override
+            public FileRecord execute(FileUploadTask task) {
+                return completeMultipartUploadInternal(task);
+            }
+
+            @Override
+            public FileRecord onSuccess(FileUploadTask task) {
+                return findCompletedFileRecord(task);
+            }
+
+            @Override
+            public FileRecord onAborted(FileUploadTask task) {
+                throw new IllegalStateException("上传任务已取消，不能继续完成");
+            }
+        });
+    }
+
+    private FileRecord completeMultipartUploadInternal(FileUploadTask task) {
         List<String> partObjectKeys = new ArrayList<String>(task.getPartCount());
         for (int partNumber = 1; partNumber <= task.getPartCount(); partNumber++) {
             String partObjectKey = buildPartObjectKey(task, partNumber);
-            StoredObject partObject = fileObjectStorageService.statObject(partObjectKey);
+            StoredObject partObject = statPartObjectWithRetry(partObjectKey, partNumber);
             long expectedSize = calculateExpectedPartSize(
                     task.getFileSize(), task.getPartSize(), partNumber, task.getPartCount());
             if (partObject.getSize() != expectedSize) {
@@ -274,6 +344,7 @@ public class FileCenterServiceImpl implements FileCenterService {
             composed = true;
             StoredObject object = fileObjectStorageService.statObject(task.getObjectKey());
             validateObjectSize(task, object);
+            validateQuotaForNewFile(task.getFileSize(), false, false);
             try (java.io.InputStream inputStream = fileObjectStorageService.openObject(task.getObjectKey())) {
                 fileSecurityScanner.scan(inputStream, task.getOriginalName(), object.getContentType(), object.getSize());
                 FileRecord record = buildFileRecord(task, object);
@@ -302,10 +373,28 @@ public class FileCenterServiceImpl implements FileCenterService {
     @Override
     @Transactional(rollbackFor = Exception.class)
     public void abortMultipartUpload(String uploadId) {
-        FileUploadTask task = findUploadingTask(uploadId, FileUploadType.MULTIPART);
-        markTaskAborted(task.getUploadId());
-        registerDeleteAfterCommit(fileObjectStorageService.listObjectKeys(task.getPartObjectPrefix()));
-        log.info("multipart upload aborted, uploadId={}", task.getUploadId());
+        withUploadOperationLock(uploadId, FileUploadType.MULTIPART, new UploadOperation<Void>() {
+            @Override
+            public Void execute(FileUploadTask task) {
+                markTaskAborted(task.getUploadId());
+                registerDeleteAfterCommit(fileObjectStorageService.listObjectKeys(task.getPartObjectPrefix()));
+                log.info("multipart upload aborted, uploadId={}", task.getUploadId());
+                return null;
+            }
+
+            @Override
+            public Void onSuccess(FileUploadTask task) {
+                log.info("multipart upload abort skipped because upload already completed, uploadId={}",
+                        task.getUploadId());
+                return null;
+            }
+
+            @Override
+            public Void onAborted(FileUploadTask task) {
+                log.info("multipart upload abort repeated, uploadId={}", task.getUploadId());
+                return null;
+            }
+        });
     }
 
     @Override
@@ -329,6 +418,11 @@ public class FileCenterServiceImpl implements FileCenterService {
             return Optional.of(fileObjectStorageService.createDownloadUrl(record.getObjectKey(), record.getOriginalName()));
         } catch (RuntimeException ex) {
             fileRecordMapper.markDeleted(currentOwnerId(), record.getFileId());
+            compensationService.recordPending(
+                    "FILE",
+                    record.getFileId(),
+                    CompensationFailureType.OBJECT_MISSING.name(),
+                    "objectKey=" + record.getObjectKey());
             log.warn("create file download url failed, fileId={}, objectKey={}", record.getFileId(), record.getObjectKey(), ex);
             return Optional.empty();
         }
@@ -464,9 +558,116 @@ public class FileCenterServiceImpl implements FileCenterService {
     private FileUploadTask findUploadingTask(String uploadId, FileUploadType expectedUploadType) {
         FileUploadTask task = findTask(uploadId, expectedUploadType);
         if (!FileUploadStatus.UPLOADING.name().equals(task.getStatus())) {
-            throw new IllegalStateException("上传任务状态不允许完成，status=" + task.getStatus());
+            throw new IllegalStateException("上传任务状态不允许继续操作，status=" + task.getStatus());
         }
         return task;
+    }
+
+    private <T> T withUploadOperationLock(String uploadId,
+                                          FileUploadType expectedUploadType,
+                                          UploadOperation<T> operation) {
+        String normalizedUploadId = normalizeUploadId(uploadId);
+        String ownerId = currentOwnerId();
+        String lockKey = buildUploadOperationLockKey(ownerId, normalizedUploadId);
+        String ownerToken = UUID.randomUUID().toString().replace("-", "");
+        java.time.Duration ttl = java.time.Duration.ofSeconds(
+                Math.max(60, properties.getUploadOperationLockTtlSeconds()));
+        if (!distributedLockService.tryLock(lockKey, ownerToken, ttl)) {
+            throw new IllegalStateException("上传任务正在处理中，请稍后重试");
+        }
+        try {
+            FileUploadTask task = findTask(normalizedUploadId, expectedUploadType);
+            if (FileUploadStatus.SUCCESS.name().equals(task.getStatus())) {
+                return operation.onSuccess(task);
+            }
+            if (FileUploadStatus.ABORTED.name().equals(task.getStatus())) {
+                return operation.onAborted(task);
+            }
+            if (!FileUploadStatus.UPLOADING.name().equals(task.getStatus())) {
+                throw new IllegalStateException("上传任务状态不允许继续操作，status=" + task.getStatus());
+            }
+            return operation.execute(task);
+        } finally {
+            distributedLockService.release(lockKey, ownerToken);
+        }
+    }
+
+    private FileRecord findCompletedFileRecord(FileUploadTask task) {
+        return fileRecordMapper.findNormalByFileId(currentOwnerId(), task.getFileId())
+                .orElseThrow(() -> new IllegalStateException("上传任务已完成但文件记录不存在"));
+    }
+
+    private String normalizeUploadId(String uploadId) {
+        if (uploadId == null || uploadId.trim().isEmpty()) {
+            throw new IllegalArgumentException("上传任务不存在");
+        }
+        return uploadId.trim();
+    }
+
+    private String buildUploadOperationLockKey(String ownerId, String uploadId) {
+        String prefix = properties.getUploadOperationLockKeyPrefix();
+        if (prefix == null || prefix.trim().isEmpty()) {
+            prefix = "file:upload:operation:";
+        }
+        return prefix.trim() + ownerId + ":" + uploadId;
+    }
+
+    private interface UploadOperation<T> {
+        T execute(FileUploadTask task);
+
+        T onSuccess(FileUploadTask task);
+
+        T onAborted(FileUploadTask task);
+    }
+
+    private MultipartUploadInitResponse buildMultipartUploadInitResponse(FileUploadTask task) {
+        List<PartUploadUrlResponse> parts = new ArrayList<PartUploadUrlResponse>(task.getPartCount());
+        for (int partNumber = 1; partNumber <= task.getPartCount(); partNumber++) {
+            String partObjectKey = buildPartObjectKey(task, partNumber);
+            parts.add(PartUploadUrlResponse.builder()
+                    .partNumber(partNumber)
+                    .objectKey(partObjectKey)
+                    .uploadUrl(fileObjectStorageService.createUploadUrl(partObjectKey))
+                    .expectedSize(calculateExpectedPartSize(task.getFileSize(), task.getPartSize(), partNumber, task.getPartCount()))
+                    .build());
+        }
+        return MultipartUploadInitResponse.builder()
+                .instant(false)
+                .uploadId(task.getUploadId())
+                .fileId(task.getFileId())
+                .fileSize(task.getFileSize())
+                .partSize(task.getPartSize())
+                .partCount(task.getPartCount())
+                .expireMinutes(Math.max(1, properties.getUploadUrlExpireMinutes()))
+                .parts(parts)
+                .build();
+    }
+
+    private StoredObject statPartObjectWithRetry(String partObjectKey, int partNumber) {
+        RuntimeException lastException = null;
+        for (int attempt = 1; attempt <= PART_STAT_MAX_ATTEMPTS; attempt++) {
+            try {
+                return fileObjectStorageService.statObject(partObjectKey);
+            } catch (RuntimeException ex) {
+                lastException = ex;
+                if (attempt >= PART_STAT_MAX_ATTEMPTS) {
+                    break;
+                }
+                log.warn("stat multipart object failed, will retry, partNumber={}, attempt={}, objectKey={}",
+                        partNumber, attempt, partObjectKey, ex);
+                sleepBeforePartStatRetry();
+            }
+        }
+        throw lastException;
+    }
+
+    private void sleepBeforePartStatRetry() {
+        try {
+            Thread.sleep(PART_STAT_RETRY_INTERVAL_MS);
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("等待重试读取分片对象时被中断", ex);
+        }
     }
 
     private void markTaskSuccess(String uploadId) {
@@ -514,6 +715,70 @@ public class FileCenterServiceImpl implements FileCenterService {
         normalizeFileMd5(request.getFileMd5());
         long partSize = normalizePartSize(request.getPartSize());
         calculatePartCount(fileSize, partSize);
+    }
+
+    private void validateQuotaForNewFile(long fileSize,
+                                         boolean includeUploadingTasks,
+                                         boolean checkActiveUploadTasks) {
+        validateSingleFileSize(fileSize);
+        validateDailyUploadCount();
+        if (checkActiveUploadTasks) {
+            validateActiveUploadTasks();
+        }
+        validateTotalStorageQuota(fileSize, includeUploadingTasks);
+    }
+
+    private void validateSingleFileSize(long fileSize) {
+        long maxFileSizeBytes = properties.getMaxFileSizeBytes();
+        if (maxFileSizeBytes > 0L && fileSize > maxFileSizeBytes) {
+            throw new IllegalStateException("文件大小超过单文件限制，maxBytes="
+                    + maxFileSizeBytes + ", actualBytes=" + fileSize);
+        }
+    }
+
+    private void validateDailyUploadCount() {
+        int maxDailyUploadCount = properties.getMaxDailyUploadCountPerOwner();
+        if (maxDailyUploadCount <= 0) {
+            return;
+        }
+        long todayCount = fileRecordMapper.countNormalCreatedAtOrAfter(currentOwnerId(), LocalDate.now().atStartOfDay());
+        if (todayCount >= maxDailyUploadCount) {
+            throw new IllegalStateException("今日上传次数已达上限，maxDailyCount=" + maxDailyUploadCount);
+        }
+    }
+
+    private void validateActiveUploadTasks() {
+        int maxActiveUploadTasks = properties.getMaxActiveUploadTasksPerOwner();
+        if (maxActiveUploadTasks <= 0) {
+            return;
+        }
+        long activeUploadTasks = fileUploadTaskMapper.countUploadingByOwner(currentOwnerId());
+        if (activeUploadTasks >= maxActiveUploadTasks) {
+            throw new IllegalStateException("活跃上传任务数已达上限，maxActiveTasks=" + maxActiveUploadTasks);
+        }
+    }
+
+    private void validateTotalStorageQuota(long fileSize, boolean includeUploadingTasks) {
+        long maxTotalStorageBytes = properties.getMaxTotalStorageBytesPerOwner();
+        if (maxTotalStorageBytes <= 0L) {
+            return;
+        }
+        long currentBytes = fileRecordMapper.sumNormalFileSize(currentOwnerId());
+        if (includeUploadingTasks) {
+            currentBytes = safeAdd(currentBytes, fileUploadTaskMapper.sumUploadingFileSize(currentOwnerId()));
+        }
+        long expectedBytes = safeAdd(currentBytes, fileSize);
+        if (expectedBytes > maxTotalStorageBytes) {
+            throw new IllegalStateException("用户文件存储空间不足，maxBytes="
+                    + maxTotalStorageBytes + ", currentBytes=" + currentBytes + ", requestBytes=" + fileSize);
+        }
+    }
+
+    private long safeAdd(long left, long right) {
+        if (Long.MAX_VALUE - left < right) {
+            return Long.MAX_VALUE;
+        }
+        return left + right;
     }
 
     private void validateObjectSize(FileUploadTask task, StoredObject object) {

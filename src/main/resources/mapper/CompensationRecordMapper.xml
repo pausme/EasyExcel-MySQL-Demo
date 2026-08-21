@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.huang.demo.common.compensation.repository.CompensationRecordMapper">
+
+    <resultMap id="CompensationRecordMap"
+               type="com.huang.demo.common.compensation.domain.entity.CompensationRecord">
+        <id property="id" column="id"/>
+        <result property="compensationId" column="compensation_id"/>
+        <result property="bizType" column="biz_type"/>
+        <result property="bizId" column="biz_id"/>
+        <result property="failureType" column="failure_type"/>
+        <result property="status" column="status"/>
+        <result property="retryCount" column="retry_count"/>
+        <result property="maxRetryCount" column="max_retry_count"/>
+        <result property="nextRetryAt" column="next_retry_at"/>
+        <result property="payload" column="payload"/>
+        <result property="lastError" column="last_error"/>
+        <result property="createdAt" column="created_at"/>
+        <result property="updatedAt" column="updated_at"/>
+        <result property="completedAt" column="completed_at"/>
+    </resultMap>
+
+    <update id="createTableIfAbsent">
+        CREATE TABLE IF NOT EXISTS compensation_record (
+            id BIGINT AUTO_INCREMENT PRIMARY KEY,
+            compensation_id VARCHAR(64) NOT NULL,
+            biz_type VARCHAR(64) NOT NULL,
+            biz_id VARCHAR(128) NOT NULL,
+            failure_type VARCHAR(64) NOT NULL,
+            status VARCHAR(32) NOT NULL,
+            retry_count INT NOT NULL,
+            max_retry_count INT NOT NULL,
+            next_retry_at DATETIME,
+            payload VARCHAR(4096),
+            last_error VARCHAR(1024),
+            created_at DATETIME NOT NULL,
+            updated_at DATETIME NOT NULL,
+            completed_at DATETIME,
+            UNIQUE KEY uk_compensation_record_compensation_id (compensation_id),
+            KEY idx_compensation_record_biz_status (biz_type, biz_id, failure_type, status),
+            KEY idx_compensation_record_status_next_retry (status, next_retry_at),
+            KEY idx_compensation_record_created_at (created_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    </update>
+
+    <select id="findActive" resultMap="CompensationRecordMap">
+        SELECT id, compensation_id, biz_type, biz_id, failure_type, status,
+               retry_count, max_retry_count, next_retry_at, payload, last_error,
+               created_at, updated_at, completed_at
+        FROM compensation_record
+        WHERE biz_type = #{bizType}
+          AND biz_id = #{bizId}
+          AND failure_type = #{failureType}
+          AND status IN ('PENDING', 'RUNNING', 'FAILED')
+        ORDER BY id DESC
+        LIMIT 1
+    </select>
+
+    <insert id="insert" parameterType="com.huang.demo.common.compensation.domain.entity.CompensationRecord">
+        INSERT INTO compensation_record (
+            compensation_id, biz_type, biz_id, failure_type, status,
+            retry_count, max_retry_count, next_retry_at, payload, last_error,
+            created_at, updated_at, completed_at
+        )
+        VALUES (
+            #{compensationId}, #{bizType}, #{bizId}, #{failureType}, #{status},
+            #{retryCount}, #{maxRetryCount}, #{nextRetryAt}, #{payload}, #{lastError},
+            #{createdAt}, #{updatedAt}, #{completedAt}
+        )
+    </insert>
+
+    <update id="markRunning">
+        UPDATE compensation_record
+        SET status = 'RUNNING',
+            updated_at = #{updatedAt}
+        WHERE compensation_id = #{compensationId}
+          AND status IN ('PENDING', 'FAILED')
+    </update>
+
+    <update id="markSuccess">
+        UPDATE compensation_record
+        SET status = 'SUCCESS',
+            updated_at = #{updatedAt},
+            completed_at = #{updatedAt},
+            last_error = NULL
+        WHERE compensation_id = #{compensationId}
+          AND status IN ('PENDING', 'RUNNING', 'FAILED')
+    </update>
+
+    <update id="markFailed">
+        UPDATE compensation_record
+        SET status = 'FAILED',
+            retry_count = retry_count + 1,
+            next_retry_at = #{nextRetryAt},
+            last_error = #{lastError},
+            updated_at = #{updatedAt}
+        WHERE compensation_id = #{compensationId}
+          AND status IN ('PENDING', 'RUNNING', 'FAILED')
+    </update>
+</mapper>

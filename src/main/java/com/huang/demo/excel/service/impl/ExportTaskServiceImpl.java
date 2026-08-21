@@ -25,10 +25,12 @@ import com.huang.demo.task.domain.model.CreateAsyncTaskCommand;
 import com.huang.demo.task.domain.model.MarkAsyncTaskFailedCommand;
 import com.huang.demo.task.domain.model.TaskCanceledException;
 import com.huang.demo.task.service.TaskCenterService;
+import com.huang.demo.task.service.TaskExecutionGuard;
 import com.huang.demo.task.service.TaskRecoveryHandler;
 import com.huang.demo.task.service.TaskRetryHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
@@ -60,7 +62,9 @@ public class ExportTaskServiceImpl implements ExportTaskService, TaskRetryHandle
     private final MinioProperties minioProperties;
     private final ReportExportEngine reportExportEngine;
     private final StudentReportExportJob studentReportExportJob;
+    private final TaskExecutionGuard taskExecutionGuard;
 
+    @Autowired
     public ExportTaskServiceImpl(ExcelDemoProperties properties,
                                  @Qualifier("exportTaskExecutor") Executor exportTaskExecutor,
                                  TaskCenterService taskCenterService,
@@ -68,7 +72,8 @@ public class ExportTaskServiceImpl implements ExportTaskService, TaskRetryHandle
                                  MinioObjectStorageService minioObjectStorageService,
                                  MinioProperties minioProperties,
                                  ReportExportEngine reportExportEngine,
-                                 StudentReportExportJob studentReportExportJob) {
+                                 StudentReportExportJob studentReportExportJob,
+                                 TaskExecutionGuard taskExecutionGuard) {
         this.properties = properties;
         this.exportTaskExecutor = exportTaskExecutor;
         this.taskCenterService = taskCenterService;
@@ -77,6 +82,20 @@ public class ExportTaskServiceImpl implements ExportTaskService, TaskRetryHandle
         this.minioProperties = minioProperties;
         this.reportExportEngine = reportExportEngine;
         this.studentReportExportJob = studentReportExportJob;
+        this.taskExecutionGuard = taskExecutionGuard;
+    }
+
+    public ExportTaskServiceImpl(ExcelDemoProperties properties,
+                                 Executor exportTaskExecutor,
+                                 TaskCenterService taskCenterService,
+                                 ObjectMapper objectMapper,
+                                 MinioObjectStorageService minioObjectStorageService,
+                                 MinioProperties minioProperties,
+                                 ReportExportEngine reportExportEngine,
+                                 StudentReportExportJob studentReportExportJob) {
+        this(properties, exportTaskExecutor, taskCenterService, objectMapper,
+                minioObjectStorageService, minioProperties, reportExportEngine,
+                studentReportExportJob, new TaskExecutionGuard(taskCenterService));
     }
 
     @PostConstruct
@@ -197,48 +216,51 @@ public class ExportTaskServiceImpl implements ExportTaskService, TaskRetryHandle
 
     private void executeExport(String taskId) {
         long start = System.currentTimeMillis();
-        AsyncTaskRecord taskRecord = taskCenterService.markRunning(taskId, taskCenterService.currentWorkerId());
-        if (AsyncTaskStatus.CANCELED.name().equals(taskRecord.getStatus())
-                || AsyncTaskStatus.EXPIRED.name().equals(taskRecord.getStatus())) {
+        Optional<TaskExecutionGuard.TaskExecutionLease> leaseOptional = taskExecutionGuard.tryStart(
+                taskId, AsyncTaskType.EXPORT.name(), taskCenterService.currentWorkerId());
+        if (!leaseOptional.isPresent()) {
             return;
         }
-        ExportTask task = toExportTask(taskRecord);
-        try {
-            Path temporaryFilePath = getTemporaryFilePath(task);
-            Files.createDirectories(temporaryFilePath.getParent());
-            Files.deleteIfExists(temporaryFilePath);
-            ReportExportResult exportResult = writeReport(task, temporaryFilePath);
-            task.setTotal(safeLongToInt(exportResult.getTotal()));
-            task.setExported(safeLongToInt(exportResult.getExported()));
-            task.setSheetCount(exportResult.getSheetCount());
-            assertTaskCanContinue(task.getTaskId());
-            storeExportFile(task, temporaryFilePath);
-            AsyncTaskRecord completedTask = taskCenterService.markSuccess(task.getTaskId(), toJson(StudentExportTaskResult.builder()
-                    .fileName(task.getFileName())
-                    .objectKey(task.getObjectKey())
-                    .format(task.getFormat())
-                    .sheetCount(task.getSheetCount())
-                    .build()));
-            if (!AsyncTaskStatus.SUCCESS.name().equals(completedTask.getStatus())) {
-                minioObjectStorageService.deleteQuietly(task.getObjectKey());
-                throw new TaskCanceledException("任务状态已变更，status=" + completedTask.getStatus());
+        try (TaskExecutionGuard.TaskExecutionLease lease = leaseOptional.get()) {
+            AsyncTaskRecord taskRecord = lease.getTask();
+            ExportTask task = toExportTask(taskRecord);
+            try {
+                Path temporaryFilePath = getTemporaryFilePath(task);
+                Files.createDirectories(temporaryFilePath.getParent());
+                Files.deleteIfExists(temporaryFilePath);
+                ReportExportResult exportResult = writeReport(task, temporaryFilePath);
+                task.setTotal(safeLongToInt(exportResult.getTotal()));
+                task.setExported(safeLongToInt(exportResult.getExported()));
+                task.setSheetCount(exportResult.getSheetCount());
+                assertTaskCanContinue(task.getTaskId());
+                storeExportFile(task, temporaryFilePath);
+                AsyncTaskRecord completedTask = taskCenterService.markSuccess(task.getTaskId(), toJson(StudentExportTaskResult.builder()
+                        .fileName(task.getFileName())
+                        .objectKey(task.getObjectKey())
+                        .format(task.getFormat())
+                        .sheetCount(task.getSheetCount())
+                        .build()));
+                if (!AsyncTaskStatus.SUCCESS.name().equals(completedTask.getStatus())) {
+                    minioObjectStorageService.deleteQuietly(task.getObjectKey());
+                    throw new TaskCanceledException("任务状态已变更，status=" + completedTask.getStatus());
+                }
+                log.info("export task finished, taskId={}, total={}, exported={}, sheetCount={}, elapsedMs={}",
+                        task.getTaskId(), task.getTotal(), task.getExported(), task.getSheetCount(),
+                        System.currentTimeMillis() - start);
+            } catch (TaskCanceledException ex) {
+                deletePartialFile(task);
+                log.info("export task canceled, taskId={}, elapsedMs={}",
+                        task.getTaskId(), System.currentTimeMillis() - start);
+            } catch (Exception ex) {
+                deletePartialFile(task);
+                taskCenterService.markFailed(buildRetryableFailure(task.getTaskId(),
+                        ex.getMessage() == null ? "导出失败，请查看服务端日志" : ex.getMessage(),
+                        classifyFailure(ex), "可稍后重试；若持续失败，请检查数据库、MinIO 或服务端日志"));
+                log.error("export task failed, taskId={}, elapsedMs={}",
+                        task.getTaskId(), System.currentTimeMillis() - start, ex);
+            } finally {
+                deleteTemporaryFileQuietly(task);
             }
-            log.info("export task finished, taskId={}, total={}, exported={}, sheetCount={}, elapsedMs={}",
-                    task.getTaskId(), task.getTotal(), task.getExported(), task.getSheetCount(),
-                    System.currentTimeMillis() - start);
-        } catch (TaskCanceledException ex) {
-            deletePartialFile(task);
-            log.info("export task canceled, taskId={}, elapsedMs={}",
-                    task.getTaskId(), System.currentTimeMillis() - start);
-        } catch (Exception ex) {
-            deletePartialFile(task);
-            taskCenterService.markFailed(buildRetryableFailure(task.getTaskId(),
-                    ex.getMessage() == null ? "导出失败，请查看服务端日志" : ex.getMessage(),
-                    classifyFailure(ex), "可稍后重试；若持续失败，请检查数据库、MinIO 或服务端日志"));
-            log.error("export task failed, taskId={}, elapsedMs={}",
-                    task.getTaskId(), System.currentTimeMillis() - start, ex);
-        } finally {
-            deleteTemporaryFileQuietly(task);
         }
     }
 

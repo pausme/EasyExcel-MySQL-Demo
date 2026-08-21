@@ -2,6 +2,7 @@ package com.huang.demo.excel.service;
 
 import com.huang.demo.excel.api.dto.ImportTaskResponse;
 import com.huang.demo.excel.api.dto.ImportErrorPreviewResponse;
+import com.huang.demo.excel.api.dto.ImportPrecheckResponse;
 import com.huang.demo.task.domain.entity.AsyncTaskRecord;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -11,6 +12,8 @@ import java.util.Optional;
 public interface StudentImportTaskService {
 
     AsyncTaskRecord submitImport(MultipartFile file, String ownerId) throws IOException;
+
+    ImportPrecheckResponse precheckImport(MultipartFile file) throws IOException;
 
     Optional<ImportTaskResponse> findImportTask(String taskId, String ownerId);
 

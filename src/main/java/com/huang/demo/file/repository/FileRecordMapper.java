@@ -29,6 +29,11 @@ public interface FileRecordMapper {
                      @Param("originalName") String originalName,
                      @Param("fileExt") String fileExt);
 
+    long sumNormalFileSize(@Param("ownerId") String ownerId);
+
+    long countNormalCreatedAtOrAfter(@Param("ownerId") String ownerId,
+                                     @Param("createdAt") LocalDateTime createdAt);
+
     List<FileRecord> listNormalPage(@Param("ownerId") String ownerId,
                                     @Param("originalName") String originalName,
                                     @Param("fileExt") String fileExt,

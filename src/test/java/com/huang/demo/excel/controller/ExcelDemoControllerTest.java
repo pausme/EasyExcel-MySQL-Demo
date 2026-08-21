@@ -1,7 +1,10 @@
 package com.huang.demo.excel.controller;
 
+import com.huang.demo.common.audit.service.DownloadAuditService;
+import com.huang.demo.common.idempotency.service.IdempotencyService;
 import com.huang.demo.excel.api.dto.ExportTaskResponse;
 import com.huang.demo.excel.api.dto.ImportErrorPreviewResponse;
+import com.huang.demo.excel.api.dto.ImportPrecheckResponse;
 import com.huang.demo.excel.api.dto.ImportTaskResponse;
 import com.huang.demo.excel.config.ExcelDemoProperties;
 import com.huang.demo.excel.domain.model.ExportTask;
@@ -34,6 +37,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -53,15 +57,25 @@ class ExcelDemoControllerTest {
     private TaskOwnerResolver taskOwnerResolver;
 
     @Mock
+    private DownloadAuditService downloadAuditService;
+
+    @Mock
+    private IdempotencyService idempotencyService;
+
+    @Mock
     private HttpServletRequest request;
 
     private ExcelDemoController controller;
 
     @BeforeEach
-    void setUp() {
+    void setUp() throws Exception {
         controller = new ExcelDemoController(
-                studentService, new ExcelDemoProperties(), exportTaskService, studentImportTaskService, taskOwnerResolver);
-        when(taskOwnerResolver.resolve(request)).thenReturn("anonymous");
+                studentService, new ExcelDemoProperties(), exportTaskService, studentImportTaskService,
+                taskOwnerResolver, downloadAuditService, idempotencyService);
+        lenient().when(taskOwnerResolver.resolve(request)).thenReturn("anonymous");
+        lenient().when(idempotencyService.fingerprint(any())).thenReturn("fingerprint");
+        lenient().when(idempotencyService.execute(any(), any(), any(), any(), any(), any()))
+                .thenAnswer(invocation -> ((com.huang.demo.common.idempotency.service.IdempotentAction<?>) invocation.getArgument(5)).execute());
     }
 
     @Test
@@ -75,7 +89,7 @@ class ExcelDemoControllerTest {
                 .build();
         when(exportTaskService.submitExport("anonymous", "CSV")).thenReturn(task);
 
-        ExportTaskResponse response = controller.submitExport("CSV", request);
+        ExportTaskResponse response = controller.submitExport("CSV", null, request);
 
         assertEquals("task-1", response.getTaskId());
         assertEquals(StudentExportFormat.CSV, response.getFormat());
@@ -100,6 +114,8 @@ class ExcelDemoControllerTest {
         assertEquals(HttpStatus.FOUND, response.getStatusCode());
         assertEquals(URI.create(downloadUrl), response.getHeaders().getLocation());
         verify(exportTaskService).createDownloadUrl(task);
+        verify(downloadAuditService).recordSignedDownload("anonymous", "EXPORT", "task-1",
+                "excel/student/student-demo.xlsx", "student-demo.xlsx", request);
     }
 
     @Test
@@ -140,11 +156,35 @@ class ExcelDemoControllerTest {
                 .build();
         when(studentImportTaskService.submitImport(any(MockMultipartFile.class), eq("anonymous"))).thenReturn(task);
 
-        ImportTaskResponse response = controller.importExcel(file, request);
+        ImportTaskResponse response = controller.importExcel(file, null, request);
 
         assertEquals("task-1", response.getTaskId());
         assertEquals("CREATED", response.getStatus());
         verify(studentImportTaskService).submitImport(file, "anonymous");
+    }
+
+    @Test
+    void precheckImportReturnsPrecheckResult() throws Exception {
+        MockMultipartFile file = new MockMultipartFile("file", "student.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", new byte[]{1, 2, 3});
+        ImportPrecheckResponse expected = ImportPrecheckResponse.of(
+                true,
+                "student.xlsx",
+                3L,
+                0L,
+                100,
+                1024L,
+                100,
+                Collections.emptyList(),
+                Collections.emptyMap(),
+                Collections.emptyList());
+        when(studentImportTaskService.precheckImport(file)).thenReturn(expected);
+
+        ImportPrecheckResponse response = controller.precheckImport(file);
+
+        assertEquals(Boolean.TRUE, response.getValid());
+        assertEquals("student.xlsx", response.getOriginalName());
+        verify(studentImportTaskService).precheckImport(file);
     }
 
     @Test
@@ -175,6 +215,8 @@ class ExcelDemoControllerTest {
 
         assertEquals(HttpStatus.FOUND, response.getStatusCode());
         assertEquals(URI.create(downloadUrl), response.getHeaders().getLocation());
+        verify(downloadAuditService).recordSignedDownload("anonymous", "IMPORT_ERROR", "task-1",
+                null, null, request);
     }
 
     @Test

@@ -211,6 +211,10 @@ export FILE_CENTER_UPLOAD_URL_EXPIRE_MINUTES='30'
 export FILE_CENTER_MULTIPART_PART_SIZE='8388608'
 export FILE_CENTER_MULTIPART_MAX_PART_COUNT='1000'
 export FILE_CENTER_MAX_PAGE_SIZE='100'
+export FILE_CENTER_MAX_FILE_SIZE_BYTES='0'
+export FILE_CENTER_MAX_TOTAL_STORAGE_BYTES_PER_OWNER='0'
+export FILE_CENTER_MAX_ACTIVE_UPLOAD_TASKS_PER_OWNER='20'
+export FILE_CENTER_MAX_DAILY_UPLOAD_COUNT_PER_OWNER='0'
 export FILE_CENTER_CORS_ENABLED='true'
 export FILE_CENTER_CORS_ALLOWED_ORIGIN_PATTERNS='http://localhost:*,http://127.0.0.1:*,null'
 export FILE_CENTER_SECURITY_SCAN_ENABLED='true'
@@ -237,7 +241,7 @@ export DATA_CLEANUP_LOCK_TTL_SECONDS='1800'
 导出对象默认写入 `excel/student/` 前缀，生命周期规则默认在 1 天后清理对象。
 导入源文件默认写入 `excel/student/import-source/` 前缀，生命周期规则默认在 1 天后清理对象，用于失败任务重试和多实例部署下的任务恢复。
 通用文件中心默认写入 `files/general/` 前缀，可通过 `FILE_CENTER_OBJECT_PREFIX` 调整。
-数据清理任务默认每小时执行一次，按配置清理终态任务、已完成上传任务、逻辑删除文件记录、异常残留导入暂存数据以及过旧的导入历史版本。
+数据清理任务默认每小时执行一次，按配置清理终态任务、已完成上传任务、过期未完成上传任务、逻辑删除文件记录、异常残留导入暂存数据以及过旧的导入历史版本。
 
 ## 数据库初始化
 
@@ -250,7 +254,7 @@ schema.sql            # 完整结构脚本
 ```
 
 如果 SQL 客户端不能稳定执行多语句脚本，建议先执行 `create_database.sql`，再选择 `demo` 数据库执行 `create_tables.sql`。
-`create_tables.sql` 会同时创建 `student_record`、`student_import_stage`、`student_report_run`、`file_record`、`file_upload_task` 和 `async_task_record`。
+`create_tables.sql` 会同时创建 `student_record`、`student_import_stage`、`student_report_run`、`file_record`、`file_upload_task`、`async_task_record` 和 `download_audit_record`。
 
 项目也提供 Flyway 版本化迁移脚本，位于 `src/main/resources/db/migration`。生产环境建议设置：
 
@@ -307,6 +311,7 @@ export SPRING_SERVLET_MULTIPART_MAX_REQUEST_SIZE='200MB'
 | GET | `/export/{taskId}` | 查询导出任务状态 |
 | GET | `/export/{taskId}/download` | 获取 302 MinIO 签名下载地址 |
 | GET | `/template` | 下载导入模板 |
+| POST | `/import/precheck` | 预检导入文件，返回结构、容量和字段问题预览 |
 | POST | `/import` | 上传 Excel 并提交异步导入任务，字段名为 `file` |
 | GET | `/import/{taskId}` | 查询导入任务状态和错误文件信息 |
 | GET | `/import/{taskId}/error-file` | 获取 302 MinIO 导入错误明细签名下载地址 |
@@ -339,6 +344,9 @@ demo 模式下仍兼容请求头 `X-User-Id`，不传时使用 `TASK_CENTER_DEFA
 当导出文件已被 MinIO 生命周期清理或手动删除时，下载接口会返回 404，并把对应导出任务标记为 `EXPIRED`，避免任务状态长期停留在成功但文件不可用的假健康状态。
 当导入错误文件已被 MinIO 生命周期清理或手动删除时，错误文件下载接口同样会返回 404，并把对应导入任务标记为 `EXPIRED`。
 导入接口提交成功后立即返回任务 ID，任务完成后通过 `/api/tasks/{taskId}` 查看最终状态和结果；导出接口同样先返回任务 ID，完成后再调用状态接口和下载接口。
+导出文件、导入错误文件和文件中心下载都会先做归属校验，再返回 MinIO 短期签名 URL，并向 `download_audit_record` 写入下载审计。审计只保存资源类型、资源 ID、对象 Key、文件名、请求 IP、User-Agent 和时间，不保存完整签名 URL。
+
+`POST /api/tasks/page` 支持 `taskType`、`status`、`businessKey`、`failureType`、`keyword`、`createdFrom`、`createdTo` 筛选。任务详情会返回剩余重试次数、任务耗时、执行 worker、最近心跳和基于现有时间字段生成的生命周期摘要。
 
 任务中心还提供：
 
@@ -397,6 +405,20 @@ file_record
 | `ABORTED` | 已取消，临时分片会被清理 |
 
 分片上传采用“分片对象 + `composeObject` 合并”的方式，而不是让 Spring Boot 接收每个分片。分片对象会写在 `files/multipart/{uploadId}/` 前缀下，合并成功或取消任务后清理。
+如果页面刷新后需要继续上传，可以先用 `/multipart/{uploadId}/parts` 查询已上传分片，再用 `/multipart/{uploadId}/resume` 刷新签名地址后继续补传。
+
+`download_audit_record` 是统一下载审计表。导出文件、导入错误明细和通用文件下载都会记录一条审计，用于排查“谁在什么时候请求过哪个资源的签名下载地址”。审计写入失败不会阻断下载主链路。
+
+文件中心支持上传配额护栏：
+
+| 配置 | 含义 |
+| --- | --- |
+| `FILE_CENTER_MAX_FILE_SIZE_BYTES` | 单文件大小上限，`0` 表示不限制 |
+| `FILE_CENTER_MAX_TOTAL_STORAGE_BYTES_PER_OWNER` | 单用户正常文件 + 上传中任务预占用总空间上限，`0` 表示不限制 |
+| `FILE_CENTER_MAX_ACTIVE_UPLOAD_TASKS_PER_OWNER` | 单用户同时处于 `UPLOADING` 的直传/分片任务数量上限 |
+| `FILE_CENTER_MAX_DAILY_UPLOAD_COUNT_PER_OWNER` | 单用户当天成功上传文件数量上限，`0` 表示不限制 |
+
+普通后端上传、直传初始化和分片初始化都会执行配额校验；秒传命中已有文件时不新增占用。过期未完成的直传/分片任务会由数据清理任务按 `DATA_CLEANUP_UPLOAD_TASK_RETENTION_HOURS` 清理，并删除临时对象或分片对象。
 
 ### 接口总览
 
@@ -407,6 +429,7 @@ file_record
 | `POST` | `/direct/init` | 初始化整文件客户端直传，返回一个 MinIO PUT 签名地址 |
 | `POST` | `/direct/{uploadId}/complete` | 校验直传对象并生成正式文件记录 |
 | `POST` | `/multipart/init` | 初始化分片上传，返回每个分片的 MinIO PUT 签名地址 |
+| `POST` | `/multipart/{uploadId}/resume` | 为已存在的分片任务刷新签名地址，继续断点续传 |
 | `GET` | `/multipart/{uploadId}/parts` | 查询已经上传的分片，支持断点续传 |
 | `POST` | `/multipart/{uploadId}/complete` | 校验所有分片、合并对象并生成正式文件记录 |
 | `POST` | `/multipart/{uploadId}/abort` | 取消分片任务并清理临时分片 |
@@ -531,6 +554,17 @@ PUT {uploadUrl}
 4. 返回总分片数 `partCount` 和已上传序号 `uploadedParts`。
 
 客户端可以在网络中断后调用该接口，只重新上传缺失的分片。当前实现的进度来源是 MinIO 对象列表，不依赖客户端内存中的进度。
+
+### 6.1 恢复分片上传：`POST /api/files/multipart/{uploadId}/resume`
+
+处理逻辑：
+
+1. 根据 `uploadId` 查询分片上传任务，并确认状态仍然是 `UPLOADING`。
+2. 复用任务保存的 `partSize`、`partCount`、`objectKey` 和 `partObjectPrefix`。
+3. 为每个分片重新生成 MinIO PUT 签名地址。
+4. 返回与初始化相同的分片信息，客户端再结合 `/parts` 查询结果继续补传。
+
+这个接口主要用于页面刷新后恢复上传，或者分片签名已经过期时重新获取地址。
 
 ### 7. 完成分片上传：`POST /api/files/multipart/{uploadId}/complete`
 

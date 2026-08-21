@@ -5,6 +5,7 @@ import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Optional;
 
 @Mapper
@@ -22,6 +23,15 @@ public interface FileUploadTaskMapper {
 
     int markAborted(@Param("ownerId") String ownerId,
                     @Param("uploadId") String uploadId);
+
+    long countUploadingByOwner(@Param("ownerId") String ownerId);
+
+    long sumUploadingFileSize(@Param("ownerId") String ownerId);
+
+    List<FileUploadTask> listUploadingBefore(@Param("createdBefore") LocalDateTime createdBefore,
+                                             @Param("limit") int limit);
+
+    int deleteById(@Param("id") Long id);
 
     int deleteFinishedBefore(@Param("completedBefore") LocalDateTime completedBefore,
                              @Param("limit") int limit);

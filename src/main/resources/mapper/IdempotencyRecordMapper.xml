@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.huang.demo.common.idempotency.repository.IdempotencyRecordMapper">
+
+    <resultMap id="IdempotencyRecordMap" type="com.huang.demo.common.idempotency.domain.entity.IdempotencyRecord">
+        <id property="id" column="id"/>
+        <result property="ownerId" column="owner_id"/>
+        <result property="operation" column="operation"/>
+        <result property="idempotencyKey" column="idempotency_key"/>
+        <result property="requestFingerprint" column="request_fingerprint"/>
+        <result property="status" column="status"/>
+        <result property="responsePayload" column="response_payload"/>
+        <result property="errorMessage" column="error_message"/>
+        <result property="createdAt" column="created_at"/>
+        <result property="updatedAt" column="updated_at"/>
+        <result property="expireAt" column="expire_at"/>
+    </resultMap>
+
+    <update id="createTableIfAbsent">
+        CREATE TABLE IF NOT EXISTS idempotency_record (
+            id BIGINT AUTO_INCREMENT PRIMARY KEY,
+            owner_id VARCHAR(64) NOT NULL,
+            operation VARCHAR(64) NOT NULL,
+            idempotency_key VARCHAR(128) NOT NULL,
+            request_fingerprint CHAR(64) NOT NULL,
+            status VARCHAR(32) NOT NULL,
+            response_payload LONGTEXT,
+            error_message VARCHAR(512),
+            created_at DATETIME NOT NULL,
+            updated_at DATETIME NOT NULL,
+            expire_at DATETIME NOT NULL,
+            UNIQUE KEY uk_idempotency_owner_operation_key (owner_id, operation, idempotency_key),
+            KEY idx_idempotency_record_expire_at (expire_at),
+            KEY idx_idempotency_record_owner_created_at (owner_id, created_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    </update>
+
+    <insert id="insert" parameterType="com.huang.demo.common.idempotency.domain.entity.IdempotencyRecord"
+            useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO idempotency_record (
+            owner_id, operation, idempotency_key, request_fingerprint, status,
+            response_payload, error_message, created_at, updated_at, expire_at
+        )
+        VALUES (
+            #{ownerId}, #{operation}, #{idempotencyKey}, #{requestFingerprint}, #{status},
+            #{responsePayload}, #{errorMessage}, #{createdAt}, #{updatedAt}, #{expireAt}
+        )
+    </insert>
+
+    <select id="findByKey" resultMap="IdempotencyRecordMap">
+        SELECT id, owner_id, operation, idempotency_key, request_fingerprint, status,
+               response_payload, error_message, created_at, updated_at, expire_at
+        FROM idempotency_record
+        WHERE owner_id = #{ownerId}
+          AND operation = #{operation}
+          AND idempotency_key = #{idempotencyKey}
+        LIMIT 1
+    </select>
+
+    <update id="markSuccess">
+        UPDATE idempotency_record
+        SET status = 'SUCCESS',
+            response_payload = #{responsePayload},
+            error_message = NULL,
+            updated_at = #{updatedAt}
+        WHERE id = #{id}
+    </update>
+
+    <update id="markFailed">
+        UPDATE idempotency_record
+        SET status = 'FAILED',
+            error_message = #{errorMessage},
+            updated_at = #{updatedAt}
+        WHERE id = #{id}
+    </update>
+</mapper>

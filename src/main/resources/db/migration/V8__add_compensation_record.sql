@@ -1,0 +1,21 @@
+CREATE TABLE IF NOT EXISTS `compensation_record` (
+    `id` BIGINT NOT NULL AUTO_INCREMENT,
+    `compensation_id` VARCHAR(64) NOT NULL,
+    `biz_type` VARCHAR(64) NOT NULL,
+    `biz_id` VARCHAR(128) NOT NULL,
+    `failure_type` VARCHAR(64) NOT NULL,
+    `status` VARCHAR(32) NOT NULL,
+    `retry_count` INT NOT NULL,
+    `max_retry_count` INT NOT NULL,
+    `next_retry_at` DATETIME NULL,
+    `payload` VARCHAR(4096) NULL,
+    `last_error` VARCHAR(1024) NULL,
+    `created_at` DATETIME NOT NULL,
+    `updated_at` DATETIME NOT NULL,
+    `completed_at` DATETIME NULL,
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_compensation_record_compensation_id` (`compensation_id`),
+    KEY `idx_compensation_record_biz_status` (`biz_type`, `biz_id`, `failure_type`, `status`),
+    KEY `idx_compensation_record_status_next_retry` (`status`, `next_retry_at`),
+    KEY `idx_compensation_record_created_at` (`created_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

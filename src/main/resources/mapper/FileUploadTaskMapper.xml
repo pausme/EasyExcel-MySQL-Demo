@@ -96,6 +96,36 @@
           AND status = 'UPLOADING'
     </update>
 
+    <select id="countUploadingByOwner" resultType="long">
+        SELECT COUNT(*)
+        FROM file_upload_task
+        WHERE owner_id = #{ownerId}
+          AND status = 'UPLOADING'
+    </select>
+
+    <select id="sumUploadingFileSize" resultType="long">
+        SELECT COALESCE(SUM(file_size), 0)
+        FROM file_upload_task
+        WHERE owner_id = #{ownerId}
+          AND status = 'UPLOADING'
+    </select>
+
+    <select id="listUploadingBefore" resultMap="FileUploadTaskMap">
+        SELECT id, upload_id, file_id, owner_id, upload_type, original_name, object_key, part_object_prefix,
+               bucket_name, content_type, file_size, file_md5, file_ext, status,
+               part_size, part_count, created_at, updated_at, completed_at
+        FROM file_upload_task
+        WHERE status = 'UPLOADING'
+          AND created_at &lt;= #{createdBefore}
+        ORDER BY id ASC
+        LIMIT #{limit}
+    </select>
+
+    <delete id="deleteById">
+        DELETE FROM file_upload_task
+        WHERE id = #{id}
+    </delete>
+
     <delete id="deleteFinishedBefore">
         DELETE FROM file_upload_task
         WHERE status IN ('SUCCESS', 'ABORTED')

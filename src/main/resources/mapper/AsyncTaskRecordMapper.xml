@@ -121,6 +121,21 @@
         WHERE task_id = #{taskId}
     </update>
 
+    <update id="claimRunning">
+        UPDATE async_task_record
+        SET status = 'RUNNING',
+            failure_type = NULL,
+            retryable = NULL,
+            failure_suggestion = NULL,
+            worker_id = #{workerId},
+            last_heartbeat_at = #{heartbeatAt},
+            updated_at = #{heartbeatAt},
+            started_at = COALESCE(started_at, #{heartbeatAt})
+        WHERE task_id = #{taskId}
+          AND status = 'CREATED'
+          AND expire_at > #{heartbeatAt}
+    </update>
+
     <select id="findByTaskId" resultMap="AsyncTaskRecordMap">
         SELECT <include refid="BaseColumns"/>
         FROM async_task_record
@@ -151,6 +166,26 @@
         <if test="status != null and status != ''">
             AND status = #{status}
         </if>
+        <if test="businessKey != null and businessKey != ''">
+            AND business_key = #{businessKey}
+        </if>
+        <if test="failureType != null and failureType != ''">
+            AND failure_type = #{failureType}
+        </if>
+        <if test="keyword != null and keyword != ''">
+            AND (
+                task_id LIKE CONCAT('%', #{keyword}, '%')
+                OR task_name LIKE CONCAT('%', #{keyword}, '%')
+                OR business_key LIKE CONCAT('%', #{keyword}, '%')
+                OR error_message LIKE CONCAT('%', #{keyword}, '%')
+            )
+        </if>
+        <if test="createdFrom != null">
+            AND created_at &gt;= #{createdFrom}
+        </if>
+        <if test="createdTo != null">
+            AND created_at &lt;= #{createdTo}
+        </if>
     </select>
 
     <select id="listByOwnerPage" resultMap="AsyncTaskRecordMap">
@@ -162,6 +197,26 @@
         </if>
         <if test="status != null and status != ''">
             AND status = #{status}
+        </if>
+        <if test="businessKey != null and businessKey != ''">
+            AND business_key = #{businessKey}
+        </if>
+        <if test="failureType != null and failureType != ''">
+            AND failure_type = #{failureType}
+        </if>
+        <if test="keyword != null and keyword != ''">
+            AND (
+                task_id LIKE CONCAT('%', #{keyword}, '%')
+                OR task_name LIKE CONCAT('%', #{keyword}, '%')
+                OR business_key LIKE CONCAT('%', #{keyword}, '%')
+                OR error_message LIKE CONCAT('%', #{keyword}, '%')
+            )
+        </if>
+        <if test="createdFrom != null">
+            AND created_at &gt;= #{createdFrom}
+        </if>
+        <if test="createdTo != null">
+            AND created_at &lt;= #{createdTo}
         </if>
         ORDER BY id DESC
         LIMIT #{limit} OFFSET #{offset}

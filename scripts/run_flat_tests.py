@@ -482,7 +482,8 @@ if abort_id:
     r = curl("POST", "/api/files/multipart/%s/abort" % abort_id)
     record("FIL-MA-01", "POST", "/api/files/multipart/{uploadId}/abort", "200", r)
     r = curl("POST", "/api/files/multipart/%s/abort" % abort_id)
-    record("FIL-MA-02", "POST", "/api/files/multipart/{uploadId}/abort (again)", "409", r)
+    record("FIL-MA-02", "POST", "/api/files/multipart/{uploadId}/abort (again)", "200", r,
+           note="R19 起重复 abort 幂等（onAborted 回调），返回 200 aborted=true")
 r = curl("POST", "/api/files/multipart/init", data='{"originalName":"x","fileSize":1024,"fileMd5":"bad"}')
 record("FIL-MI-05", "POST", "/api/files/multipart/init (bad md5)", "400", r)
 

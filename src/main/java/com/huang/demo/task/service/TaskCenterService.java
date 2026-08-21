@@ -19,6 +19,8 @@ public interface TaskCenterService {
 
     AsyncTaskRecord markRunning(String taskId, String workerId);
 
+    Optional<AsyncTaskRecord> claimRunning(String taskId, String workerId);
+
     AsyncTaskRecord updateProgress(String taskId, long completedCount, long totalCount, int progressPercent);
 
     void heartbeat(String taskId, String workerId);

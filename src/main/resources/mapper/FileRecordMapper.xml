@@ -98,6 +98,21 @@
         </if>
     </select>
 
+    <select id="sumNormalFileSize" resultType="long">
+        SELECT COALESCE(SUM(file_size), 0)
+        FROM file_record
+        WHERE owner_id = #{ownerId}
+          AND status = 'NORMAL'
+    </select>
+
+    <select id="countNormalCreatedAtOrAfter" resultType="long">
+        SELECT COUNT(*)
+        FROM file_record
+        WHERE owner_id = #{ownerId}
+          AND status = 'NORMAL'
+          AND created_at &gt;= #{createdAt}
+    </select>
+
     <select id="listNormalPage" resultMap="FileRecordMap">
         SELECT id, file_id, owner_id, original_name, object_key, bucket_name, content_type,
                file_size, file_md5, file_ext, storage_type, status, created_at, updated_at
