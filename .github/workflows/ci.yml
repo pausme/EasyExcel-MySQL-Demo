@@ -37,3 +37,47 @@ jobs:
           name: surefire-reports
           path: target/surefire-reports/
           if-no-files-found: ignore
+
+  flyway-smoke:
+    name: Flyway empty-DB startup smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 8
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "8"
+          cache: maven
+
+      - name: Package
+        run: mvn -q -DskipTests package
+
+      - name: Start empty MySQL
+        run: |
+          docker run -d --name flyway-mysql -e MYSQL_ROOT_PASSWORD=smoke_root             -e MYSQL_DATABASE=demo -p 3307:3306 mysql:8.0.32
+          for i in $(seq 1 60); do
+            docker exec flyway-mysql mysqladmin ping -h127.0.0.1 -uroot -psmoke_root --silent && break
+            sleep 2
+          done
+
+      - name: Start app with Flyway against empty DB
+        run: |
+          SERVER_PORT=18088           MYSQL_URL=127.0.0.1:3307           MYSQL_USERNAME=root MYSQL_PASSWORD=smoke_root           HIKARI_MAXIMUM_POOL_SIZE=5           REDIS_HOST=127.0.0.1 REDIS_PORT=1 REDIS_DATABASE=0           MINIO_ENDPOINT=http://127.0.0.1:2 MINIO_ACCESS_KEY=x MINIO_SECRET_KEY=x           FLYWAY_ENABLED=true           nohup java -jar target/demo-0.0.1-SNAPSHOT.jar > app.log 2>&1 &
+          for i in $(seq 1 90); do
+            curl -fsS http://127.0.0.1:18088/actuator/health >/dev/null 2>&1 && exit 0
+            sleep 2
+          done
+          echo "app did not become healthy"; tail -100 app.log; exit 1
+
+      - name: Verify all migrations applied
+        run: |
+          docker exec flyway-mysql mysql -uroot -psmoke_root demo             -e "SELECT version FROM flyway_schema_history ORDER BY installed_rank" | tail -n +2 | wc -l | grep -v '^0$'
+
+      - name: Cleanup
+        if: always()
+        run: docker rm -f flyway-mysql || true
