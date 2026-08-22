@@ -75,4 +75,16 @@
             updated_at = #{updatedAt}
         WHERE id = #{id}
     </update>
+
+    <!-- CAS 回收僵死 PROCESSING：仅当仍是 PROCESSING 且超时未被更新时抢占成功 -->
+    <update id="tryReclaimStaleProcessing">
+        UPDATE idempotency_record
+        SET status = 'PROCESSING',
+            response_payload = NULL,
+            error_message = NULL,
+            updated_at = #{updatedAt}
+        WHERE id = #{id}
+          AND status = 'PROCESSING'
+          AND updated_at &lt;= #{staleBefore}
+    </update>
 </mapper>

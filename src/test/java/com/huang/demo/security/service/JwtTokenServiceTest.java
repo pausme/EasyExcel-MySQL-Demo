@@ -62,6 +62,19 @@ class JwtTokenServiceTest {
                         new LinkedHashSet<String>(Arrays.asList("USER"))));
     }
 
+    @Test
+    void createTokenRejectsShortJwtSecret() {
+        // A16 修复：密钥长度不足 32 直接拒绝，而非以弱密钥签发
+        ApiSecurityProperties properties = new ApiSecurityProperties();
+        properties.setJwtSecret("short-secret");
+        JwtTokenService service = new JwtTokenService(properties, new ObjectMapper());
+
+        IllegalStateException ex = assertThrows(IllegalStateException.class,
+                () -> service.createAccessToken("user-1", "admin",
+                        new LinkedHashSet<String>(Arrays.asList("USER"))));
+        assertTrue(ex.getMessage().contains("长度不足"));
+    }
+
     private JwtTokenService createService() {
         ApiSecurityProperties properties = new ApiSecurityProperties();
         properties.setJwtSecret("unit-test-jwt-secret-please-change-in-prod");

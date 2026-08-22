@@ -350,10 +350,10 @@ public class StudentImportTaskServiceImpl implements StudentImportTaskService, T
         try (TaskExecutionGuard.TaskExecutionLease lease = leaseOptional.get()) {
             AsyncTaskRecord task = lease.getTask();
             StudentImportTaskPayload payload = readPayload(task.getRequestPayload());
+            StudentImportMode importMode = StudentImportMode.normalize(payload.getImportMode());
             try (InputStream inputStream = openImportInputStream(payload)) {
                 putTaskMdc(task);
                 ImportTaskProgressCallback callback = new ImportTaskProgressCallback(taskId);
-                StudentImportMode importMode = StudentImportMode.normalize(payload.getImportMode());
                 StudentImportResult result = studentService.importExcel(inputStream, payload.getBatchSize(), importMode, callback);
                 AsyncTaskRecord completedTask = taskCenterService.markSuccess(taskId, toJson(StudentImportTaskResult.builder()
                         .importedCount(result.getImportedCount())
@@ -375,10 +375,16 @@ public class StudentImportTaskServiceImpl implements StudentImportTaskService, T
                 log.info("import task validation failed, taskId={}, errorRows={}, elapsedMs={}",
                         taskId, ex.getErrorRows().size(), System.currentTimeMillis() - start);
             } catch (Exception ex) {
+                String baseMessage = ex.getMessage() == null ? "导入失败，请查看服务端日志" : ex.getMessage();
+                // 追加模式分块提交到当前版本且无回滚，失败时必须向用户明示部分数据可能已生效
+                if (importMode == StudentImportMode.APPEND) {
+                    baseMessage = baseMessage + "（追加模式非原子：部分数据可能已生效，请核对后再重新提交）";
+                }
                 taskCenterService.markFailed(retryableFailure(taskId,
-                        ex.getMessage() == null ? "导入失败，请查看服务端日志" : ex.getMessage(),
+                        baseMessage,
                         classifySystemFailure(ex), "可稍后重试；若持续失败，请检查数据库、MinIO 或服务端日志"));
-                log.error("import task failed, taskId={}, elapsedMs={}", taskId, System.currentTimeMillis() - start, ex);
+                log.error("import task failed, taskId={}, mode={}, elapsedMs={}", taskId, importMode,
+                        System.currentTimeMillis() - start, ex);
             } finally {
                 clearTaskMdc();
             }
@@ -451,6 +457,18 @@ public class StudentImportTaskServiceImpl implements StudentImportTaskService, T
     }
 
     private AsyncTaskFailureType classifySystemFailure(Exception ex) {
+        // 优先按异常类型沿因果链分类；异常文案匹配仅作兜底（文案变更不影响分类）
+        for (Throwable cause = ex; cause != null; cause = cause.getCause()) {
+            if (cause instanceof io.minio.errors.MinioException
+                    || cause instanceof java.io.IOException) {
+                return AsyncTaskFailureType.DEPENDENCY_ERROR;
+            }
+            if (cause instanceof java.sql.SQLTimeoutException
+                    || cause instanceof org.springframework.dao.QueryTimeoutException
+                    || cause instanceof org.springframework.dao.TransientDataAccessException) {
+                return AsyncTaskFailureType.RESOURCE_LIMIT;
+            }
+        }
         String message = ex.getMessage();
         if (message != null && (message.contains("MinIO") || message.contains("文件不存在") || message.contains("已过期"))) {
             return AsyncTaskFailureType.DEPENDENCY_ERROR;

@@ -25,4 +25,8 @@ public interface IdempotencyRecordMapper {
     int markFailed(@Param("id") Long id,
                    @Param("errorMessage") String errorMessage,
                    @Param("updatedAt") LocalDateTime updatedAt);
+
+    int tryReclaimStaleProcessing(@Param("id") Long id,
+                                  @Param("staleBefore") LocalDateTime staleBefore,
+                                  @Param("updatedAt") LocalDateTime updatedAt);
 }

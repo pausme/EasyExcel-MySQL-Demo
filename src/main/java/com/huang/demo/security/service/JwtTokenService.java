@@ -25,6 +25,7 @@ public class JwtTokenService {
     public static final String ACCESS_TOKEN_TYPE = "access";
     public static final String REFRESH_TOKEN_TYPE = "refresh";
     private static final String HMAC_ALGORITHM = "HmacSHA256";
+    private static final int MIN_JWT_SECRET_LENGTH = 32;
     private static final Base64.Encoder BASE64_URL_ENCODER = Base64.getUrlEncoder().withoutPadding();
     private static final Base64.Decoder BASE64_URL_DECODER = Base64.getUrlDecoder();
 
@@ -110,9 +111,7 @@ public class JwtTokenService {
     }
 
     private String createToken(String userId, String username, Set<String> roles, String type, long expiresInSeconds) {
-        if (!StringUtils.hasText(properties.getJwtSecret())) {
-            throw new IllegalStateException("缺少 JWT 密钥配置 API_SECURITY_JWT_SECRET");
-        }
+        requireJwtSecret();
         long now = Instant.now().getEpochSecond();
         Map<String, Object> header = new LinkedHashMap<String, Object>();
         header.put("alg", "HS256");
@@ -133,6 +132,17 @@ public class JwtTokenService {
             return BASE64_URL_ENCODER.encodeToString(objectMapper.writeValueAsBytes(value));
         } catch (Exception ex) {
             throw new IllegalStateException("JWT 编码失败", ex);
+        }
+    }
+
+    private void requireJwtSecret() {
+        String secret = properties.getJwtSecret();
+        if (!StringUtils.hasText(secret)) {
+            throw new IllegalStateException("缺少 JWT 密钥配置 API_SECURITY_JWT_SECRET");
+        }
+        if (secret.length() < MIN_JWT_SECRET_LENGTH) {
+            throw new IllegalStateException("JWT 密钥长度不足，至少 " + MIN_JWT_SECRET_LENGTH
+                    + " 字符（当前 " + secret.length() + "），请更换更强的 API_SECURITY_JWT_SECRET");
         }
     }
 

@@ -667,7 +667,6 @@ public class StudentServiceImpl implements StudentService {
         try {
             int mergeChunkSize = getImportMergeChunkSize();
             int mergeChunkCount = expectedRows == 0 ? 0 : Math.max(1, (expectedRows + mergeChunkSize - 1) / mergeChunkSize);
-            int mergedRows = 0;
             for (int startRowNo = 1; startRowNo <= expectedRows; startRowNo += mergeChunkSize) {
                 progressCallback.checkCanceled();
                 final int chunkStartRowNo = startRowNo;
@@ -676,8 +675,7 @@ public class StudentServiceImpl implements StudentService {
                 Integer affectedRows = newImportTransactionTemplate()
                         .execute(status -> studentMapper.mergeImportStageRangeToStudent(
                                 importTaskId, chunkStartRowNo, chunkEndRowNo, importVersion));
-                mergedRows = chunkEndRowNo;
-                progressCallback.onCommitted(mergedRows, mergeChunkCount);
+                progressCallback.onCommitted(chunkEndRowNo, mergeChunkCount);
                 log.info("import stage merge chunk finished, importTaskId={}, importVersion={}, startRowNo={}, endRowNo={}, "
                                 + "affectedRows={}, elapsedMs={}",
                         importTaskId, importVersion, chunkStartRowNo, chunkEndRowNo,

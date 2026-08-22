@@ -59,7 +59,8 @@ class ReportExportEngineTest {
         assertTrue(Files.size(filePath) > 0L);
         assertEquals(3, job.getQueryCount());
         assertTrue(cancelCheckCount.get() >= 3);
-        assertTrue(progressList.contains(99));
+        // A11 修复：进度封顶与导入统一为 95（成功后置 100）
+        assertTrue(progressList.contains(95));
     }
 
     @Test
@@ -212,5 +213,64 @@ class ReportExportEngineTest {
 
         @ExcelProperty("名称")
         private String name;
+    }
+
+    @Test
+    void csvEscapingNeutralizesFormulaInjection() throws Exception {
+        ReportExportEngine engine = new ReportExportEngine();
+        // 首列为公式注入载体：= + - @ 开头
+        DemoFormulaJob job = new DemoFormulaJob(java.util.Arrays.asList(
+                java.util.Arrays.asList("=SUM(A1:A2)", "normal"),
+                java.util.Arrays.asList("+cmd|' /C calc'", "normal2"),
+                java.util.Arrays.asList("-1+1", "normal3"),
+                java.util.Arrays.asList("@cmd", "normal4"),
+                java.util.Arrays.asList("plain,value", "has,comma")));
+        Path csv = tempDir.resolve("formula.csv");
+        engine.writeCsv(job, ReportExportCommand.<java.util.List<String>>builder()
+                .taskId("t-formula")
+                .params(null)
+                .snapshotMaxId(5L)
+                .pageSize(10)
+                .sheetRowLimit(100)
+                .filePath(csv)
+                .cancelChecker(() -> {})
+                .progressUpdater((c, t, p) -> {})
+                .build());
+        java.util.List<String> lines = java.nio.file.Files.readAllLines(csv);
+        org.assertj.core.api.Assertions.assertThat(lines).anySatisfy(line ->
+                org.assertj.core.api.Assertions.assertThat(line).startsWith("'=SUM"));
+        org.assertj.core.api.Assertions.assertThat(lines).anySatisfy(line ->
+                org.assertj.core.api.Assertions.assertThat(line).contains("'+cmd"));
+        org.assertj.core.api.Assertions.assertThat(lines).anySatisfy(line ->
+                org.assertj.core.api.Assertions.assertThat(line).contains("'-1+1"));
+        org.assertj.core.api.Assertions.assertThat(lines).anySatisfy(line ->
+                org.assertj.core.api.Assertions.assertThat(line).contains("'@cmd"));
+        org.assertj.core.api.Assertions.assertThat(lines).anySatisfy(line ->
+                org.assertj.core.api.Assertions.assertThat(line).contains("\"plain,value\""));
+    }
+
+    static class DemoFormulaJob implements ReportExportJob<java.util.List<String>> {
+        private final java.util.List<java.util.List<String>> rows;
+        DemoFormulaJob(java.util.List<java.util.List<String>> rows) { this.rows = rows; }
+        @Override public String buildFileName(String businessKey, java.util.List<String> params) { return "f"; }
+        @Override public Long resolveSnapshotMaxId(java.util.List<String> params) { return (long) rows.size(); }
+        @Override public java.util.List<ReportSheetConfig> getSheetConfigs(java.util.List<String> params) {
+            return java.util.Collections.singletonList(ReportSheetConfig.builder()
+                    .sheetIndex(0).sheetName("s").headClass(DemoRow.class).build());
+        }
+        @Override public long count(java.util.List<String> params, ReportSheetConfig cfg, Long maxId) { return rows.size(); }
+        @Override public ReportPage queryPage(java.util.List<String> params,
+                ReportSheetConfig cfg, ReportPageCursor cursor) {
+            if (cursor.getLastCursor() >= rows.size()) {
+                return ReportPage.builder().rows(java.util.Collections.emptyList())
+                        .nextCursor(cursor.getLastCursor()).build();
+            }
+            java.util.List<DemoRow> page = new java.util.ArrayList<>();
+            for (int i = (int) cursor.getLastCursor(); i < rows.size() && page.size() < cursor.getPageSize(); i++) {
+                page.add(new DemoRow(rows.get(i).get(0)));
+            }
+            return ReportPage.builder()
+                    .rows(page).nextCursor((long) rows.size()).build();
+        }
     }
 }

@@ -27,6 +27,7 @@ public class IdempotencyServiceImpl implements IdempotencyService {
     private static final int MAX_OPERATION_LENGTH = 64;
     private static final int MAX_OWNER_ID_LENGTH = 64;
     private static final int DEFAULT_RETENTION_HOURS = 24;
+    private static final int PROCESSING_STALE_MINUTES = 10;
 
     private final IdempotencyRecordMapper recordMapper;
     private final ObjectMapper objectMapper;
@@ -60,6 +61,10 @@ public class IdempotencyServiceImpl implements IdempotencyService {
         Optional<IdempotencyRecord> existing = recordMapper.findByKey(
                 normalizedOwnerId, normalizedOperation, normalizedKey);
         if (existing.isPresent()) {
+            IdempotencyRecord reclaimed = tryReclaimStaleProcessing(existing.get());
+            if (reclaimed != null) {
+                return runAction(reclaimed, action);
+            }
             return handleExisting(existing.get(), normalizedFingerprint, responseType);
         }
 
@@ -68,8 +73,16 @@ public class IdempotencyServiceImpl implements IdempotencyService {
         if (record == null) {
             IdempotencyRecord duplicate = recordMapper.findByKey(normalizedOwnerId, normalizedOperation, normalizedKey)
                     .orElseThrow(() -> new IllegalStateException("幂等记录创建冲突，请稍后重试"));
+            IdempotencyRecord reclaimedDuplicate = tryReclaimStaleProcessing(duplicate);
+            if (reclaimedDuplicate != null) {
+                return runAction(reclaimedDuplicate, action);
+            }
             return handleExisting(duplicate, normalizedFingerprint, responseType);
         }
+        return runAction(record, action);
+    }
+
+    private <T> T runAction(IdempotencyRecord record, IdempotentAction<T> action) throws Exception {
         T response;
         try {
             response = action.execute();
@@ -79,6 +92,30 @@ public class IdempotencyServiceImpl implements IdempotencyService {
             recordMapper.markFailed(record.getId(), safeErrorMessage(ex), LocalDateTime.now());
             throw ex;
         }
+    }
+
+    /**
+     * 僵死 PROCESSING 回收：应用在处理中崩溃后记录会停留在 PROCESSING，
+     * 超过 {@link #PROCESSING_STALE_MINUTES} 分钟未更新的记录允许同键重新执行（CAS 抢占，仅一个请求成功）。
+     *
+     * @return 抢占成功返回记录（继续执行业务），未被抢占返回 null
+     */
+    private IdempotencyRecord tryReclaimStaleProcessing(IdempotencyRecord record) {
+        if (!IdempotencyStatus.PROCESSING.name().equals(record.getStatus())
+                || record.getUpdatedAt() == null) {
+            return null;
+        }
+        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime staleBefore = now.minusMinutes(PROCESSING_STALE_MINUTES);
+        if (record.getUpdatedAt().isAfter(staleBefore)) {
+            return null;
+        }
+        if (recordMapper.tryReclaimStaleProcessing(record.getId(), staleBefore, now) > 0) {
+            log.warn("idempotency record reclaimed from stale processing, id={}, key={}",
+                    record.getId(), record.getIdempotencyKey());
+            return record;
+        }
+        return null;
     }
 
     @Override

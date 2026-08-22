@@ -305,6 +305,14 @@ public class ReportExportEngine {
 
     private String escapeCsvValue(String value) {
         String safeValue = value == null ? "" : value;
+        // 防 CSV 公式注入：以 = + - @ 开头的值在表格软件中会被当公式执行，前置单引号中和
+        if (!safeValue.isEmpty()
+                && (safeValue.charAt(0) == '='
+                || safeValue.charAt(0) == '+'
+                || safeValue.charAt(0) == '-'
+                || safeValue.charAt(0) == '@')) {
+            safeValue = "'" + safeValue;
+        }
         if (safeValue.indexOf(',') < 0
                 && safeValue.indexOf('"') < 0
                 && safeValue.indexOf('\n') < 0
@@ -318,7 +326,8 @@ public class ReportExportEngine {
         if (total <= 0L) {
             return 0;
         }
-        long progress = exported * 100L / total;
-        return (int) Math.min(99L, Math.max(0L, progress));
+        long progress = exported * 95L / total;
+        // 与导入进度约定一致：任务完成前最高 95%，成功后置 100
+        return (int) Math.min(95L, Math.max(0L, progress));
     }
 }
