@@ -27,6 +27,8 @@ import java.util.UUID;
 public class RetentionCleanupService {
 
     private static final Logger log = LoggerFactory.getLogger(RetentionCleanupService.class);
+    private static final int MAX_VERSION_CLEANUP_ROUNDS_PER_RUN = 200;
+    private static final int MAX_VERSION_CLEANUP_BATCH_SIZE = 50000;
 
     private final CleanupProperties properties;
     private final AsyncTaskRecordMapper asyncTaskRecordMapper;
@@ -135,7 +137,18 @@ public class RetentionCleanupService {
             return 0;
         }
         int retainedHistoryVersions = Math.max(0, properties.getImportVersionRetainCount() - 1);
-        return studentMapper.deleteExpiredStudentVersions(retainedHistoryVersions, batchSize);
+        // 版本清理是纯 DELETE（无应用侧列表查询），单条语句可承载更大批次；
+        // 通用 normalizeBatchSize 的 1000 上限面向列表型清理，这里用独立上限，配合轮内循环收敛大批量堆积
+        int versionBatchSize = Math.max(200, Math.min(properties.getBatchSize(), MAX_VERSION_CLEANUP_BATCH_SIZE));
+        int totalDeleted = 0;
+        for (int round = 0; round < MAX_VERSION_CLEANUP_ROUNDS_PER_RUN; round++) {
+            int deleted = studentMapper.deleteExpiredStudentVersions(retainedHistoryVersions, versionBatchSize);
+            totalDeleted += deleted;
+            if (deleted < versionBatchSize) {
+                break;
+            }
+        }
+        return totalDeleted;
     }
 
     private int cleanupDeletedFiles(LocalDateTime updatedBefore, int batchSize) {

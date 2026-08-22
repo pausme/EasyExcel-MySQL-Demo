@@ -78,7 +78,8 @@ class RetentionCleanupServiceTest {
         verify(uploadTaskMapper).deleteFinishedBefore(any(), org.mockito.Mockito.eq(2));
         verify(fileRecordMapper).listDeletedBefore(any(), org.mockito.Mockito.eq(2));
         verify(studentMapper).deleteImportStageBefore(any(), org.mockito.Mockito.eq(2));
-        verify(studentMapper).deleteExpiredStudentVersions(org.mockito.Mockito.eq(1), org.mockito.Mockito.eq(2));
+        // 版本清理使用独立批次下限（QA-09：不再受列表型 1000/通用钳制影响）
+        verify(studentMapper).deleteExpiredStudentVersions(org.mockito.Mockito.eq(1), org.mockito.Mockito.eq(200));
     }
 
     @Test
