@@ -1,6 +1,8 @@
 package com.huang.demo.file.service.impl;
 
 import com.huang.demo.common.compensation.service.CompensationService;
+import com.huang.demo.file.api.dto.FileMetadataUpdateRequest;
+import com.huang.demo.file.api.dto.FileReferenceRequest;
 import com.huang.demo.file.api.dto.DirectUploadInitRequest;
 import com.huang.demo.file.api.dto.DirectUploadInitResponse;
 import com.huang.demo.file.api.dto.FilePageResponse;
@@ -108,9 +110,9 @@ class FileCenterServiceImplTest {
         FileObjectStorageService storageService = mock(FileObjectStorageService.class);
         FileCenterServiceImpl service = newService(mapper, taskMapper, storageService);
         when(mapper.countNormal("anonymous", null, Collections.emptyList(), null, "NORMAL",
-                null, null, null, null, null)).thenReturn(1L);
+                null, null, null, Collections.emptyList(), null, null, null, null)).thenReturn(1L);
         when(mapper.listNormalPage("anonymous", null, Collections.emptyList(), null, "NORMAL",
-                null, null, null, null, null, "id DESC, id DESC", 0, 20)).thenReturn(Collections.singletonList(
+                null, null, null, Collections.emptyList(), null, null, null, null, "id DESC, id DESC", 0, 20)).thenReturn(Collections.singletonList(
                 FileRecord.builder()
                         .fileId("file-1")
                         .originalName("demo.xlsx")
@@ -605,6 +607,103 @@ class FileCenterServiceImplTest {
         verify(storageService, org.mockito.Mockito.never()).deleteQuietly(any(String.class));
     }
 
+    @Test
+    void bindMetadataUpdatesRecordMetadata() {
+        FileRecordMapper mapper = mock(FileRecordMapper.class);
+        FileUploadTaskMapper taskMapper = mock(FileUploadTaskMapper.class);
+        FileObjectStorageService storageService = mock(FileObjectStorageService.class);
+        FileCenterServiceImpl service = newService(mapper, taskMapper, storageService);
+        FileRecord record = FileRecord.builder()
+                .fileId("file-1")
+                .ownerId("anonymous")
+                .originalName("demo.txt")
+                .status("NORMAL")
+                .referenceCount(0)
+                .build();
+        when(mapper.findNormalByFileId("anonymous", "file-1")).thenReturn(Optional.of(record));
+        when(mapper.updateMetadata("anonymous", "file-1", "invoice", "biz-1", "alpha,beta")).thenReturn(1);
+
+        FileRecord updated = service.bindMetadata("file-1", buildMetadataRequest());
+
+        assertEquals("invoice", updated.getBizType());
+        assertEquals("biz-1", updated.getBizId());
+        assertEquals("alpha,beta", updated.getTags());
+        verify(mapper).updateMetadata("anonymous", "file-1", "invoice", "biz-1", "alpha,beta");
+    }
+
+    @Test
+    void addReferenceIncrementsReferenceCount() {
+        FileRecordMapper mapper = mock(FileRecordMapper.class);
+        FileUploadTaskMapper taskMapper = mock(FileUploadTaskMapper.class);
+        FileObjectStorageService storageService = mock(FileObjectStorageService.class);
+        FileCenterServiceImpl service = newService(mapper, taskMapper, storageService);
+        FileRecord record = FileRecord.builder()
+                .fileId("file-1")
+                .ownerId("anonymous")
+                .originalName("demo.txt")
+                .status("NORMAL")
+                .referenceCount(1)
+                .build();
+        when(mapper.findNormalByFileId("anonymous", "file-1")).thenReturn(Optional.of(record));
+        when(mapper.addReference("anonymous", "file-1", "order", "order-1")).thenReturn(1);
+        when(mapper.incrementReferenceCount("anonymous", "file-1")).thenReturn(1);
+
+        FileRecord updated = service.addReference("file-1", buildReferenceRequest());
+
+        assertEquals(2, updated.getReferenceCount().intValue());
+        verify(mapper).addReference("anonymous", "file-1", "order", "order-1");
+        verify(mapper).incrementReferenceCount("anonymous", "file-1");
+    }
+
+    @Test
+    void removeReferenceDecrementsReferenceCount() {
+        FileRecordMapper mapper = mock(FileRecordMapper.class);
+        FileUploadTaskMapper taskMapper = mock(FileUploadTaskMapper.class);
+        FileObjectStorageService storageService = mock(FileObjectStorageService.class);
+        FileCenterServiceImpl service = newService(mapper, taskMapper, storageService);
+        FileRecord record = FileRecord.builder()
+                .fileId("file-1")
+                .ownerId("anonymous")
+                .originalName("demo.txt")
+                .status("NORMAL")
+                .referenceCount(2)
+                .build();
+        when(mapper.findNormalByFileId("anonymous", "file-1")).thenReturn(Optional.of(record));
+        when(mapper.removeReference("anonymous", "file-1", "order", "order-1")).thenReturn(1);
+        when(mapper.decrementReferenceCount("anonymous", "file-1")).thenReturn(1);
+
+        FileRecord updated = service.removeReference("file-1", buildReferenceRequest());
+
+        assertEquals(1, updated.getReferenceCount().intValue());
+        verify(mapper).removeReference("anonymous", "file-1", "order", "order-1");
+        verify(mapper).decrementReferenceCount("anonymous", "file-1");
+    }
+
+    @Test
+    void deleteRejectsReferencedFile() {
+        FileRecordMapper mapper = mock(FileRecordMapper.class);
+        FileUploadTaskMapper taskMapper = mock(FileUploadTaskMapper.class);
+        FileObjectStorageService storageService = mock(FileObjectStorageService.class);
+        FileCenterServiceImpl service = newService(mapper, taskMapper, storageService);
+        FileRecord record = FileRecord.builder()
+                .fileId("file-1")
+                .ownerId("anonymous")
+                .objectKey("files/general/file-1.txt")
+                .originalName("demo.txt")
+                .status("NORMAL")
+                .referenceCount(1)
+                .build();
+        when(mapper.findNormalByFileId("anonymous", "file-1")).thenReturn(Optional.of(record));
+        when(mapper.countReferences("anonymous", "file-1")).thenReturn(1);
+
+        IllegalStateException exception = org.junit.jupiter.api.Assertions.assertThrows(
+                IllegalStateException.class, () -> service.delete("file-1"));
+
+        assertTrue(exception.getMessage().contains("被业务引用"));
+        verify(mapper, org.mockito.Mockito.never()).markDeleted("anonymous", "file-1");
+        verify(storageService, org.mockito.Mockito.never()).deleteQuietly(any(String.class));
+    }
+
     private FileCenterServiceImpl newService(FileRecordMapper mapper,
                                              FileUploadTaskMapper taskMapper,
                                              FileObjectStorageService storageService) {
@@ -629,5 +728,20 @@ class FileCenterServiceImplTest {
         properties.setInitEnabled(false);
         FileSecurityScanner scanner = new RuleBasedFileSecurityScanner(properties);
         return new FileCenterServiceImpl(mapper, taskMapper, storageService, scanner, properties, lockService);
+    }
+
+    private FileMetadataUpdateRequest buildMetadataRequest() {
+        FileMetadataUpdateRequest request = new FileMetadataUpdateRequest();
+        request.setBizType("invoice");
+        request.setBizId("biz-1");
+        request.setTags(java.util.Arrays.asList("alpha", "beta"));
+        return request;
+    }
+
+    private FileReferenceRequest buildReferenceRequest() {
+        FileReferenceRequest request = new FileReferenceRequest();
+        request.setReferenceType("order");
+        request.setReferenceId("order-1");
+        return request;
     }
 }

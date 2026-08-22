@@ -6,6 +6,7 @@ import com.huang.demo.excel.api.dto.ImportErrorPreviewResponse;
 import com.huang.demo.excel.api.dto.ImportPrecheckResponse;
 import com.huang.demo.excel.config.ExcelDemoProperties;
 import com.huang.demo.excel.config.MinioProperties;
+import com.huang.demo.excel.domain.model.StudentImportMode;
 import com.huang.demo.excel.domain.model.StudentImportProgressCallback;
 import com.huang.demo.excel.domain.model.StudentImportResult;
 import com.huang.demo.excel.domain.model.StudentImportTaskResult;
@@ -114,8 +115,13 @@ class StudentImportTaskServiceImplTest {
         });
         when(minioObjectStorageService.openObject(anyString())).thenAnswer(invocation ->
                 new ByteArrayInputStream(new byte[]{1, 2, 3}));
-        when(studentService.importExcel(any(InputStream.class), eq(2000), any(StudentImportProgressCallback.class)))
-                .thenReturn(StudentImportResult.builder().importedCount(2).batchCount(1).build());
+        when(studentService.importExcel(any(InputStream.class), eq(2000), eq(StudentImportMode.APPEND), any(StudentImportProgressCallback.class)))
+                .thenReturn(StudentImportResult.builder()
+                        .importedCount(2)
+                        .validatedCount(2)
+                        .batchCount(1)
+                        .importMode(StudentImportMode.APPEND)
+                        .build());
         when(taskCenterService.markSuccess(eq("task-1"), any())).thenReturn(AsyncTaskRecord.builder()
                 .taskId("task-1")
                 .status(AsyncTaskStatus.SUCCESS.name())
@@ -128,14 +134,15 @@ class StudentImportTaskServiceImplTest {
         MockMultipartFile file = new MockMultipartFile("file", "student.xlsx",
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", xlsxBytes);
 
-        AsyncTaskRecord submittedTask = service.submitImport(file, "user-1");
+        AsyncTaskRecord submittedTask = service.submitImport(file, "user-1", "APPEND");
 
         assertEquals("task-1", submittedTask.getTaskId());
         ArgumentCaptor<CreateAsyncTaskCommand> createCaptor = ArgumentCaptor.forClass(CreateAsyncTaskCommand.class);
         verify(taskCenterService).createTask(createCaptor.capture());
         assertEquals(AsyncTaskType.IMPORT, createCaptor.getValue().getTaskType());
         assertTrue(createCaptor.getValue().getRequestPayload().contains("excel/student/import-source"));
-        verify(studentService).importExcel(any(InputStream.class), eq(2000), any(StudentImportProgressCallback.class));
+        assertTrue(createCaptor.getValue().getRequestPayload().contains("\"importMode\":\"APPEND\""));
+        verify(studentService).importExcel(any(InputStream.class), eq(2000), eq(StudentImportMode.APPEND), any(StudentImportProgressCallback.class));
         verify(minioObjectStorageService).uploadExcel(any(InputStream.class), eq((long) xlsxBytes.length), anyString());
         verify(minioObjectStorageService).openObject(anyString());
         verify(taskCenterService).markSuccess(eq("task-1"), any());
@@ -197,7 +204,7 @@ class StudentImportTaskServiceImplTest {
         });
         when(minioObjectStorageService.openObject(anyString())).thenAnswer(invocation ->
                 new ByteArrayInputStream(new byte[]{1, 2, 3}));
-        when(studentService.importExcel(any(InputStream.class), eq(2000), any(StudentImportProgressCallback.class)))
+        when(studentService.importExcel(any(InputStream.class), eq(2000), eq(StudentImportMode.OVERWRITE), any(StudentImportProgressCallback.class)))
                 .thenThrow(new StudentImportValidationException("导入文件校验失败，errorRows=1",
                         Collections.singletonList(StudentImportErrorRow.builder()
                                 .rowNo(1)
@@ -338,6 +345,7 @@ class StudentImportTaskServiceImplTest {
         verify(taskCenterService, never()).createTask(any(CreateAsyncTaskCommand.class));
         verify(minioObjectStorageService, never()).uploadExcel(any(InputStream.class), anyLong(), anyString());
         verify(studentService, never()).importExcel(any(InputStream.class), anyInt(), any(StudentImportProgressCallback.class));
+        verify(studentService, never()).importExcel(any(InputStream.class), anyInt(), any(StudentImportMode.class), any(StudentImportProgressCallback.class));
     }
 
     @Test
@@ -459,6 +467,7 @@ class StudentImportTaskServiceImplTest {
         assertEquals(AsyncTaskFailureType.SYSTEM_ERROR, failedCaptor.getValue().getFailureType());
         assertEquals(true, failedCaptor.getValue().getRetryable());
         verify(studentService, never()).importExcel(any(InputStream.class), anyInt(), any(StudentImportProgressCallback.class));
+        verify(studentService, never()).importExcel(any(InputStream.class), anyInt(), any(StudentImportMode.class), any(StudentImportProgressCallback.class));
     }
 
     @Test

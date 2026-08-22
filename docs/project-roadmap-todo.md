@@ -45,12 +45,12 @@
 | DONE | P1 | AUTH-01 | 权限与用户体系升级 | 用户表、登录接口和 JWT 鉴权 | 替代 demo token，支持用户登录、token 刷新、密码加密和 owner 识别 |
 | DONE | P1 | AUTH-02 | 权限与用户体系升级 | 角色权限模型和管理接口保护 | 管理端接口统一校验角色，普通用户不能访问补偿、审计和全局任务数据 |
 | DONE | P1 | OPS-01 | 异步任务运维后台 | 运维聚合查询接口 | 聚合任务、补偿、审计、线程池、限流和指标摘要，方便管理端展示 |
-| TODO | P2 | OPS-02 | 异步任务运维后台 | 轻量管理页面 | 提供任务列表、详情、取消、重试、补偿处理和审计查看页面 |
-| TODO | P1 | IMP-01 | 导入导出业务规则增强 | 导入模式策略 | 支持覆盖、追加、仅校验、不落库等导入模式，并明确冲突处理规则 |
-| TODO | P2 | IMP-02 | 导入导出业务规则增强 | 导入字段规则配置化 | 字段必填、长度、格式、枚举和唯一校验规则可配置，并体现在预检和正式导入 |
-| TODO | P2 | FILE-01 | 文件中心生产化 | 文件业务归属、标签和引用关系 | 文件支持业务类型、业务 ID、标签、引用计数，避免误删仍被业务引用的文件 |
+| DONE | P2 | OPS-02 | 异步任务运维后台 | 轻量管理页面 | 提供任务列表、详情、取消、重试、补偿处理和审计查看页面 |
+| DONE | P1 | IMP-01 | 导入导出业务规则增强 | 导入模式策略 | 支持覆盖、追加、仅校验、不落库等导入模式，并明确冲突处理规则 |
+| DONE | P2 | IMP-02 | 导入导出业务规则增强 | 导入字段规则配置化 | 字段必填、长度、格式、枚举和唯一校验规则可配置，并体现在预检和正式导入 |
+| DONE | P2 | FILE-01 | 文件中心生产化 | 文件业务归属、标签和引用关系 | 文件支持业务类型、业务 ID、标签、引用计数，避免误删仍被业务引用的文件 |
 | DONE | P1 | CON-05 | 数据一致性与补偿机制 | 自动补偿执行器 | PENDING 补偿按退避策略自动重试，达到最大次数后进入人工处理 |
-| TODO | P1 | OBS-05 | 监控和可观测性 | Grafana Dashboard 和告警规则 | 提供导入导出、任务失败率、线程池、MinIO、补偿积压告警和排障说明 |
+| DONE | P1 | OBS-05 | 监控和可观测性 | Grafana Dashboard 和告警规则 | 提供导入导出、任务失败率、线程池、MinIO、补偿积压告警和排障说明 |
 | TODO | P1 | PERF-01 | 性能专项 | 300 万 / 500 万数据量压测矩阵 | 对 CSV、ZIP_CSV_PARTS、并发导入导出、MySQL 索引和线程池参数形成报告 |
 
 ## 待办任务拆分说明
@@ -380,6 +380,9 @@
 | DONE | P1 | 文件中心对象对账 | 定时对账文件记录、上传任务和 MinIO 对象，缺失对象标记删除，孤儿对象生成补偿记录 |
 | DONE | P1 | 导入导出任务补偿 | 定时扫描导出/导入终态任务与 MinIO 对象一致性，上传失败和对象缺失进入补偿记录 |
 | DONE | P1 | 错误码字典收敛 | 按 common/task/excel/file/security/storage 分类整理错误码，全局异常响应按模块返回稳定 code |
+| DONE | P2 | 轻量管理页面 | 新增 `/ops-dashboard.html`，支持运维概览、任务查询/取消/重试、补偿查询/重试/忽略和下载审计查看 |
+| DONE | P1 | 导入模式策略 | 导入接口支持 `OVERWRITE`、`APPEND`、`VALIDATE_ONLY`，任务 payload 和结果记录模式，追加/覆盖/仅校验冲突规则已文档化 |
+| DONE | P1 | Grafana Dashboard 和告警规则 | 新增 Prometheus 告警规则 YAML、Grafana Dashboard JSON，并补齐 MinIO 慢上传和补偿积压排障步骤 |
 | DONE | P2 | 导出 CSV / 多文件兜底 | 导出接口支持 XLSX、CSV 和 ZIP 分片 CSV，超大数据可绕开单 Sheet 上限 |
 | DONE | P2 | 监控面板和告警规则 | 增加 Prometheus endpoint、指标说明、Grafana 面板建议、告警规则和排障手册 |
 | DONE | P2 | 回归数据集治理 | 新增统一 fixture 生成脚本和数据集说明，样本默认输出到 target/test-fixtures |
@@ -2486,11 +2489,21 @@ student_import_stage -> student_record
 - 页面不暴露密钥、Token 或真实服务器地址。
 - 失败操作能展示统一错误响应。
 
+### 完成记录
+
+- 新增 `src/main/resources/static/ops-dashboard.html`，应用启动后可通过 `/ops-dashboard.html` 访问。
+- 页面支持配置后端 baseURL 和 Bearer Token，配置只保存在浏览器 localStorage，不写入项目文件。
+- 概览页调用 `/api/admin/ops/overview`，展示今日任务、失败任务、运行中任务、补偿积压、上传数量、文件容量和线程池状态。
+- 任务页调用 `/api/tasks/page`，支持按任务类型和状态筛选，并提供任务重试、取消按钮。
+- 补偿页调用 `/api/admin/compensations/page`，支持按状态筛选，并提供补偿重试、忽略按钮。
+- 审计页调用 `/api/download-audits/page`，展示最近下载审计记录。
+- 页面统一识别 `ApiResponse` 包装，失败时展示后端错误消息。
+
 ---
 
 ## 40. 导入模式策略
 
-状态：TODO
+状态：DONE
 
 编号：IMP-01
 
@@ -2503,13 +2516,12 @@ student_import_stage -> student_record
 ### 需求范围
 
 1. 导入模式
-   - `REPLACE_ALL`：全量替换当前可见版本。
-   - `UPSERT`：按业务键插入或更新。
-   - `APPEND_ONLY`：只允许新增，遇到重复直接失败。
-   - `VALIDATE_ONLY`：只校验不落库。
+   - `OVERWRITE`：全量覆盖发布新可见版本，旧版本继续保留到生命周期清理。
+   - `APPEND`：在当前可见版本内按 `student_no` upsert，文件外已有数据保留。
+   - `VALIDATE_ONLY`：只校验不落库，成功时 `importedCount=0`、`validatedCount=文件数据行数`。
 
 2. 接口参数
-   - 导入提交和预检支持传入模式。
+   - 导入提交支持传入模式。
    - 任务 payload 记录导入模式。
 
 3. 冲突处理
@@ -2521,11 +2533,22 @@ student_import_stage -> student_record
 - `VALIDATE_ONLY` 不修改正式表数据。
 - 冲突错误能生成明确错误明细。
 
+### 完成记录
+
+- `/api/excel/import` 新增可选 `mode` 参数，支持 `OVERWRITE`、`APPEND`、`VALIDATE_ONLY`，默认保持 `OVERWRITE` 兼容旧调用。
+- 幂等指纹纳入导入模式，同一个文件用不同模式提交不会误复用旧任务结果。
+- 导入任务 payload 保存 `importMode`，后台任务重试或恢复时按原模式执行。
+- `OVERWRITE` 沿用当前全量原子发布：暂存校验通过后写入新 `import_version`，最后 CAS 发布可见版本。
+- `APPEND` 使用当前可见版本分块 upsert，文件内重复学号失败，当前版本同学号按新文件内容更新。
+- `VALIDATE_ONLY` 只写暂存表并执行完整校验，校验通过后不写正式表，任务结果返回 `validatedCount`。
+- `ImportTaskResponse` 返回 `importedCount`、`validatedCount` 和 `importMode`，方便前端区分“校验成功但未落库”。
+- 单元测试覆盖 `APPEND` 不切版本、`VALIDATE_ONLY` 不写正式表、任务 payload 模式透传和 Controller 模式参数透传。
+
 ---
 
 ## 41. 导入字段规则配置化
 
-状态：TODO
+状态：DONE
 
 编号：IMP-02
 
@@ -2554,11 +2577,18 @@ student_import_stage -> student_record
 - 错误明细能定位到字段级问题。
 - 不破坏现有学生导入兼容性。
 
+### 完成记录
+
+- 新增 `StudentImportValidationProperties`、`StudentImportRowView`、`StudentImportValidationService` 和 `StudentImportValidationServiceImpl`，把导入规则集中到配置化模型中。
+- `application.yml` 为学生导入补齐默认字段规则，预检与正式导入共用同一套规则。
+- 预检阶段使用统一校验服务生成错误预览，正式导入阶段也通过同一服务校验暂存数据。
+- 学号唯一性预览校验改为通用唯一字段映射，后续扩字段时不用再写死学号。
+
 ---
 
 ## 42. 文件业务归属、标签和引用关系
 
-状态：TODO
+状态：DONE
 
 编号：FILE-01
 
@@ -2588,11 +2618,19 @@ student_import_stage -> student_record
 - 删除文件时能识别是否仍被引用。
 - 文件分页支持业务归属过滤。
 
+### 完成记录
+
+- `file_record` 增加 `biz_type`、`biz_id`、`tags`、`reference_count` 字段，并新增 `file_reference` 引用表。
+- 文件分页支持业务类型、业务 ID、标签筛选。
+- 文件详情响应返回业务归属、标签和引用计数。
+- 新增文件元数据绑定接口、引用增加接口、引用移除接口。
+- 删除逻辑增加引用保护，引用计数大于 0 或引用表仍有记录时拒绝删除。
+
 ---
 
 ## 43. 自动补偿执行器
 
-状态：TODO
+状态：DONE
 
 编号：CON-05
 
@@ -2637,7 +2675,7 @@ student_import_stage -> student_record
 
 ## 44. Grafana Dashboard 和告警规则
 
-状态：TODO
+状态：DONE
 
 编号：OBS-05
 
@@ -2670,6 +2708,12 @@ student_import_stage -> student_record
 - Prometheus 能抓取应用指标。
 - Grafana 面板能展示关键趋势。
 - 告警规则文档化，可复制到 Prometheus/Alertmanager。
+
+### 完成记录
+
+- 新增 `deploy/prometheus/easyexcel-demo-alerts.yml`，覆盖任务失败率、线程池队列、线程池拒绝、Hikari pending、MinIO 上传慢、补偿积压和 JVM 堆使用率告警。
+- 新增 `deploy/grafana/easyexcel-demo-dashboard.json`，覆盖任务吞吐、失败率、导入导出行速率、任务耗时 P95、线程池压力、MinIO 上传耗时、补偿积压和 JVM/CPU 使用率。
+- `docs/monitoring-alerting.md` 补充运维资产路径、Prometheus `rule_files` 示例，以及 MinIO 上传慢、补偿积压排障路径。
 
 ---
 
@@ -2716,5 +2760,4 @@ student_import_stage -> student_record
 1. `OBS-05`：补齐 Grafana Dashboard 和告警规则，让已有指标真正可用。
 2. `IMP-01`：完成导入模式策略，这是剩余 P1 中业务价值最高的一项。
 3. `OPS-02`：补齐轻量管理页面，让任务、补偿、审计可视化。
-4. `IMP-02`、`FILE-01`：继续扩展业务规则和文件中心生产能力。
-5. `PERF-01`：在部署和观测稳定后再做 300 万 / 500 万压测，结论更可信。
+4. `PERF-01`：在部署和观测稳定后再做 300 万 / 500 万压测，结论更可信。

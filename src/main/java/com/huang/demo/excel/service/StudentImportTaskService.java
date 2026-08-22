@@ -13,6 +13,8 @@ public interface StudentImportTaskService {
 
     AsyncTaskRecord submitImport(MultipartFile file, String ownerId) throws IOException;
 
+    AsyncTaskRecord submitImport(MultipartFile file, String ownerId, String importMode) throws IOException;
+
     ImportPrecheckResponse precheckImport(MultipartFile file) throws IOException;
 
     Optional<ImportTaskResponse> findImportTask(String taskId, String ownerId);

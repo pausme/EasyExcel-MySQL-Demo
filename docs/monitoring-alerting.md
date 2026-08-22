@@ -29,6 +29,13 @@
 
 ## 2. Prometheus 抓取示例
 
+仓库中已经提供可直接复制或挂载的运维资产：
+
+| 文件 | 用途 |
+| --- | --- |
+| `deploy/prometheus/easyexcel-demo-alerts.yml` | Prometheus 告警规则组 |
+| `deploy/grafana/easyexcel-demo-dashboard.json` | Grafana Dashboard 导入文件 |
+
 ```yaml
 scrape_configs:
   - job_name: easyexcel-demo
@@ -58,6 +65,13 @@ scrape_configs:
 | CPU 使用率 | `process_cpu_usage` | 是否 CPU 饱和 |
 
 ## 4. 告警规则示例
+
+完整可复制版本见 `deploy/prometheus/easyexcel-demo-alerts.yml`。如果已有 Prometheus 配置，可以把该文件放入 `rule_files` 指定目录，例如：
+
+```yaml
+rule_files:
+  - /etc/prometheus/rules/easyexcel-demo-alerts.yml
+```
 
 ```yaml
 groups:
@@ -106,28 +120,39 @@ groups:
 
 ## 5. 排障路径
 
-### 5.1 任务失败率高
+### 5.1 Task Failure Rate High
 
 1. 查看 `/api/tasks`，按 `status=FAILED` 和 `taskType` 过滤最近任务。
 2. 优先看 `failureType`：`VALIDATION_ERROR` 通常是文件或业务数据问题，`DEPENDENCY_ERROR` 重点查 MySQL、Redis、MinIO。
 3. 如果同一类错误集中出现，查看服务端日志中的 `taskId` 和 `traceId`。
 4. 对可重试任务使用重试接口；对不可重试任务下载错误明细或重新提交修正后的文件。
 
-### 5.2 线程池队列持续升高
+### 5.2 Thread Pool Queue Keeps Growing
 
 1. 调用 `/api/tasks/metrics/thread-pools` 看 `activeCount`、`queueSize`、`completedTaskCount`。
 2. 如果导入 worker 队列高，同时 Hikari pending 高，优先降低 `IMPORT_WORKER_COUNT` 或提升数据库连接池和数据库规格。
 3. 如果导出队列高，检查是否有多个百万级导出并发，必要时降低 `TASK_CENTER_MAX_ACTIVE_TASKS_TOTAL`。
 
-### 5.3 数据库连接等待
+### 5.3 Database Connection Waiting
 
 1. 查看 Hikari pending 和 active 连接。
 2. 检查慢 SQL、导入暂存表写入、版本合并和导出游标查询。
 3. 确认 `IMPORT_WORKER_COUNT * IMPORT_MAX_CONCURRENT_TASKS` 不超过可用数据库连接数。
 
-### 5.4 JVM 内存高
+### 5.4 JVM Heap Usage Is High
 
 1. 确认导入文件大小和行数是否超过默认护栏。
 2. 检查是否有多个大导入/大导出同时运行。
 3. 优先通过任务限流和容量护栏降压，再考虑增加堆内存或服务器规格。
 
+### 5.5 MinIO Upload Is Slow
+
+1. 先区分 `scene`：`import-source` 慢通常是客户端到应用或应用到 MinIO 链路问题；`export-result` 慢通常是导出文件体积或 MinIO 写入压力。
+2. 查看 MinIO 容器日志、磁盘 IO、网络延迟和桶生命周期规则是否异常。
+3. 如果只有大文件慢，优先建议导出使用 `ZIP_CSV_PARTS`，并确认应用和 MinIO 部署在同一内网。
+
+### 5.6 Compensation Backlog Is High
+
+1. 管理员调用 `/api/admin/compensations/page`，按 `status=PENDING,FAILED` 查看积压类型。
+2. 如果集中是 `ORPHAN_OBJECT` 或 `CLEANUP_OBJECT_FAILED`，重点查 MinIO 权限、桶名、对象前缀和生命周期配置。
+3. 如果自动补偿一直失败，查看 `demo_compensation_auto_execution_total` 的 `failureType` 分布，必要时先手动 ignore 无风险记录。

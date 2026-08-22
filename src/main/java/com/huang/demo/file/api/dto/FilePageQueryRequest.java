@@ -38,6 +38,15 @@ public class FilePageQueryRequest {
     @Size(max = 32, message = "上传类型长度不能超过32")
     private String uploadType;
 
+    @Size(max = 64, message = "业务类型长度不能超过64")
+    private String bizType;
+
+    @Size(max = 128, message = "业务 ID 长度不能超过128")
+    private String bizId;
+
+    @Size(max = 32, message = "标签最多32个")
+    private List<String> tags;
+
     @Min(value = 0, message = "最小文件大小必须大于等于0")
     private Long minFileSize;
 

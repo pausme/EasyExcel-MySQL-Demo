@@ -8,6 +8,8 @@
         <id property="id" column="id"/>
         <result property="fileId" column="file_id"/>
         <result property="ownerId" column="owner_id"/>
+        <result property="bizType" column="biz_type"/>
+        <result property="bizId" column="biz_id"/>
         <result property="originalName" column="original_name"/>
         <result property="objectKey" column="object_key"/>
         <result property="bucketName" column="bucket_name"/>
@@ -17,6 +19,8 @@
         <result property="fileExt" column="file_ext"/>
         <result property="storageType" column="storage_type"/>
         <result property="uploadType" column="upload_type"/>
+        <result property="tags" column="tags"/>
+        <result property="referenceCount" column="reference_count"/>
         <result property="status" column="status"/>
         <result property="createdAt" column="created_at"/>
         <result property="updatedAt" column="updated_at"/>
@@ -27,6 +31,8 @@
             id BIGINT AUTO_INCREMENT PRIMARY KEY,
             file_id VARCHAR(64) NOT NULL,
             owner_id VARCHAR(64) NOT NULL,
+            biz_type VARCHAR(64),
+            biz_id VARCHAR(128),
             original_name VARCHAR(255) NOT NULL,
             object_key VARCHAR(512) NOT NULL,
             bucket_name VARCHAR(128) NOT NULL,
@@ -36,29 +42,104 @@
             file_ext VARCHAR(32),
             storage_type VARCHAR(32) NOT NULL,
             upload_type VARCHAR(32),
+            tags TEXT,
+            reference_count INT NOT NULL DEFAULT 0,
             status VARCHAR(32) NOT NULL,
             created_at DATETIME NOT NULL,
             updated_at DATETIME NOT NULL,
             UNIQUE KEY uk_file_record_file_id (file_id),
             KEY idx_file_record_owner_md5_size (owner_id, file_md5, file_size),
+            KEY idx_file_record_owner_biz (owner_id, biz_type, biz_id),
             KEY idx_file_record_status_created_at (status, created_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    </update>
+
+    <update id="createReferenceTableIfAbsent">
+        CREATE TABLE IF NOT EXISTS file_reference (
+            id BIGINT AUTO_INCREMENT PRIMARY KEY,
+            owner_id VARCHAR(64) NOT NULL,
+            file_id VARCHAR(64) NOT NULL,
+            reference_type VARCHAR(64) NOT NULL,
+            reference_id VARCHAR(128) NOT NULL,
+            created_at DATETIME NOT NULL,
+            updated_at DATETIME NOT NULL,
+            UNIQUE KEY uk_file_reference_owner_file_reference (owner_id, file_id, reference_type, reference_id),
+            KEY idx_file_reference_owner_file (owner_id, file_id),
+            KEY idx_file_reference_owner_reference (owner_id, reference_type, reference_id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     </update>
 
     <insert id="insert" parameterType="com.huang.demo.file.domain.entity.FileRecord">
         INSERT INTO file_record (
-            file_id, owner_id, original_name, object_key, bucket_name, content_type,
-            file_size, file_md5, file_ext, storage_type, upload_type, status, created_at, updated_at
+            file_id, owner_id, biz_type, biz_id, original_name, object_key, bucket_name, content_type,
+            file_size, file_md5, file_ext, storage_type, upload_type, tags, reference_count, status, created_at, updated_at
         )
         VALUES (
-            #{fileId}, #{ownerId}, #{originalName}, #{objectKey}, #{bucketName}, #{contentType},
-            #{fileSize}, #{fileMd5}, #{fileExt}, #{storageType}, #{uploadType}, #{status}, #{createdAt}, #{updatedAt}
+            #{fileId}, #{ownerId}, #{bizType}, #{bizId}, #{originalName}, #{objectKey}, #{bucketName}, #{contentType},
+            #{fileSize}, #{fileMd5}, #{fileExt}, #{storageType}, #{uploadType}, #{tags}, COALESCE(#{referenceCount}, 0), #{status}, #{createdAt}, #{updatedAt}
         )
     </insert>
 
+    <update id="updateMetadata">
+        UPDATE file_record
+        SET biz_type = #{bizType},
+            biz_id = #{bizId},
+            tags = #{tags},
+            updated_at = NOW()
+        WHERE owner_id = #{ownerId}
+          AND file_id = #{fileId}
+          AND status = 'NORMAL'
+    </update>
+
+    <insert id="addReference">
+        INSERT IGNORE INTO file_reference (
+            owner_id, file_id, reference_type, reference_id, created_at, updated_at
+        )
+        VALUES (
+            #{ownerId}, #{fileId}, #{referenceType}, #{referenceId}, NOW(), NOW()
+        )
+    </insert>
+
+    <delete id="removeReference">
+        DELETE FROM file_reference
+        WHERE owner_id = #{ownerId}
+          AND file_id = #{fileId}
+          AND reference_type = #{referenceType}
+          AND reference_id = #{referenceId}
+    </delete>
+
+    <update id="incrementReferenceCount">
+        UPDATE file_record
+        SET reference_count = COALESCE(reference_count, 0) + 1,
+            updated_at = NOW()
+        WHERE owner_id = #{ownerId}
+          AND file_id = #{fileId}
+          AND status = 'NORMAL'
+    </update>
+
+    <update id="decrementReferenceCount">
+        UPDATE file_record
+        SET reference_count = CASE
+                WHEN COALESCE(reference_count, 0) &lt;= 0 THEN 0
+                ELSE reference_count - 1
+            END,
+            updated_at = NOW()
+        WHERE owner_id = #{ownerId}
+          AND file_id = #{fileId}
+          AND status = 'NORMAL'
+    </update>
+
+    <select id="countReferences" resultType="int">
+        SELECT COUNT(*)
+        FROM file_reference
+        WHERE owner_id = #{ownerId}
+          AND file_id = #{fileId}
+    </select>
+
     <select id="findNormalByFileId" resultMap="FileRecordMap">
-        SELECT id, file_id, owner_id, original_name, object_key, bucket_name, content_type,
-               file_size, file_md5, file_ext, storage_type, upload_type, status, created_at, updated_at
+        SELECT id, file_id, owner_id, biz_type, biz_id, original_name, object_key, bucket_name, content_type,
+               file_size, file_md5, file_ext, storage_type, upload_type, tags, COALESCE(reference_count, 0) AS reference_count,
+               status, created_at, updated_at
         FROM file_record
         WHERE owner_id = #{ownerId}
           AND file_id = #{fileId}
@@ -67,8 +148,9 @@
     </select>
 
     <select id="findNormalByMd5AndSize" resultMap="FileRecordMap">
-        SELECT id, file_id, owner_id, original_name, object_key, bucket_name, content_type,
-               file_size, file_md5, file_ext, storage_type, upload_type, status, created_at, updated_at
+        SELECT id, file_id, owner_id, biz_type, biz_id, original_name, object_key, bucket_name, content_type,
+               file_size, file_md5, file_ext, storage_type, upload_type, tags, COALESCE(reference_count, 0) AS reference_count,
+               status, created_at, updated_at
         FROM file_record
         WHERE owner_id = #{ownerId}
           AND file_md5 = #{fileMd5}
@@ -85,6 +167,13 @@
         WHERE owner_id = #{ownerId}
           AND file_id = #{fileId}
           AND status = 'NORMAL'
+          AND COALESCE(reference_count, 0) = 0
+          AND NOT EXISTS (
+              SELECT 1
+              FROM file_reference
+              WHERE file_reference.owner_id = file_record.owner_id
+                AND file_reference.file_id = file_record.file_id
+          )
     </update>
 
     <select id="countNormal" resultType="long">
@@ -106,6 +195,19 @@
         </if>
         <if test="uploadType != null and uploadType != ''">
             AND upload_type = #{uploadType}
+        </if>
+        <if test="bizType != null and bizType != ''">
+            AND biz_type = #{bizType}
+        </if>
+        <if test="bizId != null and bizId != ''">
+            AND biz_id = #{bizId}
+        </if>
+        <if test="tags != null and tags.size() > 0">
+            AND (
+            <foreach collection="tags" item="tag" separator=" OR ">
+                FIND_IN_SET(#{tag}, tags)
+            </foreach>
+            )
         </if>
         <if test="minFileSize != null">
             AND file_size &gt;= #{minFileSize}
@@ -150,8 +252,9 @@
     </select>
 
     <select id="listNormalPage" resultMap="FileRecordMap">
-        SELECT id, file_id, owner_id, original_name, object_key, bucket_name, content_type,
-               file_size, file_md5, file_ext, storage_type, upload_type, status, created_at, updated_at
+        SELECT id, file_id, owner_id, biz_type, biz_id, original_name, object_key, bucket_name, content_type,
+               file_size, file_md5, file_ext, storage_type, upload_type, tags, COALESCE(reference_count, 0) AS reference_count,
+               status, created_at, updated_at
         FROM file_record
         WHERE owner_id = #{ownerId}
           AND status = #{status}
@@ -170,6 +273,19 @@
         <if test="uploadType != null and uploadType != ''">
             AND upload_type = #{uploadType}
         </if>
+        <if test="bizType != null and bizType != ''">
+            AND biz_type = #{bizType}
+        </if>
+        <if test="bizId != null and bizId != ''">
+            AND biz_id = #{bizId}
+        </if>
+        <if test="tags != null and tags.size() > 0">
+            AND (
+            <foreach collection="tags" item="tag" separator=" OR ">
+                FIND_IN_SET(#{tag}, tags)
+            </foreach>
+            )
+        </if>
         <if test="minFileSize != null">
             AND file_size &gt;= #{minFileSize}
         </if>
@@ -187,18 +303,27 @@
     </select>
 
     <select id="listDeletedBefore" resultMap="FileRecordMap">
-        SELECT id, file_id, owner_id, original_name, object_key, bucket_name, content_type,
-               file_size, file_md5, file_ext, storage_type, upload_type, status, created_at, updated_at
+        SELECT id, file_id, owner_id, biz_type, biz_id, original_name, object_key, bucket_name, content_type,
+               file_size, file_md5, file_ext, storage_type, upload_type, tags, COALESCE(reference_count, 0) AS reference_count,
+               status, created_at, updated_at
         FROM file_record
         WHERE status = 'DELETED'
           AND updated_at &lt;= #{updatedBefore}
+          AND COALESCE(reference_count, 0) = 0
+          AND NOT EXISTS (
+              SELECT 1
+              FROM file_reference
+              WHERE file_reference.owner_id = file_record.owner_id
+                AND file_reference.file_id = file_record.file_id
+          )
         ORDER BY id ASC
         LIMIT #{limit}
     </select>
 
     <select id="listAllAfterId" resultMap="FileRecordMap">
-        SELECT id, file_id, owner_id, original_name, object_key, bucket_name, content_type,
-               file_size, file_md5, file_ext, storage_type, upload_type, status, created_at, updated_at
+        SELECT id, file_id, owner_id, biz_type, biz_id, original_name, object_key, bucket_name, content_type,
+               file_size, file_md5, file_ext, storage_type, upload_type, tags, COALESCE(reference_count, 0) AS reference_count,
+               status, created_at, updated_at
         FROM file_record
         WHERE id &gt; #{lastId}
         ORDER BY id ASC
@@ -206,8 +331,9 @@
     </select>
 
     <select id="listNormalAfterId" resultMap="FileRecordMap">
-        SELECT id, file_id, owner_id, original_name, object_key, bucket_name, content_type,
-               file_size, file_md5, file_ext, storage_type, upload_type, status, created_at, updated_at
+        SELECT id, file_id, owner_id, biz_type, biz_id, original_name, object_key, bucket_name, content_type,
+               file_size, file_md5, file_ext, storage_type, upload_type, tags, COALESCE(reference_count, 0) AS reference_count,
+               status, created_at, updated_at
         FROM file_record
         WHERE status = 'NORMAL'
           AND id &gt; #{lastId}

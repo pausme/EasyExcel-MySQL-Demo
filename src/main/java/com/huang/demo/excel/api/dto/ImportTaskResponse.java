@@ -44,6 +44,12 @@ public class ImportTaskResponse {
 
     private final Boolean canRetry;
 
+    private final Integer importedCount;
+
+    private final Integer validatedCount;
+
+    private final String importMode;
+
     private final Integer errorCount;
 
     private final String errorFileName;
@@ -79,6 +85,9 @@ public class ImportTaskResponse {
                 .retryable(task.getRetryable())
                 .failureSuggestion(task.getFailureSuggestion())
                 .canRetry(task.getCanRetry())
+                .importedCount(result == null ? 0 : result.getImportedCount())
+                .validatedCount(result == null ? 0 : result.getValidatedCount())
+                .importMode(result == null ? null : result.getImportMode())
                 .errorCount(result == null ? 0 : result.getErrorCount())
                 .errorFileName(result == null ? null : result.getErrorFileName())
                 .hasErrorFile(result != null

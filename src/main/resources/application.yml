@@ -103,6 +103,35 @@ app:
     import-retry-backoff-millis: ${IMPORT_RETRY_BACKOFF_MILLIS:200}
     import-progress-log-interval: ${IMPORT_PROGRESS_LOG_INTERVAL:50}
     import-batch-sort-enabled: ${IMPORT_BATCH_SORT_ENABLED:true}
+    import-validation:
+      fields:
+        - field-name: studentNo
+          label: 学号
+          required: true
+          max-length: 32
+          unique-in-file: true
+        - field-name: name
+          label: 姓名
+          required: true
+          max-length: 64
+        - field-name: age
+          label: 年龄
+          min-value: 0
+          max-value: 150
+        - field-name: gender
+          label: 性别
+          max-length: 16
+        - field-name: className
+          label: 班级
+          max-length: 64
+        - field-name: email
+          label: 邮箱
+          max-length: 128
+          pattern: '^[^@\s]+@[^@\s]+\.[^@\s]+$'
+        - field-name: birthday
+          label: 生日
+          max-length: 32
+          pattern: '^\d{4}-\d{2}-\d{2}$'
     insert-batch-size: 2000
     demo-seed-count: 12000
     export-temp-dir: ${EXPORT_TEMP_DIR:${java.io.tmpdir}/student-excel-export}

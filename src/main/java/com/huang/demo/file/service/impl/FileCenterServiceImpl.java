@@ -2,9 +2,11 @@ package com.huang.demo.file.service.impl;
 
 import com.huang.demo.common.compensation.domain.model.CompensationFailureType;
 import com.huang.demo.common.compensation.service.CompensationService;
+import com.huang.demo.file.api.dto.FileMetadataUpdateRequest;
 import com.huang.demo.file.api.dto.FilePageQueryRequest;
 import com.huang.demo.file.api.dto.FilePageResponse;
 import com.huang.demo.file.api.dto.FileResponse;
+import com.huang.demo.file.api.dto.FileReferenceRequest;
 import com.huang.demo.file.api.dto.DirectUploadInitRequest;
 import com.huang.demo.file.api.dto.DirectUploadInitResponse;
 import com.huang.demo.file.api.dto.InstantUploadCheckRequest;
@@ -123,6 +125,7 @@ public class FileCenterServiceImpl implements FileCenterService {
             return;
         }
         fileRecordMapper.createTableIfAbsent();
+        fileRecordMapper.createReferenceTableIfAbsent();
         fileUploadTaskMapper.createTableIfAbsent();
         log.info("file center initialized");
     }
@@ -431,11 +434,74 @@ public class FileCenterServiceImpl implements FileCenterService {
 
     @Override
     @Transactional(rollbackFor = Exception.class)
+    public FileRecord bindMetadata(String fileId, FileMetadataUpdateRequest request) {
+        FileRecord record = findNormalFile(fileId)
+                .orElseThrow(() -> new IllegalArgumentException("文件不存在"));
+        String bizType = normalizeOptionalText(request == null ? null : request.getBizType(), 64);
+        String bizId = normalizeOptionalText(request == null ? null : request.getBizId(), 128);
+        String tags = joinTags(request == null ? null : request.getTags());
+        int updated = fileRecordMapper.updateMetadata(currentOwnerId(), record.getFileId(), bizType, bizId, tags);
+        if (updated == 0) {
+            throw new IllegalArgumentException("文件不存在");
+        }
+        record.setBizType(bizType);
+        record.setBizId(bizId);
+        record.setTags(tags);
+        record.setUpdatedAt(LocalDateTime.now());
+        return record;
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public FileRecord addReference(String fileId, FileReferenceRequest request) {
+        FileRecord record = findNormalFile(fileId)
+                .orElseThrow(() -> new IllegalArgumentException("文件不存在"));
+        String referenceType = normalizeRequiredText(request == null ? null : request.getReferenceType(), 64, "引用类型");
+        String referenceId = normalizeRequiredText(request == null ? null : request.getReferenceId(), 128, "引用标识");
+        int inserted = fileRecordMapper.addReference(currentOwnerId(), record.getFileId(), referenceType, referenceId);
+        if (inserted > 0) {
+            int updated = fileRecordMapper.incrementReferenceCount(currentOwnerId(), record.getFileId());
+            if (updated == 0) {
+                throw new IllegalStateException("文件不存在");
+            }
+            record.setReferenceCount(safeReferenceCount(record) + 1);
+            record.setUpdatedAt(LocalDateTime.now());
+        }
+        return record;
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public FileRecord removeReference(String fileId, FileReferenceRequest request) {
+        FileRecord record = findNormalFile(fileId)
+                .orElseThrow(() -> new IllegalArgumentException("文件不存在"));
+        String referenceType = normalizeRequiredText(request == null ? null : request.getReferenceType(), 64, "引用类型");
+        String referenceId = normalizeRequiredText(request == null ? null : request.getReferenceId(), 128, "引用标识");
+        int removed = fileRecordMapper.removeReference(currentOwnerId(), record.getFileId(), referenceType, referenceId);
+        if (removed > 0) {
+            int updated = fileRecordMapper.decrementReferenceCount(currentOwnerId(), record.getFileId());
+            if (updated == 0) {
+                throw new IllegalStateException("文件不存在");
+            }
+            record.setReferenceCount(Math.max(0, safeReferenceCount(record) - 1));
+            record.setUpdatedAt(LocalDateTime.now());
+        }
+        return record;
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
     public void delete(String fileId) {
         FileRecord record = findNormalFile(fileId)
                 .orElseThrow(() -> new IllegalArgumentException("文件不存在"));
+        if (safeReferenceCount(record) > 0 || fileRecordMapper.countReferences(currentOwnerId(), record.getFileId()) > 0) {
+            throw new IllegalStateException("文件正在被业务引用，不能删除");
+        }
         int updated = fileRecordMapper.markDeleted(currentOwnerId(), record.getFileId());
         if (updated == 0) {
+            if (fileRecordMapper.countReferences(currentOwnerId(), record.getFileId()) > 0) {
+                throw new IllegalStateException("文件正在被业务引用，不能删除");
+            }
             throw new IllegalArgumentException("文件不存在");
         }
         registerDeleteAfterCommit(record.getObjectKey());
@@ -452,6 +518,9 @@ public class FileCenterServiceImpl implements FileCenterService {
         String fileMd5 = normalizeOptionalFileMd5(safeRequest.getFileMd5());
         String status = normalizeOptionalFileStatus(safeRequest.getStatus());
         String uploadType = normalizeOptionalUploadType(safeRequest.getUploadType());
+        String bizType = normalizeOptionalText(safeRequest.getBizType(), 64);
+        String bizId = normalizeOptionalText(safeRequest.getBizId(), 128);
+        List<String> tags = normalizeTagList(safeRequest.getTags());
         Long minFileSize = normalizeOptionalFileSize(safeRequest.getMinFileSize());
         Long maxFileSize = normalizeOptionalFileSize(safeRequest.getMaxFileSize());
         validateFileSizeRange(minFileSize, maxFileSize);
@@ -461,9 +530,9 @@ public class FileCenterServiceImpl implements FileCenterService {
 
         String ownerId = currentOwnerId();
         long total = fileRecordMapper.countNormal(ownerId, originalName, fileExts, fileMd5, status, uploadType,
-                minFileSize, maxFileSize, safeRequest.getCreatedFrom(), safeRequest.getCreatedTo());
+                bizType, bizId, tags, minFileSize, maxFileSize, safeRequest.getCreatedFrom(), safeRequest.getCreatedTo());
         List<FileRecord> records = fileRecordMapper.listNormalPage(ownerId, originalName, fileExts, fileMd5, status,
-                uploadType, minFileSize, maxFileSize, safeRequest.getCreatedFrom(), safeRequest.getCreatedTo(),
+                uploadType, bizType, bizId, tags, minFileSize, maxFileSize, safeRequest.getCreatedFrom(), safeRequest.getCreatedTo(),
                 orderBy, offset, pageSize);
         List<FileResponse> responseRecords = new ArrayList<FileResponse>(records.size());
         for (FileRecord record : records) {
@@ -495,6 +564,7 @@ public class FileCenterServiceImpl implements FileCenterService {
                 .fileExt(fileExt)
                 .storageType(StorageType.MINIO.name())
                 .uploadType("SERVER")
+                .referenceCount(0)
                 .status(FileStatus.NORMAL.name())
                 .createdAt(now)
                 .updatedAt(now)
@@ -515,6 +585,7 @@ public class FileCenterServiceImpl implements FileCenterService {
                 .fileExt(task.getFileExt())
                 .storageType(StorageType.MINIO.name())
                 .uploadType(task.getUploadType())
+                .referenceCount(0)
                 .status(FileStatus.NORMAL.name())
                 .createdAt(now)
                 .updatedAt(now)
@@ -974,6 +1045,54 @@ public class FileCenterServiceImpl implements FileCenterService {
         return normalized;
     }
 
+    private String normalizeOptionalText(String value, int maxLength) {
+        if (value == null || value.trim().isEmpty()) {
+            return null;
+        }
+        String normalized = value.trim();
+        return normalized.length() > maxLength ? normalized.substring(0, maxLength) : normalized;
+    }
+
+    private String normalizeRequiredText(String value, int maxLength, String label) {
+        String normalized = normalizeOptionalText(value, maxLength);
+        if (normalized == null) {
+            throw new IllegalArgumentException(label + "不能为空");
+        }
+        return normalized;
+    }
+
+    private List<String> normalizeTagList(List<String> tags) {
+        if (tags == null || tags.isEmpty()) {
+            return Collections.emptyList();
+        }
+        LinkedHashSet<String> normalizedTags = new LinkedHashSet<String>();
+        for (String tag : tags) {
+            String normalized = normalizeOptionalText(tag, 64);
+            if (normalized != null) {
+                normalizedTags.add(normalized);
+            }
+        }
+        if (normalizedTags.isEmpty()) {
+            return Collections.emptyList();
+        }
+        return new ArrayList<String>(normalizedTags);
+    }
+
+    private String joinTags(List<String> tags) {
+        List<String> normalizedTags = normalizeTagList(tags);
+        if (normalizedTags.isEmpty()) {
+            return null;
+        }
+        StringBuilder builder = new StringBuilder();
+        for (String tag : normalizedTags) {
+            if (builder.length() > 0) {
+                builder.append(',');
+            }
+            builder.append(tag);
+        }
+        return builder.toString();
+    }
+
     private Long normalizeOptionalFileSize(Long fileSize) {
         if (fileSize == null) {
             return null;
@@ -1034,6 +1153,13 @@ public class FileCenterServiceImpl implements FileCenterService {
                 .filter(this::hasText)
                 .map(this::normalizeOwnerId)
                 .orElse("anonymous");
+    }
+
+    private int safeReferenceCount(FileRecord record) {
+        if (record == null || record.getReferenceCount() == null || record.getReferenceCount() < 0) {
+            return 0;
+        }
+        return record.getReferenceCount();
     }
 
     private String normalizeOwnerId(String ownerId) {

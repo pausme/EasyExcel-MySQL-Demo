@@ -1,0 +1,87 @@
+groups:
+  - name: easyexcel-demo-alerts
+    rules:
+      - alert: EasyExcelTaskFailureRateHigh
+        expr: |
+          sum(rate(demo_async_task_total{outcome="failed"}[10m]))
+          /
+          clamp_min(sum(rate(demo_async_task_total{outcome=~"success|failed"}[10m])), 1)
+          > 0.2
+        for: 10m
+        labels:
+          severity: warning
+          service: easyexcel-demo
+        annotations:
+          summary: EasyExcel async task failure rate is high
+          description: More than 20% of completed async tasks failed in the last 10 minutes.
+          runbook: docs/monitoring-alerting.md#51-task-failure-rate-high
+
+      - alert: EasyExcelThreadPoolQueueHigh
+        expr: max by (name) (executor_queued_tasks{name=~"student-.*"}) > 5
+        for: 10m
+        labels:
+          severity: warning
+          service: easyexcel-demo
+        annotations:
+          summary: EasyExcel executor queue is high
+          description: Import/export executor queue remains above 5 tasks.
+          runbook: docs/monitoring-alerting.md#52-thread-pool-queue-keeps-growing
+
+      - alert: EasyExcelThreadPoolRejected
+        expr: increase(demo_thread_pool_rejected_total[5m]) > 0
+        for: 1m
+        labels:
+          severity: warning
+          service: easyexcel-demo
+        annotations:
+          summary: EasyExcel executor rejected tasks
+          description: Import/export worker pools rejected at least one task in the last 5 minutes.
+          runbook: docs/monitoring-alerting.md#52-thread-pool-queue-keeps-growing
+
+      - alert: EasyExcelDatabaseConnectionPending
+        expr: max(hikaricp_connections_pending) > 0
+        for: 5m
+        labels:
+          severity: critical
+          service: easyexcel-demo
+        annotations:
+          summary: EasyExcel has pending database connections
+          description: Hikari has pending connection requests. Check slow SQL, import worker count and pool size.
+          runbook: docs/monitoring-alerting.md#53-database-connection-waiting
+
+      - alert: EasyExcelMinioUploadSlow
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le, scene) (rate(demo_storage_upload_duration_seconds_bucket[10m]))
+          ) > 30
+        for: 10m
+        labels:
+          severity: warning
+          service: easyexcel-demo
+        annotations:
+          summary: EasyExcel MinIO upload is slow
+          description: P95 storage upload duration is above 30 seconds.
+          runbook: docs/monitoring-alerting.md#55-minio-upload-is-slow
+
+      - alert: EasyExcelCompensationBacklogHigh
+        expr: max_over_time(demo_compensation_backlog{status=~"PENDING|FAILED"}[30m]) > 20
+        for: 30m
+        labels:
+          severity: warning
+          service: easyexcel-demo
+        annotations:
+          summary: EasyExcel compensation backlog is high
+          description: Pending or failed compensation records stayed above 20 for 30 minutes.
+          runbook: docs/monitoring-alerting.md#56-compensation-backlog-is-high
+
+      - alert: EasyExcelHeapUsageHigh
+        expr: sum(jvm_memory_used_bytes{area="heap"}) / sum(jvm_memory_max_bytes{area="heap"}) > 0.85
+        for: 10m
+        labels:
+          severity: warning
+          service: easyexcel-demo
+        annotations:
+          summary: EasyExcel heap usage is high
+          description: Heap usage is above 85% for 10 minutes.
+          runbook: docs/monitoring-alerting.md#54-jvm-heap-usage-is-high

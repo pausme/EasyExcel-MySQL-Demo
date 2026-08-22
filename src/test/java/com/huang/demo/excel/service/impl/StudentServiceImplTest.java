@@ -2,6 +2,9 @@ package com.huang.demo.excel.service.impl;
 
 import com.alibaba.excel.EasyExcel;
 import com.huang.demo.excel.config.ExcelDemoProperties;
+import com.huang.demo.excel.domain.model.StudentImportMode;
+import com.huang.demo.excel.domain.model.StudentImportProgressCallback;
+import com.huang.demo.excel.domain.model.StudentImportResult;
 import com.huang.demo.excel.domain.model.StudentImportStageRecord;
 import com.huang.demo.excel.domain.model.StudentImportValidationException;
 import com.huang.demo.excel.model.StudentExcelRow;
@@ -252,6 +255,100 @@ class StudentServiceImplTest {
             verify(studentMapper).mergeImportStageRangeToStudent(anyString(), eq(5), eq(5), anyLong());
             verify(studentMapper).promoteStudentVersion(eq(100L), anyLong());
             verify(studentMapper, never()).mergeImportStageToStudent(anyString());
+            verify(studentMapper).deleteImportStage(anyString());
+        } finally {
+            executor.shutdown();
+        }
+    }
+
+    @Test
+    void importExcelAppendModeMergesIntoCurrentVersionWithoutPromotion() {
+        ExcelDemoProperties properties = new ExcelDemoProperties();
+        properties.setImportMaxConcurrentTasks(1);
+        properties.setImportWorkerCount(1);
+        properties.setImportQueueCapacity(2);
+        properties.setImportBatchSize(2);
+        properties.setInsertBatchSize(2);
+        properties.setImportMergeChunkSize(2);
+        properties.setImportWorkerFinishWaitSeconds(5);
+        StudentMapper studentMapper = mock(StudentMapper.class);
+        List<StudentImportStageRecord> stagedRows = new CopyOnWriteArrayList<StudentImportStageRecord>();
+        doAnswer(invocation -> {
+            List<StudentImportStageRecord> rows = invocation.getArgument(0);
+            stagedRows.addAll(rows);
+            return null;
+        }).when(studentMapper).saveImportStageBatch(any());
+        when(studentMapper.countImportStageRows(anyString())).thenAnswer(invocation -> stagedRows.size());
+        when(studentMapper.listInvalidImportStageRows(anyString())).thenReturn(Collections.emptyList());
+        when(studentMapper.listDuplicateImportStageStudentNoRows(anyString())).thenReturn(Collections.emptyList());
+        when(studentMapper.mergeImportStageRangeToCurrentStudent(anyString(), anyInt(), anyInt())).thenReturn(2);
+
+        ThreadPoolTaskExecutor executor = newImportWorkerExecutor();
+        try {
+            StudentServiceImpl studentService = new StudentServiceImpl(
+                    studentMapper,
+                    properties,
+                    new ImmediateTransactionManager(),
+                    executor);
+
+            StudentImportResult result = studentService.importExcel(
+                    new ByteArrayInputStream(buildStudentExcel(5)), 2, StudentImportMode.APPEND,
+                    StudentImportProgressCallback.NONE);
+
+            assertEquals(5, result.getImportedCount());
+            assertEquals(5, result.getValidatedCount());
+            assertEquals(StudentImportMode.APPEND, result.getImportMode());
+            verify(studentMapper, times(3)).mergeImportStageRangeToCurrentStudent(anyString(), anyInt(), anyInt());
+            verify(studentMapper).mergeImportStageRangeToCurrentStudent(anyString(), eq(1), eq(2));
+            verify(studentMapper).mergeImportStageRangeToCurrentStudent(anyString(), eq(3), eq(4));
+            verify(studentMapper).mergeImportStageRangeToCurrentStudent(anyString(), eq(5), eq(5));
+            verify(studentMapper, never()).promoteStudentVersion(anyLong(), anyLong());
+            verify(studentMapper, never()).mergeImportStageRangeToStudent(anyString(), anyInt(), anyInt(), anyLong());
+            verify(studentMapper).deleteImportStage(anyString());
+        } finally {
+            executor.shutdown();
+        }
+    }
+
+    @Test
+    void importExcelValidateOnlyModeDoesNotMergeIntoStudentRecord() {
+        ExcelDemoProperties properties = new ExcelDemoProperties();
+        properties.setImportMaxConcurrentTasks(1);
+        properties.setImportWorkerCount(1);
+        properties.setImportQueueCapacity(2);
+        properties.setImportBatchSize(2);
+        properties.setInsertBatchSize(2);
+        properties.setImportWorkerFinishWaitSeconds(5);
+        StudentMapper studentMapper = mock(StudentMapper.class);
+        List<StudentImportStageRecord> stagedRows = new CopyOnWriteArrayList<StudentImportStageRecord>();
+        doAnswer(invocation -> {
+            List<StudentImportStageRecord> rows = invocation.getArgument(0);
+            stagedRows.addAll(rows);
+            return null;
+        }).when(studentMapper).saveImportStageBatch(any());
+        when(studentMapper.countImportStageRows(anyString())).thenAnswer(invocation -> stagedRows.size());
+        when(studentMapper.listInvalidImportStageRows(anyString())).thenReturn(Collections.emptyList());
+        when(studentMapper.listDuplicateImportStageStudentNoRows(anyString())).thenReturn(Collections.emptyList());
+
+        ThreadPoolTaskExecutor executor = newImportWorkerExecutor();
+        try {
+            StudentServiceImpl studentService = new StudentServiceImpl(
+                    studentMapper,
+                    properties,
+                    new ImmediateTransactionManager(),
+                    executor);
+
+            StudentImportResult result = studentService.importExcel(
+                    new ByteArrayInputStream(buildStudentExcel(2)), 2, StudentImportMode.VALIDATE_ONLY,
+                    StudentImportProgressCallback.NONE);
+
+            assertEquals(0, result.getImportedCount());
+            assertEquals(2, result.getValidatedCount());
+            assertEquals(StudentImportMode.VALIDATE_ONLY, result.getImportMode());
+            verify(studentMapper, never()).mergeImportStageToStudent(anyString());
+            verify(studentMapper, never()).mergeImportStageRangeToStudent(anyString(), anyInt(), anyInt(), anyLong());
+            verify(studentMapper, never()).mergeImportStageRangeToCurrentStudent(anyString(), anyInt(), anyInt());
+            verify(studentMapper, never()).promoteStudentVersion(anyLong(), anyLong());
             verify(studentMapper).deleteImportStage(anyString());
         } finally {
             executor.shutdown();

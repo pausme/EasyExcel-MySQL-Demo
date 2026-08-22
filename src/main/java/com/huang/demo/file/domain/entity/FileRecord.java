@@ -21,6 +21,10 @@ public class FileRecord {
 
     private String ownerId;
 
+    private String bizType;
+
+    private String bizId;
+
     private String originalName;
 
     private String objectKey;
@@ -38,6 +42,10 @@ public class FileRecord {
     private String storageType;
 
     private String uploadType;
+
+    private String tags;
+
+    private Integer referenceCount;
 
     private String status;
 

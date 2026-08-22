@@ -1,6 +1,7 @@
 package com.huang.demo.excel.model;
 
 import com.alibaba.excel.annotation.ExcelProperty;
+import com.huang.demo.excel.domain.model.StudentImportRowView;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -10,7 +11,7 @@ import lombok.NoArgsConstructor;
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
-public class StudentExcelRow {
+public class StudentExcelRow implements StudentImportRowView {
 
     @ExcelProperty("学号")
     private String studentNo;

@@ -6,6 +6,8 @@ import com.huang.demo.file.api.dto.DirectUploadInitRequest;
 import com.huang.demo.file.api.dto.DirectUploadInitResponse;
 import com.huang.demo.file.api.dto.FilePageQueryRequest;
 import com.huang.demo.file.api.dto.FilePageResponse;
+import com.huang.demo.file.api.dto.FileMetadataUpdateRequest;
+import com.huang.demo.file.api.dto.FileReferenceRequest;
 import com.huang.demo.file.api.dto.FileResponse;
 import com.huang.demo.file.api.dto.FileUploadResponse;
 import com.huang.demo.file.api.dto.InstantUploadCheckRequest;
@@ -192,6 +194,45 @@ public class FileCenterController {
         FileRecord record = fileCenterService.findNormalFile(fileId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "文件不存在"));
         return FileResponse.from(record);
+    }
+
+    @ApiOperation("绑定文件业务信息")
+    @PostMapping("/{fileId}/metadata")
+    public FileResponse bindMetadata(@PathVariable("fileId") String fileId,
+                                     @Valid @RequestBody FileMetadataUpdateRequest request) {
+        try {
+            return FileResponse.from(fileCenterService.bindMetadata(fileId, request));
+        } catch (IllegalArgumentException ex) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, ex.getMessage(), ex);
+        } catch (IllegalStateException ex) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, ex.getMessage(), ex);
+        }
+    }
+
+    @ApiOperation("增加文件引用")
+    @PostMapping("/{fileId}/references/add")
+    public FileResponse addReference(@PathVariable("fileId") String fileId,
+                                     @Valid @RequestBody FileReferenceRequest request) {
+        try {
+            return FileResponse.from(fileCenterService.addReference(fileId, request));
+        } catch (IllegalArgumentException ex) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, ex.getMessage(), ex);
+        } catch (IllegalStateException ex) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, ex.getMessage(), ex);
+        }
+    }
+
+    @ApiOperation("移除文件引用")
+    @PostMapping("/{fileId}/references/remove")
+    public FileResponse removeReference(@PathVariable("fileId") String fileId,
+                                        @Valid @RequestBody FileReferenceRequest request) {
+        try {
+            return FileResponse.from(fileCenterService.removeReference(fileId, request));
+        } catch (IllegalArgumentException ex) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, ex.getMessage(), ex);
+        } catch (IllegalStateException ex) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, ex.getMessage(), ex);
+        }
     }
 
     @ApiOperation("下载通用文件")

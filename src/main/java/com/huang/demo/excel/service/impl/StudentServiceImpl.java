@@ -3,6 +3,7 @@ package com.huang.demo.excel.service.impl;
 import com.alibaba.excel.EasyExcel;
 import com.huang.demo.excel.config.ExcelDemoProperties;
 import com.huang.demo.excel.domain.model.StudentImportBatch;
+import com.huang.demo.excel.domain.model.StudentImportMode;
 import com.huang.demo.excel.domain.model.StudentImportProgressCallback;
 import com.huang.demo.excel.domain.model.StudentImportResult;
 import com.huang.demo.excel.domain.model.StudentImportStageRecord;
@@ -12,9 +13,11 @@ import com.huang.demo.excel.model.StudentImportErrorRow;
 import com.huang.demo.excel.model.StudentExcelRow;
 import com.huang.demo.excel.repository.StudentMapper;
 import com.huang.demo.excel.service.StudentService;
+import com.huang.demo.excel.service.StudentImportValidationService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.TransientDataAccessException;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.stereotype.Service;
@@ -57,16 +60,28 @@ public class StudentServiceImpl implements StudentService {
     private final PlatformTransactionManager transactionManager;
     private final ThreadPoolTaskExecutor importWorkerExecutor;
     private final Semaphore importTaskSemaphore;
+    private final StudentImportValidationService studentImportValidationService;
 
     public StudentServiceImpl(StudentMapper studentMapper,
                               ExcelDemoProperties properties,
                               PlatformTransactionManager transactionManager,
                               @Qualifier("importWorkerExecutor") ThreadPoolTaskExecutor importWorkerExecutor) {
+        this(studentMapper, properties, transactionManager, importWorkerExecutor,
+                new StudentImportValidationServiceImpl(new com.huang.demo.excel.config.StudentImportValidationProperties()));
+    }
+
+    @Autowired
+    public StudentServiceImpl(StudentMapper studentMapper,
+                              ExcelDemoProperties properties,
+                              PlatformTransactionManager transactionManager,
+                              @Qualifier("importWorkerExecutor") ThreadPoolTaskExecutor importWorkerExecutor,
+                              StudentImportValidationService studentImportValidationService) {
         this.studentMapper = studentMapper;
         this.properties = properties;
         this.transactionManager = transactionManager;
         this.importWorkerExecutor = importWorkerExecutor;
         this.importTaskSemaphore = new Semaphore(Math.max(1, properties.getImportMaxConcurrentTasks()));
+        this.studentImportValidationService = studentImportValidationService;
     }
 
     @PostConstruct
@@ -146,10 +161,20 @@ public class StudentServiceImpl implements StudentService {
         return importExcel(inputStream, batchSize, StudentImportProgressCallback.NONE);
     }
 
+    @Override
     public StudentImportResult importExcel(InputStream inputStream,
                                            int batchSize,
                                            StudentImportProgressCallback progressCallback) {
+        return importExcel(inputStream, batchSize, StudentImportMode.OVERWRITE, progressCallback);
+    }
+
+    @Override
+    public StudentImportResult importExcel(InputStream inputStream,
+                                           int batchSize,
+                                           StudentImportMode importMode,
+                                           StudentImportProgressCallback progressCallback) {
         long start = System.currentTimeMillis();
+        StudentImportMode safeImportMode = importMode == null ? StudentImportMode.OVERWRITE : importMode;
         acquireImportPermit();
         try {
             StudentImportProgressCallback safeProgressCallback =
@@ -179,7 +204,7 @@ public class StudentServiceImpl implements StudentService {
                 awaitImportWorkers(workerLatch);
                 awaitWorkerFutures(workerHandles);
                 throwIfImportWorkerFailed(workerFailure);
-                mergeImportStageAtomically(importTaskId, stagedCount.get(), safeProgressCallback);
+                applyImportStage(importTaskId, stagedCount.get(), safeImportMode, safeProgressCallback);
             } catch (RuntimeException ex) {
                 cleanupFailedImportWorkers(importQueue, workerCount, workerHandles, workerLatch);
                 throw ex;
@@ -188,11 +213,14 @@ public class StudentServiceImpl implements StudentService {
             }
 
             StudentImportResult result = StudentImportResult.builder()
-                    .importedCount(stagedCount.get())
+                    .importedCount(safeImportMode == StudentImportMode.VALIDATE_ONLY ? 0 : stagedCount.get())
+                    .validatedCount(stagedCount.get())
                     .batchCount(stagedBatchCount.get())
+                    .importMode(safeImportMode)
                     .build();
-            log.info("import students finished, imported={}, batchCount={}, elapsedMs={}",
-                    result.getImportedCount(), result.getBatchCount(), System.currentTimeMillis() - start);
+            log.info("import students finished, mode={}, imported={}, validated={}, batchCount={}, elapsedMs={}",
+                    result.getImportMode(), result.getImportedCount(), result.getValidatedCount(),
+                    result.getBatchCount(), System.currentTimeMillis() - start);
             return result;
         } finally {
             importTaskSemaphore.release();
@@ -611,16 +639,32 @@ public class StudentServiceImpl implements StudentService {
         return records;
     }
 
-    private void mergeImportStageAtomically(String importTaskId,
-                                            int expectedRows,
-                                            StudentImportProgressCallback progressCallback) {
+    private void applyImportStage(String importTaskId,
+                                  int expectedRows,
+                                  StudentImportMode importMode,
+                                  StudentImportProgressCallback progressCallback) {
         progressCallback.checkCanceled();
+        validateImportStageBeforeMerge(importTaskId, expectedRows);
+        if (importMode == StudentImportMode.VALIDATE_ONLY) {
+            progressCallback.onCommitted(expectedRows, expectedRows == 0 ? 0 : 1);
+            log.info("import stage validated only, importTaskId={}, rows={}", importTaskId, expectedRows);
+            return;
+        }
+        if (importMode == StudentImportMode.APPEND) {
+            appendImportStageToCurrentVersion(importTaskId, expectedRows, progressCallback);
+            return;
+        }
+        mergeImportStageAsNewVersion(importTaskId, expectedRows, progressCallback);
+    }
+
+    private void mergeImportStageAsNewVersion(String importTaskId,
+                                              int expectedRows,
+                                              StudentImportProgressCallback progressCallback) {
         long start = System.currentTimeMillis();
         Long currentVersion = studentMapper.currentStudentVersion();
         long expectedVersion = currentVersion == null ? 1L : currentVersion;
         long importVersion = nextImportVersion(expectedVersion);
         try {
-            validateImportStageBeforeMerge(importTaskId, expectedRows);
             int mergeChunkSize = getImportMergeChunkSize();
             int mergeChunkCount = expectedRows == 0 ? 0 : Math.max(1, (expectedRows + mergeChunkSize - 1) / mergeChunkSize);
             int mergedRows = 0;
@@ -649,6 +693,31 @@ public class StudentServiceImpl implements StudentService {
             deleteStudentRowsByImportTaskIdQuietly(importTaskId);
             throw ex;
         }
+    }
+
+    private void appendImportStageToCurrentVersion(String importTaskId,
+                                                   int expectedRows,
+                                                   StudentImportProgressCallback progressCallback) {
+        long start = System.currentTimeMillis();
+        int mergeChunkSize = getImportMergeChunkSize();
+        int mergeChunkCount = expectedRows == 0 ? 0 : Math.max(1, (expectedRows + mergeChunkSize - 1) / mergeChunkSize);
+        for (int startRowNo = 1; startRowNo <= expectedRows; startRowNo += mergeChunkSize) {
+            progressCallback.checkCanceled();
+            final int chunkStartRowNo = startRowNo;
+            final int chunkEndRowNo = Math.min(expectedRows, chunkStartRowNo + mergeChunkSize - 1);
+            long chunkStart = System.currentTimeMillis();
+            Integer affectedRows = newImportTransactionTemplate()
+                    .execute(status -> studentMapper.mergeImportStageRangeToCurrentStudent(
+                            importTaskId, chunkStartRowNo, chunkEndRowNo));
+            progressCallback.onCommitted(chunkEndRowNo, mergeChunkCount);
+            log.info("import stage append chunk finished, importTaskId={}, startRowNo={}, endRowNo={}, "
+                            + "affectedRows={}, elapsedMs={}",
+                    importTaskId, chunkStartRowNo, chunkEndRowNo,
+                    affectedRows == null ? 0 : affectedRows, System.currentTimeMillis() - chunkStart);
+        }
+        progressCallback.onCommitted(expectedRows, mergeChunkCount);
+        log.info("import stage appended to current version, rows={}, chunks={}, chunkSize={}, elapsedMs={}",
+                expectedRows, mergeChunkCount, mergeChunkSize, System.currentTimeMillis() - start);
     }
 
     private void promoteImportVersion(String importTaskId, long expectedVersion, long importVersion) {
@@ -705,7 +774,9 @@ public class StudentServiceImpl implements StudentService {
     private List<StudentImportErrorRow> buildImportValidationErrors(String importTaskId) {
         Map<Integer, ImportErrorAccumulator> errorMap = new LinkedHashMap<Integer, ImportErrorAccumulator>();
         for (StudentImportStageRecord row : studentMapper.listInvalidImportStageRows(importTaskId)) {
-            appendRowValidationErrors(errorMap, row);
+            for (String error : studentImportValidationService.validate(row)) {
+                addImportError(errorMap, row, error);
+            }
         }
         for (StudentImportStageRecord row : studentMapper.listDuplicateImportStageStudentNoRows(importTaskId)) {
             addImportError(errorMap, row, "文件内学号重复");
@@ -715,37 +786,6 @@ public class StudentServiceImpl implements StudentService {
             errorRows.add(accumulator.toErrorRow());
         }
         return errorRows;
-    }
-
-    private void appendRowValidationErrors(Map<Integer, ImportErrorAccumulator> errorMap,
-                                           StudentImportStageRecord row) {
-        if (isBlank(row.getStudentNo())) {
-            addImportError(errorMap, row, "学号不能为空");
-        } else if (row.getStudentNo().length() > 32) {
-            addImportError(errorMap, row, "学号长度不能超过32");
-        }
-        if (isBlank(row.getName())) {
-            addImportError(errorMap, row, "姓名不能为空");
-        } else if (row.getName().length() > 64) {
-            addImportError(errorMap, row, "姓名长度不能超过64");
-        }
-        if (row.getAge() != null && (row.getAge() < 0 || row.getAge() > 150)) {
-            addImportError(errorMap, row, "年龄必须在0到150之间");
-        }
-        if (row.getGender() != null && row.getGender().length() > 16) {
-            addImportError(errorMap, row, "性别长度不能超过16");
-        }
-        if (row.getClassName() != null && row.getClassName().length() > 64) {
-            addImportError(errorMap, row, "班级长度不能超过64");
-        }
-        if (row.getEmail() != null && row.getEmail().length() > 128) {
-            addImportError(errorMap, row, "邮箱长度不能超过128");
-        } else if (!isBlank(row.getEmail()) && !isSimpleEmail(row.getEmail())) {
-            addImportError(errorMap, row, "邮箱格式不正确");
-        }
-        if (row.getBirthday() != null && row.getBirthday().length() > 32) {
-            addImportError(errorMap, row, "生日长度不能超过32");
-        }
     }
 
     private void addImportError(Map<Integer, ImportErrorAccumulator> errorMap,
@@ -762,13 +802,6 @@ public class StudentServiceImpl implements StudentService {
 
     private boolean isBlank(String value) {
         return value == null || value.trim().isEmpty();
-    }
-
-    private boolean isSimpleEmail(String value) {
-        String trimmed = value == null ? "" : value.trim();
-        int atIndex = trimmed.indexOf('@');
-        int dotIndex = trimmed.lastIndexOf('.');
-        return atIndex > 0 && dotIndex > atIndex + 1 && dotIndex < trimmed.length() - 1;
     }
 
     private static class ImportErrorAccumulator {

@@ -20,6 +20,7 @@
 - 可观测性：任务事件、TraceId、下载审计、线程池指标、导入导出行速率、MinIO 上传耗时和错误文件指标已接入 Micrometer。
 - 文件中心测试页：启动应用后访问 `/file-upload-test.html`，可测试秒传、客户端直传和分片上传。
 - 文件中心测试页还能展示分片状态、断点继续和失败分片重试，适合联调文件中心。
+- 轻量运维台：启动应用后访问 `/ops-dashboard.html`，可查看运维概览、任务、补偿和下载审计。
 - 数据更新：同一可见版本内使用 `student_no` 作为唯一业务键，重复导入时按新版本整体发布。
 - 压测工具：提供 Python 标准库脚本，支持并发矩阵和吞吐量统计。
 - 回归样本：提供统一 fixture 生成脚本，样本说明见 [regression-datasets.md](docs/regression-datasets.md)。
@@ -30,7 +31,7 @@
 
 | 项目 | 数据量 | 结果 |
 | --- | ---: | --- |
-| 单元/切片测试 | 38 类 / 164 用例 | 全部通过 |
+| 单元/切片测试 | 38 类 / 166 用例 | 全部通过 |
 | 接口扁平化测试 | 77 用例 | R11 标准环境 77/77 通过；F-02/F-09/F-12 已关闭，F-11 受控，新增文件安全扫描用例通过 |
 | 异步导出 | 1,000,006 行 × 3 | 全部成功，平均约 23,317 行/s |
 | 异步导入 | 100,000 行 × 3 | 全部成功，平均约 4,511 行/s |
@@ -100,17 +101,24 @@ EasyExcel 流式解析
 校验必填字段和文件内重复 student_no
         |
         v
-按 `IMPORT_MERGE_CHUNK_SIZE` 从暂存表分块 upsert 到 student_record 的新 import_version
+按导入模式执行只校验、追加 upsert 或新版本覆盖发布
         |
         v
-CAS 更新 student_import_version_control.current_version，发布新版本
+覆盖模式下 CAS 更新 student_import_version_control.current_version，发布新版本
 ```
 
 导入任务的原始 Excel 会先保存到 MinIO 的 `excel/student/import-source/` 前缀，任务 payload 记录 `sourceObjectKey`、原始文件名和文件大小。
 后台执行和任务重试都从 MinIO 读取源文件，不依赖本机临时目录；如果源文件生命周期过期或被删除，重试会明确失败并提示源文件不存在或已过期。导入校验失败时，任务详情会返回错误摘要和前 100 行预览，也可以通过 `/api/excel/import/{taskId}/errors?limit=20` 单独查询预览。
 导入不会把整份 Excel 加载到内存中。解析线程只保留当前批次，队列容量有限，队列满时解析会产生背压。
-解析后的批次先写入 `student_import_stage` 暂存表，全部解析和暂存成功后，先统一校验必填、长度、格式和文件内重复 `student_no`，再按 `IMPORT_MERGE_CHUNK_SIZE` 分块写入 `student_record` 的新 `import_version`。
-查询和导出只读取 `student_import_version_control.current_version` 指向的数据版本；新版本只有最后 CAS 发布成功后才可见。Excel 后半段解析失败、暂存失败、最终校验失败、构建新版本失败或发布失败时，旧版本继续对外服务，未发布版本会按 `import_task_id` 清理。
+解析后的批次先写入 `student_import_stage` 暂存表，全部解析和暂存成功后，先统一校验必填、长度、格式和文件内重复 `student_no`，再按导入模式处理：
+
+| 模式 | 参数值 | 写库行为 | 冲突处理 |
+| --- | --- | --- | --- |
+| 覆盖发布 | `OVERWRITE`（默认） | 按 `IMPORT_MERGE_CHUNK_SIZE` 分块写入新的 `import_version`，最后 CAS 发布新版本 | 文件内重复学号失败；与旧版本同学号不冲突，新版本以文件内容为准；文件外旧数据在新版本不可见 |
+| 追加更新 | `APPEND` | 按 `IMPORT_MERGE_CHUNK_SIZE` 分块 upsert 到当前可见版本 | 文件内重复学号失败；与当前版本同学号时更新该学生，文件外旧数据保留 |
+| 仅校验 | `VALIDATE_ONLY` | 只写暂存表并执行完整校验，随后清理暂存数据，不写 `student_record` | 任何字段或文件内重复错误都会生成错误明细；校验通过时 `importedCount=0`、`validatedCount=文件数据行数` |
+
+查询和导出只读取 `student_import_version_control.current_version` 指向的数据版本；`OVERWRITE` 新版本只有最后 CAS 发布成功后才可见。Excel 后半段解析失败、暂存失败、最终校验失败、构建新版本失败或发布失败时，旧版本继续对外服务，未发布版本会按 `import_task_id` 清理。`APPEND` 属于在当前版本内增量 upsert，已提交分块会直接影响当前版本；如果业务要求增量导入也全量原子可见，应使用后续暂存版本合并策略扩展。
 如果导入校验失败，系统会生成错误明细 Excel 上传到 MinIO，用户可以通过导入任务状态接口查看错误文件信息，并通过签名地址下载。
 导入任务进度会写入统一任务中心：`totalCount` 表示已经解析的行数，`completedCount` 表示已经暂存的行数，任务完成前进度最高到 95%，成功后为 100%。
 
@@ -165,6 +173,7 @@ IMPORT_WORKER_COUNT * IMPORT_MAX_CONCURRENT_TASKS <= HIKARI_MAXIMUM_POOL_SIZE
 | 补偿忽略 | `POST /api/admin/compensations/{compensationId}/ignore` | 将补偿记录标记为 `IGNORED` |
 | 运维首页聚合 | `GET /api/admin/ops/overview` | 管理员查看今日任务、失败任务、补偿积压、文件容量、线程池和最近异常 |
 | 线程池监控 | `GET /api/tasks/metrics/thread-pools` | 管理员查看导入、导出线程池快照 |
+| 轻量运维页面 | `GET /ops-dashboard.html` | 浏览器查看运维概览、任务列表、补偿处理和审计记录 |
 
 分页查询统一限制 `pageSize <= 100`；学生游标分页限制 `pageSize <= 1000`。
 关闭 demo 模式后，受保护接口必须携带 `Authorization: Bearer <accessToken>`。`API_SECURITY_INIT_ENABLED=true` 时会初始化 `security_user` 表；需要首次登录账号时，可临时开启 `API_SECURITY_BOOTSTRAP_ADMIN_ENABLED=true` 并配置启动管理员用户名和密码，启动完成后建议关闭 bootstrap 配置。
@@ -417,7 +426,7 @@ export SPRING_SERVLET_MULTIPART_MAX_REQUEST_SIZE='200MB'
 | GET | `/export/{taskId}/download` | 获取 302 MinIO 签名下载地址 |
 | GET | `/template` | 下载导入模板 |
 | POST | `/import/precheck` | 预检导入文件，返回结构、容量和字段问题预览 |
-| POST | `/import` | 上传 Excel 并提交异步导入任务，字段名为 `file` |
+| POST | `/import` | 上传 Excel 并提交异步导入任务，字段名为 `file`，可选 `mode=OVERWRITE|APPEND|VALIDATE_ONLY` |
 | GET | `/import/{taskId}` | 查询导入任务状态和错误文件信息 |
 | GET | `/import/{taskId}/error-file` | 获取 302 MinIO 导入错误明细签名下载地址 |
 

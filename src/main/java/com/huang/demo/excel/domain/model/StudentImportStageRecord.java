@@ -9,7 +9,7 @@ import lombok.NoArgsConstructor;
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
-public class StudentImportStageRecord {
+public class StudentImportStageRecord implements StudentImportRowView {
 
     private String importTaskId;
 

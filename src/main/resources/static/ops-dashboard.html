@@ -1,0 +1,462 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>EasyExcel 运维台</title>
+  <style>
+    :root {
+      --bg: #f6f7f9;
+      --panel: #ffffff;
+      --line: #d9dee7;
+      --text: #1f2937;
+      --muted: #65758b;
+      --primary: #2563eb;
+      --danger: #dc2626;
+      --ok: #15803d;
+      --warn: #b45309;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+    header {
+      display: grid;
+      grid-template-columns: minmax(180px, 1fr) minmax(260px, 520px) auto;
+      gap: 12px;
+      align-items: center;
+      padding: 14px 20px;
+      border-bottom: 1px solid var(--line);
+      background: var(--panel);
+      position: sticky;
+      top: 0;
+      z-index: 2;
+    }
+    h1 {
+      font-size: 18px;
+      margin: 0;
+      font-weight: 700;
+    }
+    input, select, button {
+      height: 34px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fff;
+      color: var(--text);
+      font-size: 14px;
+      padding: 0 10px;
+    }
+    input:focus, select:focus {
+      outline: 2px solid rgba(37, 99, 235, .18);
+      border-color: var(--primary);
+    }
+    button {
+      cursor: pointer;
+      font-weight: 600;
+    }
+    button.primary {
+      background: var(--primary);
+      color: #fff;
+      border-color: var(--primary);
+    }
+    button:disabled {
+      opacity: .5;
+      cursor: not-allowed;
+    }
+    main {
+      padding: 18px 20px 28px;
+      max-width: 1440px;
+      margin: 0 auto;
+    }
+    .toolbar {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+      margin-bottom: 14px;
+    }
+    .tabs {
+      display: flex;
+      gap: 4px;
+      border-bottom: 1px solid var(--line);
+      margin-bottom: 16px;
+    }
+    .tab {
+      border: 0;
+      border-bottom: 2px solid transparent;
+      border-radius: 0;
+      background: transparent;
+      color: var(--muted);
+    }
+    .tab.active {
+      color: var(--primary);
+      border-bottom-color: var(--primary);
+    }
+    .grid {
+      display: grid;
+      gap: 12px;
+    }
+    .summary {
+      grid-template-columns: repeat(6, minmax(130px, 1fr));
+    }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      min-width: 0;
+    }
+    .metric-label {
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 6px;
+    }
+    .metric-value {
+      font-size: 24px;
+      font-weight: 750;
+      overflow-wrap: anywhere;
+    }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .panel h2 {
+      margin: 0;
+      padding: 12px;
+      font-size: 15px;
+      border-bottom: 1px solid var(--line);
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      table-layout: fixed;
+    }
+    th, td {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+      font-size: 13px;
+      overflow-wrap: anywhere;
+    }
+    th {
+      color: var(--muted);
+      background: #fafbfc;
+      font-weight: 700;
+    }
+    tr:last-child td { border-bottom: 0; }
+    .status {
+      display: inline-block;
+      padding: 2px 7px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      font-weight: 700;
+      font-size: 12px;
+    }
+    .SUCCESS { color: var(--ok); border-color: #86efac; background: #f0fdf4; }
+    .FAILED, .EXPIRED { color: var(--danger); border-color: #fecaca; background: #fef2f2; }
+    .RUNNING, .CREATED, .PENDING { color: var(--warn); border-color: #fed7aa; background: #fffbeb; }
+    .hidden { display: none; }
+    .message {
+      min-height: 20px;
+      color: var(--muted);
+      font-size: 13px;
+      margin: 8px 0 12px;
+    }
+    .error { color: var(--danger); }
+    .actions {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+    @media (max-width: 900px) {
+      header {
+        grid-template-columns: 1fr;
+      }
+      .summary {
+        grid-template-columns: repeat(2, minmax(130px, 1fr));
+      }
+      table {
+        min-width: 860px;
+      }
+      .panel {
+        overflow-x: auto;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>EasyExcel 运维台</h1>
+    <input id="baseUrl" placeholder="后端地址，例如 http://localhost:18088">
+    <input id="token" placeholder="Bearer Token">
+  </header>
+  <main>
+    <div class="toolbar">
+      <button class="primary" id="refreshBtn">刷新</button>
+      <select id="taskStatus">
+        <option value="">全部任务状态</option>
+        <option>CREATED</option>
+        <option>RUNNING</option>
+        <option>SUCCESS</option>
+        <option>FAILED</option>
+        <option>CANCELED</option>
+        <option>EXPIRED</option>
+      </select>
+      <select id="taskType">
+        <option value="">全部任务类型</option>
+        <option>IMPORT</option>
+        <option>EXPORT</option>
+      </select>
+      <select id="compensationStatus">
+        <option value="">全部补偿状态</option>
+        <option>PENDING</option>
+        <option>RUNNING</option>
+        <option>SUCCESS</option>
+        <option>FAILED</option>
+        <option>IGNORED</option>
+      </select>
+    </div>
+    <div id="message" class="message"></div>
+    <div class="tabs">
+      <button class="tab active" data-view="overview">概览</button>
+      <button class="tab" data-view="tasks">任务</button>
+      <button class="tab" data-view="compensations">补偿</button>
+      <button class="tab" data-view="audits">审计</button>
+    </div>
+    <section id="overview" class="view">
+      <div class="grid summary" id="summary"></div>
+      <div class="grid" style="grid-template-columns: minmax(0, 1fr); margin-top: 12px;">
+        <div class="panel">
+          <h2>线程池</h2>
+          <table>
+            <thead><tr><th>名称</th><th>核心</th><th>最大</th><th>活跃</th><th>队列</th><th>已完成</th></tr></thead>
+            <tbody id="threadPools"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+    <section id="tasks" class="view hidden">
+      <div class="panel">
+        <h2>任务列表</h2>
+        <table>
+          <thead><tr><th>任务</th><th>类型</th><th>状态</th><th>进度</th><th>失败类型</th><th>更新时间</th><th>操作</th></tr></thead>
+          <tbody id="taskRows"></tbody>
+        </table>
+      </div>
+    </section>
+    <section id="compensations" class="view hidden">
+      <div class="panel">
+        <h2>补偿记录</h2>
+        <table>
+          <thead><tr><th>补偿 ID</th><th>业务</th><th>失败类型</th><th>状态</th><th>重试</th><th>下次重试</th><th>操作</th></tr></thead>
+          <tbody id="compensationRows"></tbody>
+        </table>
+      </div>
+    </section>
+    <section id="audits" class="view hidden">
+      <div class="panel">
+        <h2>下载审计</h2>
+        <table>
+          <thead><tr><th>资源</th><th>对象</th><th>文件名</th><th>Owner</th><th>IP</th><th>时间</th></tr></thead>
+          <tbody id="auditRows"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const state = {
+      view: 'overview',
+      baseUrl: localStorage.getItem('ops.baseUrl') || location.origin,
+      token: localStorage.getItem('ops.token') || ''
+    };
+    $('baseUrl').value = state.baseUrl;
+    $('token').value = state.token;
+
+    document.querySelectorAll('.tab').forEach((button) => {
+      button.addEventListener('click', () => {
+        state.view = button.dataset.view;
+        document.querySelectorAll('.tab').forEach((item) => item.classList.toggle('active', item === button));
+        document.querySelectorAll('.view').forEach((item) => item.classList.toggle('hidden', item.id !== state.view));
+        refresh();
+      });
+    });
+    $('refreshBtn').addEventListener('click', refresh);
+    ['baseUrl', 'token'].forEach((id) => $(id).addEventListener('change', () => {
+      state.baseUrl = $('baseUrl').value.replace(/\/+$/, '');
+      state.token = $('token').value.trim();
+      localStorage.setItem('ops.baseUrl', state.baseUrl);
+      localStorage.setItem('ops.token', state.token);
+      refresh();
+    }));
+    ['taskStatus', 'taskType', 'compensationStatus'].forEach((id) => $(id).addEventListener('change', refresh));
+
+    async function request(path, options = {}) {
+      const headers = Object.assign({'Content-Type': 'application/json'}, options.headers || {});
+      if (state.token) {
+        headers.Authorization = state.token.startsWith('Bearer ') ? state.token : `Bearer ${state.token}`;
+      }
+      const response = await fetch(`${state.baseUrl}${path}`, Object.assign({}, options, {headers}));
+      const text = await response.text();
+      const json = text ? JSON.parse(text) : null;
+      if (!response.ok || (json && json.success === false)) {
+        throw new Error((json && json.message) || `HTTP ${response.status}`);
+      }
+      return json && Object.prototype.hasOwnProperty.call(json, 'data') ? json.data : json;
+    }
+
+    async function refresh() {
+      setMessage('加载中...');
+      try {
+        if (state.view === 'overview') await loadOverview();
+        if (state.view === 'tasks') await loadTasks();
+        if (state.view === 'compensations') await loadCompensations();
+        if (state.view === 'audits') await loadAudits();
+        setMessage('已刷新');
+      } catch (error) {
+        setMessage(error.message, true);
+      }
+    }
+
+    async function loadOverview() {
+      const data = await request('/api/admin/ops/overview');
+      $('summary').innerHTML = [
+        metric('今日任务', data.todayTaskCount),
+        metric('今日失败', data.todayFailedTaskCount),
+        metric('运行中', data.runningTaskCount),
+        metric('补偿积压', data.compensationBacklogCount),
+        metric('今日上传', data.todayFileUploadCount),
+        metric('文件容量', formatBytes(data.totalFileStorageBytes))
+      ].join('');
+      $('threadPools').innerHTML = rows(data.threadPools || [], (item) => [
+        item.name, item.corePoolSize, item.maxPoolSize, item.activeCount, item.queueSize, item.completedTaskCount
+      ]);
+    }
+
+    async function loadTasks() {
+      const body = {pageNo: 1, pageSize: 20};
+      if ($('taskStatus').value) body.statuses = [$('taskStatus').value];
+      if ($('taskType').value) body.taskTypes = [$('taskType').value];
+      const data = await request('/api/tasks/page', {method: 'POST', body: JSON.stringify(body)});
+      $('taskRows').innerHTML = rows(data.records || data.list || [], (item) => [
+        code(item.taskId),
+        item.taskType,
+        status(item.status),
+        `${item.progressPercent || 0}% ${item.completedCount || 0}/${item.totalCount || 0}`,
+        item.failureType || '',
+        item.updatedAt || '',
+        taskActions(item)
+      ]);
+    }
+
+    async function loadCompensations() {
+      const body = {pageNo: 1, pageSize: 20};
+      if ($('compensationStatus').value) body.statuses = [$('compensationStatus').value];
+      const data = await request('/api/admin/compensations/page', {method: 'POST', body: JSON.stringify(body)});
+      $('compensationRows').innerHTML = rows(data.records || data.list || [], (item) => [
+        code(item.compensationId),
+        `${item.bizType || ''}<br>${code(item.bizId || '')}`,
+        item.failureType || '',
+        status(item.status),
+        `${item.retryCount || 0}/${item.maxRetryCount || 0}`,
+        item.nextRetryAt || '',
+        compensationActions(item)
+      ]);
+    }
+
+    async function loadAudits() {
+      const data = await request('/api/download-audits/page', {
+        method: 'POST',
+        body: JSON.stringify({pageNo: 1, pageSize: 20})
+      });
+      $('auditRows').innerHTML = rows(data.records || data.list || [], (item) => [
+        `${item.resourceType || ''}<br>${code(item.resourceId || '')}`,
+        code(item.objectKey || ''),
+        item.fileName || '',
+        item.ownerId || '',
+        item.clientIp || '',
+        item.createdAt || ''
+      ]);
+    }
+
+    async function retryTask(taskId) {
+      await request(`/api/tasks/${encodeURIComponent(taskId)}/retry`, {method: 'POST', body: '{}'});
+      await refresh();
+    }
+
+    async function cancelTask(taskId) {
+      await request(`/api/tasks/${encodeURIComponent(taskId)}/cancel`, {method: 'POST', body: '{}'});
+      await refresh();
+    }
+
+    async function retryCompensation(compensationId) {
+      await request(`/api/admin/compensations/${encodeURIComponent(compensationId)}/retry`, {method: 'POST', body: '{}'});
+      await refresh();
+    }
+
+    async function ignoreCompensation(compensationId) {
+      await request(`/api/admin/compensations/${encodeURIComponent(compensationId)}/ignore`, {method: 'POST', body: '{}'});
+      await refresh();
+    }
+
+    function metric(label, value) {
+      return `<div class="card"><div class="metric-label">${escapeHtml(label)}</div><div class="metric-value">${escapeHtml(value == null ? 0 : value)}</div></div>`;
+    }
+
+    function rows(items, mapper) {
+      if (!items.length) return '<tr><td colspan="8">暂无数据</td></tr>';
+      return items.map((item) => `<tr>${mapper(item).map((cell) => `<td>${cell == null ? '' : cell}</td>`).join('')}</tr>`).join('');
+    }
+
+    function taskActions(item) {
+      const id = escapeAttr(item.taskId || '');
+      return `<div class="actions"><button onclick="retryTask('${id}')">重试</button><button onclick="cancelTask('${id}')">取消</button></div>`;
+    }
+
+    function compensationActions(item) {
+      const id = escapeAttr(item.compensationId || '');
+      return `<div class="actions"><button onclick="retryCompensation('${id}')">重试</button><button onclick="ignoreCompensation('${id}')">忽略</button></div>`;
+    }
+
+    function status(value) {
+      const safe = escapeHtml(value || '');
+      return `<span class="status ${safe}">${safe}</span>`;
+    }
+
+    function code(value) {
+      return `<code>${escapeHtml(value || '')}</code>`;
+    }
+
+    function setMessage(text, error = false) {
+      $('message').textContent = text || '';
+      $('message').classList.toggle('error', error);
+    }
+
+    function formatBytes(value) {
+      const bytes = Number(value || 0);
+      if (bytes < 1024) return `${bytes} B`;
+      if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)} KB`;
+      if (bytes < 1073741824) return `${(bytes / 1048576).toFixed(1)} MB`;
+      return `${(bytes / 1073741824).toFixed(1)} GB`;
+    }
+
+    function escapeHtml(value) {
+      return String(value).replace(/[&<>"']/g, (char) => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+      }[char]));
+    }
+
+    function escapeAttr(value) {
+      return escapeHtml(value).replace(/\\/g, '\\\\');
+    }
+
+    refresh();
+  </script>
+</body>
+</html>

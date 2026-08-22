@@ -115,6 +115,10 @@ public interface StudentMapper {
                                        @Param("endRowNo") int endRowNo,
                                        @Param("importVersion") long importVersion);
 
+    int mergeImportStageRangeToCurrentStudent(@Param("importTaskId") String importTaskId,
+                                              @Param("startRowNo") int startRowNo,
+                                              @Param("endRowNo") int endRowNo);
+
     int deleteStudentRowsByImportTaskId(@Param("importTaskId") String importTaskId);
 
     int deleteExpiredStudentVersions(@Param("retainCount") int retainCount,

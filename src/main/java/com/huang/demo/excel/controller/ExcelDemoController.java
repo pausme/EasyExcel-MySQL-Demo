@@ -150,6 +150,7 @@ public class ExcelDemoController {
     @ApiOperation("提交学生数据异步导入任务")
     @PostMapping(value = "/import", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ImportTaskResponse importExcel(@RequestParam("file") MultipartFile file,
+                                          @RequestParam(value = "mode", required = false) String mode,
                                           @RequestHeader(value = IdempotencyService.HEADER_NAME, required = false) String idempotencyKey,
                                           HttpServletRequest request) throws IOException {
         long start = System.currentTimeMillis();
@@ -160,12 +161,14 @@ public class ExcelDemoController {
                             "file",
                             file == null ? null : file.getOriginalFilename(),
                             file == null ? null : file.getContentType(),
-                            file == null ? null : file.getSize()),
+                            file == null ? null : file.getSize(),
+                            "mode",
+                            mode),
                     ImportTaskResponse.class,
                     () -> {
-                        AsyncTaskRecord task = studentImportTaskService.submitImport(file, ownerId);
-                        log.info("import task submitted, taskId={}, fileName={}, elapsedMs={}",
-                                task.getTaskId(), file.getOriginalFilename(), System.currentTimeMillis() - start);
+                        AsyncTaskRecord task = studentImportTaskService.submitImport(file, ownerId, mode);
+                        log.info("import task submitted, taskId={}, fileName={}, mode={}, elapsedMs={}",
+                                task.getTaskId(), file.getOriginalFilename(), mode, System.currentTimeMillis() - start);
                         return ImportTaskResponse.from(AsyncTaskResponse.from(task));
                     });
             return response;

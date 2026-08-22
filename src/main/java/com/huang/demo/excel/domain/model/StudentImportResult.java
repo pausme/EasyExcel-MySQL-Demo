@@ -13,5 +13,9 @@ public class StudentImportResult {
 
     private int importedCount;
 
+    private int validatedCount;
+
     private int batchCount;
+
+    private StudentImportMode importMode;
 }

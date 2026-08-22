@@ -13,6 +13,7 @@ import com.huang.demo.excel.api.dto.ImportPrecheckResponse;
 import com.huang.demo.excel.api.dto.ImportTaskResponse;
 import com.huang.demo.excel.config.ExcelDemoProperties;
 import com.huang.demo.excel.config.MinioProperties;
+import com.huang.demo.excel.domain.model.StudentImportMode;
 import com.huang.demo.excel.domain.model.StudentImportProgressCallback;
 import com.huang.demo.excel.domain.model.StudentImportResult;
 import com.huang.demo.excel.domain.model.StudentImportTaskPayload;
@@ -22,6 +23,7 @@ import com.huang.demo.excel.model.StudentExcelRow;
 import com.huang.demo.excel.model.StudentImportErrorRow;
 import com.huang.demo.excel.service.MinioObjectStorageService;
 import com.huang.demo.excel.service.StudentImportTaskService;
+import com.huang.demo.excel.service.StudentImportValidationService;
 import com.huang.demo.excel.service.StudentService;
 import com.huang.demo.task.api.dto.AsyncTaskResponse;
 import com.huang.demo.task.domain.entity.AsyncTaskRecord;
@@ -94,6 +96,7 @@ public class StudentImportTaskServiceImpl implements StudentImportTaskService, T
     private final TaskExecutionGuard taskExecutionGuard;
     private final CompensationService compensationService;
     private final TaskMetricsService taskMetricsService;
+    private final StudentImportValidationService studentImportValidationService;
 
     @Autowired
     public StudentImportTaskServiceImpl(StudentService studentService,
@@ -105,7 +108,8 @@ public class StudentImportTaskServiceImpl implements StudentImportTaskService, T
                                         MinioProperties minioProperties,
                                         TaskExecutionGuard taskExecutionGuard,
                                         CompensationService compensationService,
-                                        TaskMetricsService taskMetricsService) {
+                                        TaskMetricsService taskMetricsService,
+                                        StudentImportValidationService studentImportValidationService) {
         this.studentService = studentService;
         this.properties = properties;
         this.importTaskExecutor = importTaskExecutor;
@@ -116,6 +120,7 @@ public class StudentImportTaskServiceImpl implements StudentImportTaskService, T
         this.taskExecutionGuard = taskExecutionGuard;
         this.compensationService = compensationService;
         this.taskMetricsService = taskMetricsService;
+        this.studentImportValidationService = studentImportValidationService;
     }
 
     public StudentImportTaskServiceImpl(StudentService studentService,
@@ -127,7 +132,8 @@ public class StudentImportTaskServiceImpl implements StudentImportTaskService, T
                                         MinioProperties minioProperties) {
         this(studentService, properties, importTaskExecutor, taskCenterService,
                 objectMapper, minioObjectStorageService, minioProperties,
-                new TaskExecutionGuard(taskCenterService), CompensationService.noop(), null);
+                new TaskExecutionGuard(taskCenterService), CompensationService.noop(), null,
+                new StudentImportValidationServiceImpl(new com.huang.demo.excel.config.StudentImportValidationProperties()));
     }
 
     @PostConstruct
@@ -142,7 +148,13 @@ public class StudentImportTaskServiceImpl implements StudentImportTaskService, T
 
     @Override
     public AsyncTaskRecord submitImport(MultipartFile file, String ownerId) throws IOException {
+        return submitImport(file, ownerId, null);
+    }
+
+    @Override
+    public AsyncTaskRecord submitImport(MultipartFile file, String ownerId, String importMode) throws IOException {
         validateFile(file);
+        StudentImportMode safeImportMode = StudentImportMode.normalize(importMode);
         String businessKey = UUID.randomUUID().toString().replace("-", "");
         String originalName = normalizeOriginalName(file.getOriginalFilename());
         String sourceObjectKey = buildImportSourceObjectKey(businessKey, resolveSuffix(originalName));
@@ -166,6 +178,7 @@ public class StudentImportTaskServiceImpl implements StudentImportTaskService, T
                 .sourceObjectKey(sourceObjectKey)
                 .fileSize(file.getSize())
                 .batchSize(getImportBatchSize())
+                .importMode(safeImportMode.name())
                 .build();
         AsyncTaskRecord task;
         try {
@@ -340,16 +353,20 @@ public class StudentImportTaskServiceImpl implements StudentImportTaskService, T
             try (InputStream inputStream = openImportInputStream(payload)) {
                 putTaskMdc(task);
                 ImportTaskProgressCallback callback = new ImportTaskProgressCallback(taskId);
-                StudentImportResult result = studentService.importExcel(inputStream, payload.getBatchSize(), callback);
+                StudentImportMode importMode = StudentImportMode.normalize(payload.getImportMode());
+                StudentImportResult result = studentService.importExcel(inputStream, payload.getBatchSize(), importMode, callback);
                 AsyncTaskRecord completedTask = taskCenterService.markSuccess(taskId, toJson(StudentImportTaskResult.builder()
                         .importedCount(result.getImportedCount())
+                        .validatedCount(result.getValidatedCount())
                         .batchCount(result.getBatchCount())
+                        .importMode(result.getImportMode() == null ? importMode.name() : result.getImportMode().name())
                         .build()));
                 if (AsyncTaskStatus.SUCCESS.name().equals(completedTask.getStatus())) {
                     deleteLegacyTemporaryFile(payload);
                 }
-                log.info("import task finished, taskId={}, imported={}, batchCount={}, elapsedMs={}",
-                        taskId, result.getImportedCount(), result.getBatchCount(), System.currentTimeMillis() - start);
+                log.info("import task finished, taskId={}, mode={}, imported={}, validated={}, batchCount={}, elapsedMs={}",
+                        taskId, importMode, result.getImportedCount(), result.getValidatedCount(),
+                        result.getBatchCount(), System.currentTimeMillis() - start);
                 recordRowsProcessed("import", result.getImportedCount(), System.currentTimeMillis() - start);
             } catch (TaskCanceledException ex) {
                 log.info("import task canceled, taskId={}, elapsedMs={}", taskId, System.currentTimeMillis() - start);
@@ -563,7 +580,7 @@ public class StudentImportTaskServiceImpl implements StudentImportTaskService, T
 
     private List<StudentImportErrorRow> previewImportRowErrors(InputStream inputStream, int limit) {
         final List<StudentImportErrorRow> errorRows = new ArrayList<StudentImportErrorRow>();
-        final Map<String, Integer> studentNoFirstRows = new HashMap<String, Integer>();
+        final Map<String, Map<String, Integer>> uniqueFieldFirstRows = new HashMap<String, Map<String, Integer>>();
         try {
             EasyExcel.read(inputStream, StudentExcelRow.class, new AnalysisEventListener<StudentExcelRow>() {
                 private int dataIndex = 0;
@@ -572,7 +589,7 @@ public class StudentImportTaskServiceImpl implements StudentImportTaskService, T
                 public void invoke(StudentExcelRow data, AnalysisContext context) {
                     dataIndex++;
                     int rowNo = dataIndex + 1;
-                    StudentImportErrorRow errorRow = validatePreviewRow(data, rowNo, studentNoFirstRows);
+                    StudentImportErrorRow errorRow = validatePreviewRow(data, rowNo, uniqueFieldFirstRows);
                     if (errorRow != null) {
                         errorRows.add(errorRow);
                     }
@@ -594,41 +611,11 @@ public class StudentImportTaskServiceImpl implements StudentImportTaskService, T
 
     private StudentImportErrorRow validatePreviewRow(StudentExcelRow row,
                                                      int rowNo,
-                                                     Map<String, Integer> studentNoFirstRows) {
+                                                     Map<String, Map<String, Integer>> uniqueFieldFirstRows) {
         StudentExcelRow safeRow = row == null ? new StudentExcelRow() : row;
         StringJoiner errors = new StringJoiner("; ");
-        if (isBlank(safeRow.getStudentNo())) {
-            errors.add("学号不能为空");
-        } else if (safeRow.getStudentNo().length() > 32) {
-            errors.add("学号长度不能超过32");
-        } else {
-            String normalizedStudentNo = safeRow.getStudentNo().trim();
-            Integer firstRowNo = studentNoFirstRows.putIfAbsent(normalizedStudentNo, rowNo);
-            if (firstRowNo != null) {
-                errors.add("文件预览范围内学号重复，首次出现行号=" + firstRowNo);
-            }
-        }
-        if (isBlank(safeRow.getName())) {
-            errors.add("姓名不能为空");
-        } else if (safeRow.getName().length() > 64) {
-            errors.add("姓名长度不能超过64");
-        }
-        if (safeRow.getAge() != null && (safeRow.getAge() < 0 || safeRow.getAge() > 150)) {
-            errors.add("年龄必须在0到150之间");
-        }
-        if (safeRow.getGender() != null && safeRow.getGender().length() > 16) {
-            errors.add("性别长度不能超过16");
-        }
-        if (safeRow.getClassName() != null && safeRow.getClassName().length() > 64) {
-            errors.add("班级长度不能超过64");
-        }
-        if (safeRow.getEmail() != null && safeRow.getEmail().length() > 128) {
-            errors.add("邮箱长度不能超过128");
-        } else if (!isBlank(safeRow.getEmail()) && !isSimpleEmail(safeRow.getEmail())) {
-            errors.add("邮箱格式不正确");
-        }
-        if (safeRow.getBirthday() != null && safeRow.getBirthday().length() > 32) {
-            errors.add("生日长度不能超过32");
+        for (String error : studentImportValidationService.validatePreview(safeRow, rowNo, uniqueFieldFirstRows)) {
+            errors.add(error);
         }
         String errorMessage = errors.toString();
         if (errorMessage.isEmpty()) {

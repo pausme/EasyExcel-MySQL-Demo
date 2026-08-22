@@ -13,7 +13,34 @@ public interface FileRecordMapper {
 
     void createTableIfAbsent();
 
+    void createReferenceTableIfAbsent();
+
     int insert(FileRecord record);
+
+    int updateMetadata(@Param("ownerId") String ownerId,
+                       @Param("fileId") String fileId,
+                       @Param("bizType") String bizType,
+                       @Param("bizId") String bizId,
+                       @Param("tags") String tags);
+
+    int incrementReferenceCount(@Param("ownerId") String ownerId,
+                                @Param("fileId") String fileId);
+
+    int decrementReferenceCount(@Param("ownerId") String ownerId,
+                                @Param("fileId") String fileId);
+
+    int countReferences(@Param("ownerId") String ownerId,
+                        @Param("fileId") String fileId);
+
+    int addReference(@Param("ownerId") String ownerId,
+                     @Param("fileId") String fileId,
+                     @Param("referenceType") String referenceType,
+                     @Param("referenceId") String referenceId);
+
+    int removeReference(@Param("ownerId") String ownerId,
+                        @Param("fileId") String fileId,
+                        @Param("referenceType") String referenceType,
+                        @Param("referenceId") String referenceId);
 
     Optional<FileRecord> findNormalByFileId(@Param("ownerId") String ownerId,
                                             @Param("fileId") String fileId);
@@ -31,6 +58,9 @@ public interface FileRecordMapper {
                      @Param("fileMd5") String fileMd5,
                      @Param("status") String status,
                      @Param("uploadType") String uploadType,
+                     @Param("bizType") String bizType,
+                     @Param("bizId") String bizId,
+                     @Param("tags") List<String> tags,
                      @Param("minFileSize") Long minFileSize,
                      @Param("maxFileSize") Long maxFileSize,
                      @Param("createdFrom") LocalDateTime createdFrom,
@@ -51,6 +81,9 @@ public interface FileRecordMapper {
                                     @Param("fileMd5") String fileMd5,
                                     @Param("status") String status,
                                     @Param("uploadType") String uploadType,
+                                    @Param("bizType") String bizType,
+                                    @Param("bizId") String bizId,
+                                    @Param("tags") List<String> tags,
                                     @Param("minFileSize") Long minFileSize,
                                     @Param("maxFileSize") Long maxFileSize,
                                     @Param("createdFrom") LocalDateTime createdFrom,

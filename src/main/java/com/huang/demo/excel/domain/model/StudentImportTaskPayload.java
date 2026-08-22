@@ -20,4 +20,6 @@ public class StudentImportTaskPayload {
     private String temporaryFilePath;
 
     private int batchSize;
+
+    private String importMode;
 }

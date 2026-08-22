@@ -9,6 +9,8 @@ import com.huang.demo.file.api.dto.InstantUploadCheckResponse;
 import com.huang.demo.file.api.dto.MultipartPartsResponse;
 import com.huang.demo.file.api.dto.MultipartUploadInitRequest;
 import com.huang.demo.file.api.dto.MultipartUploadInitResponse;
+import com.huang.demo.file.api.dto.FileMetadataUpdateRequest;
+import com.huang.demo.file.api.dto.FileReferenceRequest;
 import com.huang.demo.file.domain.entity.FileRecord;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -38,6 +40,12 @@ public interface FileCenterService {
     Optional<FileRecord> findNormalFile(String fileId);
 
     Optional<String> createDownloadUrl(String fileId);
+
+    FileRecord bindMetadata(String fileId, FileMetadataUpdateRequest request);
+
+    FileRecord addReference(String fileId, FileReferenceRequest request);
+
+    FileRecord removeReference(String fileId, FileReferenceRequest request);
 
     void delete(String fileId);
 

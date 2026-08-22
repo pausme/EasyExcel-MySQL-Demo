@@ -154,13 +154,13 @@ class ExcelDemoControllerTest {
                 .updatedAt(LocalDateTime.now())
                 .expireAt(LocalDateTime.now().plusHours(1))
                 .build();
-        when(studentImportTaskService.submitImport(any(MockMultipartFile.class), eq("anonymous"))).thenReturn(task);
+        when(studentImportTaskService.submitImport(any(MockMultipartFile.class), eq("anonymous"), eq("APPEND"))).thenReturn(task);
 
-        ImportTaskResponse response = controller.importExcel(file, null, request);
+        ImportTaskResponse response = controller.importExcel(file, "APPEND", null, request);
 
         assertEquals("task-1", response.getTaskId());
         assertEquals("CREATED", response.getStatus());
-        verify(studentImportTaskService).submitImport(file, "anonymous");
+        verify(studentImportTaskService).submitImport(file, "anonymous", "APPEND");
     }
 
     @Test

@@ -17,7 +17,11 @@ public class StudentImportTaskResult {
 
     private int importedCount;
 
+    private int validatedCount;
+
     private int batchCount;
+
+    private String importMode;
 
     private int errorCount;
 
