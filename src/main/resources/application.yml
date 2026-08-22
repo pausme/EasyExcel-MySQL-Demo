@@ -33,10 +33,25 @@ mybatis:
 
 app:
   security:
+    init-enabled: ${API_SECURITY_INIT_ENABLED:true}
     demo-mode: ${API_SECURITY_DEMO_MODE:true}
     demo-user-token: ${API_SECURITY_DEMO_USER_TOKEN:}
     demo-admin-token: ${API_SECURITY_DEMO_ADMIN_TOKEN:}
     demo-default-user-id: ${TASK_CENTER_DEFAULT_OWNER_ID:anonymous}
+    jwt-secret: ${API_SECURITY_JWT_SECRET:}
+    access-token-expire-minutes: ${API_SECURITY_ACCESS_TOKEN_EXPIRE_MINUTES:60}
+    refresh-token-expire-minutes: ${API_SECURITY_REFRESH_TOKEN_EXPIRE_MINUTES:10080}
+    bootstrap-admin-enabled: ${API_SECURITY_BOOTSTRAP_ADMIN_ENABLED:false}
+    bootstrap-admin-user-id: ${API_SECURITY_BOOTSTRAP_ADMIN_USER_ID:admin}
+    bootstrap-admin-username: ${API_SECURITY_BOOTSTRAP_ADMIN_USERNAME:}
+    bootstrap-admin-password: ${API_SECURITY_BOOTSTRAP_ADMIN_PASSWORD:}
+  resilience:
+    rate-limit:
+      enabled: ${RATE_LIMIT_ENABLED:true}
+      window-seconds: ${RATE_LIMIT_WINDOW_SECONDS:60}
+      user-limit: ${RATE_LIMIT_USER_LIMIT:30}
+      global-limit: ${RATE_LIMIT_GLOBAL_LIMIT:300}
+      cleanup-max-keys: ${RATE_LIMIT_CLEANUP_MAX_KEYS:1000}
   task:
     init-enabled: ${TASK_CENTER_INIT_ENABLED:true}
     redis-key-prefix: ${TASK_CENTER_REDIS_KEY_PREFIX:task:center:}
@@ -89,6 +104,12 @@ app:
     export-queue-capacity: ${EXPORT_QUEUE_CAPACITY:10}
     export-await-termination-seconds: ${EXPORT_AWAIT_TERMINATION_SECONDS:30}
     export-rejected-execution-policy: ${EXPORT_REJECTED_EXECUTION_POLICY:abort}
+    task-compensation-enabled: ${EXCEL_TASK_COMPENSATION_ENABLED:true}
+    task-compensation-initial-delay-millis: ${EXCEL_TASK_COMPENSATION_INITIAL_DELAY_MILLIS:600000}
+    task-compensation-fixed-delay-millis: ${EXCEL_TASK_COMPENSATION_FIXED_DELAY_MILLIS:3600000}
+    task-compensation-batch-size: ${EXCEL_TASK_COMPENSATION_BATCH_SIZE:100}
+    task-compensation-lock-key: ${EXCEL_TASK_COMPENSATION_LOCK_KEY:task:compensation:lock}
+    task-compensation-lock-ttl-seconds: ${EXCEL_TASK_COMPENSATION_LOCK_TTL_SECONDS:300}
   minio:
     endpoint: ${MINIO_ENDPOINT}
     public-endpoint: ${MINIO_PUBLIC_ENDPOINT:}
@@ -102,6 +123,11 @@ app:
     lifecycle-enabled: ${MINIO_LIFECYCLE_ENABLED:true}
     lifecycle-expire-days: ${MINIO_LIFECYCLE_EXPIRE_DAYS:1}
     import-source-retention-days: ${MINIO_IMPORT_SOURCE_RETENTION_DAYS:1}
+    connect-timeout-millis: ${MINIO_CONNECT_TIMEOUT_MILLIS:3000}
+    write-timeout-millis: ${MINIO_WRITE_TIMEOUT_MILLIS:60000}
+    read-timeout-millis: ${MINIO_READ_TIMEOUT_MILLIS:60000}
+    max-retry-times: ${MINIO_MAX_RETRY_TIMES:2}
+    retry-backoff-millis: ${MINIO_RETRY_BACKOFF_MILLIS:200}
   file:
     init-enabled: ${FILE_CENTER_INIT_ENABLED:true}
     object-prefix: ${FILE_CENTER_OBJECT_PREFIX:files/general}
@@ -117,6 +143,13 @@ app:
     max-total-storage-bytes-per-owner: ${FILE_CENTER_MAX_TOTAL_STORAGE_BYTES_PER_OWNER:0}
     max-active-upload-tasks-per-owner: ${FILE_CENTER_MAX_ACTIVE_UPLOAD_TASKS_PER_OWNER:20}
     max-daily-upload-count-per-owner: ${FILE_CENTER_MAX_DAILY_UPLOAD_COUNT_PER_OWNER:0}
+    reconciliation-enabled: ${FILE_CENTER_RECONCILIATION_ENABLED:true}
+    reconciliation-initial-delay-millis: ${FILE_CENTER_RECONCILIATION_INITIAL_DELAY_MILLIS:600000}
+    reconciliation-fixed-delay-millis: ${FILE_CENTER_RECONCILIATION_FIXED_DELAY_MILLIS:3600000}
+    reconciliation-batch-size: ${FILE_CENTER_RECONCILIATION_BATCH_SIZE:200}
+    reconciliation-upload-stale-hours: ${FILE_CENTER_RECONCILIATION_UPLOAD_STALE_HOURS:24}
+    reconciliation-lock-key: ${FILE_CENTER_RECONCILIATION_LOCK_KEY:file:reconciliation:lock}
+    reconciliation-lock-ttl-seconds: ${FILE_CENTER_RECONCILIATION_LOCK_TTL_SECONDS:1800}
     cors-enabled: ${FILE_CENTER_CORS_ENABLED:true}
     cors-allowed-origin-patterns: ${FILE_CENTER_CORS_ALLOWED_ORIGIN_PATTERNS:http://localhost:*,http://127.0.0.1:*,null}
     security-scan-enabled: ${FILE_CENTER_SECURITY_SCAN_ENABLED:true}

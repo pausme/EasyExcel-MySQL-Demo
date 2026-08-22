@@ -2,6 +2,7 @@ package com.huang.demo.task.monitor;
 
 import com.huang.demo.task.domain.entity.AsyncTaskRecord;
 import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.DistributionSummary;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Tags;
 import io.micrometer.core.instrument.Timer;
@@ -31,6 +32,66 @@ public class TaskMetricsService {
         recordDuration(record);
     }
 
+    public void recordThreadPoolRejected(String poolName) {
+        Counter.builder("demo.thread.pool.rejected.total")
+                .description("Thread pool rejected task count")
+                .tag("pool", normalizeTag(poolName))
+                .register(meterRegistry)
+                .increment();
+    }
+
+    public void recordRowsProcessed(String scene, long rows, long elapsedMs) {
+        if (rows < 0L || elapsedMs < 0L) {
+            return;
+        }
+        String normalizedScene = normalizeTag(scene);
+        Counter.builder("demo.excel.rows.total")
+                .description("Excel rows processed")
+                .tag("scene", normalizedScene)
+                .register(meterRegistry)
+                .increment(rows);
+        Timer.builder("demo.excel.process.duration")
+                .description("Excel import/export processing duration")
+                .tag("scene", normalizedScene)
+                .register(meterRegistry)
+                .record(Duration.ofMillis(elapsedMs));
+        if (elapsedMs > 0L) {
+            double rowsPerSecond = rows * 1000.0D / elapsedMs;
+            DistributionSummary.builder("demo.excel.row.rate")
+                    .description("Excel row processing rate")
+                    .tag("scene", normalizedScene)
+                    .baseUnit("rows_per_second")
+                    .register(meterRegistry)
+                    .record(rowsPerSecond);
+        }
+    }
+
+    public void recordStorageUpload(String scene, long elapsedMs, boolean success) {
+        String normalizedScene = normalizeTag(scene);
+        Timer.builder("demo.storage.upload.duration")
+                .description("Storage upload duration")
+                .tags("scene", normalizedScene, "success", String.valueOf(success))
+                .register(meterRegistry)
+                .record(Duration.ofMillis(Math.max(0L, elapsedMs)));
+    }
+
+    public void recordErrorFile(String outcome) {
+        Counter.builder("demo.excel.error.file.total")
+                .description("Import error file generation count")
+                .tag("outcome", normalizeTag(outcome))
+                .register(meterRegistry)
+                .increment();
+    }
+
+    public void recordCompensationBacklog(String status, long count) {
+        DistributionSummary.builder("demo.compensation.backlog")
+                .description("Compensation backlog sample")
+                .tag("status", normalizeTag(status))
+                .baseUnit("records")
+                .register(meterRegistry)
+                .record(Math.max(0L, count));
+    }
+
     private void increment(String outcome, AsyncTaskRecord record) {
         if (record == null) {
             return;
@@ -57,5 +118,13 @@ public class TaskMetricsService {
                 .tags("taskType", record.getTaskType(), "status", record.getStatus())
                 .register(meterRegistry)
                 .record(Duration.ofMillis(millis));
+    }
+
+    private String normalizeTag(String value) {
+        if (value == null || value.trim().isEmpty()) {
+            return "UNKNOWN";
+        }
+        String normalized = value.trim();
+        return normalized.length() > 64 ? normalized.substring(0, 64) : normalized;
     }
 }

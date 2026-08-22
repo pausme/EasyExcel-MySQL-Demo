@@ -2,6 +2,7 @@ package com.huang.demo.task.service;
 
 import com.huang.demo.task.api.dto.AsyncTaskPageQueryRequest;
 import com.huang.demo.task.api.dto.AsyncTaskPageResponse;
+import com.huang.demo.task.api.dto.AsyncTaskEventResponse;
 import com.huang.demo.task.domain.entity.AsyncTaskRecord;
 import com.huang.demo.task.domain.model.CreateAsyncTaskCommand;
 import com.huang.demo.task.domain.model.MarkAsyncTaskFailedCommand;
@@ -49,6 +50,8 @@ public interface TaskCenterService {
                                                    String taskType,
                                                    String businessKey,
                                                    AsyncTaskPageQueryRequest request);
+
+    List<AsyncTaskEventResponse> listTaskEvents(String taskId, String ownerId);
 
     List<AsyncTaskRecord> listRecoverableTasks(int limit);
 

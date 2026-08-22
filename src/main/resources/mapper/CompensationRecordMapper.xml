@@ -99,4 +99,88 @@
         WHERE compensation_id = #{compensationId}
           AND status IN ('PENDING', 'RUNNING', 'FAILED')
     </update>
+
+    <update id="markPendingForRetry">
+        UPDATE compensation_record
+        SET status = 'PENDING',
+            next_retry_at = #{nextRetryAt},
+            last_error = NULL,
+            updated_at = #{updatedAt},
+            completed_at = NULL
+        WHERE compensation_id = #{compensationId}
+          AND status IN ('PENDING', 'FAILED')
+    </update>
+
+    <update id="markIgnored">
+        UPDATE compensation_record
+        SET status = 'IGNORED',
+            updated_at = #{updatedAt},
+            completed_at = #{updatedAt}
+        WHERE compensation_id = #{compensationId}
+          AND status IN ('PENDING', 'RUNNING', 'FAILED')
+    </update>
+
+    <select id="countByStatuses" resultType="long">
+        SELECT COUNT(*)
+        FROM compensation_record
+        WHERE status IN
+        <foreach collection="statuses" item="status" open="(" separator="," close=")">
+            #{status}
+        </foreach>
+    </select>
+
+    <select id="listRecentByStatuses" resultMap="CompensationRecordMap">
+        SELECT id, compensation_id, biz_type, biz_id, failure_type, status,
+               retry_count, max_retry_count, next_retry_at, payload, last_error,
+               created_at, updated_at, completed_at
+        FROM compensation_record
+        WHERE status IN
+        <foreach collection="statuses" item="status" open="(" separator="," close=")">
+            #{status}
+        </foreach>
+        ORDER BY id DESC
+        LIMIT #{limit}
+    </select>
+
+    <sql id="CompensationPageWhere">
+        <where>
+            <if test="bizType != null and bizType != ''">
+                AND biz_type = #{bizType}
+            </if>
+            <if test="bizId != null and bizId != ''">
+                AND biz_id = #{bizId}
+            </if>
+            <if test="failureType != null and failureType != ''">
+                AND failure_type = #{failureType}
+            </if>
+            <if test="statuses != null and statuses.size() > 0">
+                AND status IN
+                <foreach collection="statuses" item="status" open="(" separator="," close=")">
+                    #{status}
+                </foreach>
+            </if>
+            <if test="createdFrom != null">
+                AND created_at &gt;= #{createdFrom}
+            </if>
+            <if test="createdTo != null">
+                AND created_at &lt;= #{createdTo}
+            </if>
+        </where>
+    </sql>
+
+    <select id="countPage" resultType="long">
+        SELECT COUNT(*)
+        FROM compensation_record
+        <include refid="CompensationPageWhere"/>
+    </select>
+
+    <select id="listPage" resultMap="CompensationRecordMap">
+        SELECT id, compensation_id, biz_type, biz_id, failure_type, status,
+               retry_count, max_retry_count, next_retry_at, payload, last_error,
+               created_at, updated_at, completed_at
+        FROM compensation_record
+        <include refid="CompensationPageWhere"/>
+        ORDER BY id DESC
+        LIMIT #{limit} OFFSET #{offset}
+    </select>
 </mapper>

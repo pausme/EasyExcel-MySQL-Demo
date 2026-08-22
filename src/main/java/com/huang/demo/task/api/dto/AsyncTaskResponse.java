@@ -45,6 +45,8 @@ public class AsyncTaskResponse {
 
     private final String failureSuggestion;
 
+    private final String traceId;
+
     private final Boolean canRetry;
 
     private final Integer remainingRetryCount;
@@ -68,6 +70,10 @@ public class AsyncTaskResponse {
     private final LocalDateTime expireAt;
 
     public static AsyncTaskResponse from(AsyncTaskRecord record) {
+        return from(record, null);
+    }
+
+    public static AsyncTaskResponse from(AsyncTaskRecord record, List<AsyncTaskEventResponse> persistedEvents) {
         return AsyncTaskResponse.builder()
                 .taskId(record.getTaskId())
                 .ownerId(record.getOwnerId())
@@ -84,12 +90,14 @@ public class AsyncTaskResponse {
                 .failureType(toFailureType(record.getFailureType()))
                 .retryable(record.getRetryable())
                 .failureSuggestion(record.getFailureSuggestion())
+                .traceId(record.getTraceId())
                 .canRetry(canRetry(record))
                 .remainingRetryCount(remainingRetryCount(record))
                 .durationMs(durationMs(record))
                 .workerId(record.getWorkerId())
                 .lastHeartbeatAt(record.getLastHeartbeatAt())
-                .lifecycleEvents(lifecycleEvents(record))
+                .lifecycleEvents(persistedEvents == null || persistedEvents.isEmpty()
+                        ? lifecycleEvents(record) : persistedEvents)
                 .createdAt(record.getCreatedAt())
                 .updatedAt(record.getUpdatedAt())
                 .startedAt(record.getStartedAt())

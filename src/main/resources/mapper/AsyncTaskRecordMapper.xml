@@ -23,6 +23,7 @@
         <result property="failureType" column="failure_type"/>
         <result property="retryable" column="retryable"/>
         <result property="failureSuggestion" column="failure_suggestion"/>
+        <result property="traceId" column="trace_id"/>
         <result property="workerId" column="worker_id"/>
         <result property="lastHeartbeatAt" column="last_heartbeat_at"/>
         <result property="createdAt" column="created_at"/>
@@ -35,7 +36,7 @@
     <sql id="BaseColumns">
         id, task_id, owner_id, task_type, task_name, business_key, status,
         progress_percent, total_count, completed_count, retry_count, max_retry_count,
-        request_payload, result_payload, error_message, failure_type, retryable, failure_suggestion,
+        request_payload, result_payload, error_message, failure_type, retryable, failure_suggestion, trace_id,
         worker_id, last_heartbeat_at, created_at, updated_at,
         started_at, finished_at, expire_at
     </sql>
@@ -60,6 +61,7 @@
             failure_type VARCHAR(32),
             retryable TINYINT(1),
             failure_suggestion VARCHAR(512),
+            trace_id VARCHAR(64),
             worker_id VARCHAR(128),
             last_heartbeat_at DATETIME,
             created_at DATETIME NOT NULL,
@@ -81,14 +83,14 @@
         INSERT INTO async_task_record (
             task_id, owner_id, task_type, task_name, business_key, status,
             progress_percent, total_count, completed_count, retry_count, max_retry_count,
-            request_payload, result_payload, error_message, failure_type, retryable, failure_suggestion,
+            request_payload, result_payload, error_message, failure_type, retryable, failure_suggestion, trace_id,
             worker_id, last_heartbeat_at, created_at, updated_at,
             started_at, finished_at, expire_at
         )
         VALUES (
             #{taskId}, #{ownerId}, #{taskType}, #{taskName}, #{businessKey}, #{status},
             #{progressPercent}, #{totalCount}, #{completedCount}, #{retryCount}, #{maxRetryCount},
-            #{requestPayload}, #{resultPayload}, #{errorMessage}, #{failureType}, #{retryable}, #{failureSuggestion},
+            #{requestPayload}, #{resultPayload}, #{errorMessage}, #{failureType}, #{retryable}, #{failureSuggestion}, #{traceId},
             #{workerId}, #{lastHeartbeatAt}, #{createdAt}, #{updatedAt},
             #{startedAt}, #{finishedAt}, #{expireAt}
         )
@@ -112,6 +114,7 @@
             failure_type = #{failureType},
             retryable = #{retryable},
             failure_suggestion = #{failureSuggestion},
+            trace_id = #{traceId},
             worker_id = #{workerId},
             last_heartbeat_at = #{lastHeartbeatAt},
             updated_at = #{updatedAt},
@@ -156,15 +159,54 @@
           AND status IN ('CREATED', 'RUNNING')
     </select>
 
+    <select id="countCreatedAtOrAfter" resultType="long">
+        SELECT COUNT(*)
+        FROM async_task_record
+        WHERE created_at &gt;= #{createdAt}
+    </select>
+
+    <select id="countByStatusCreatedAtOrAfter" resultType="long">
+        SELECT COUNT(*)
+        FROM async_task_record
+        WHERE status = #{status}
+          AND created_at &gt;= #{createdAt}
+    </select>
+
+    <select id="countByStatuses" resultType="long">
+        SELECT COUNT(*)
+        FROM async_task_record
+        WHERE status IN
+        <foreach collection="statuses" item="status" open="(" separator="," close=")">
+            #{status}
+        </foreach>
+    </select>
+
+    <select id="listRecentByStatuses" resultMap="AsyncTaskRecordMap">
+        SELECT <include refid="BaseColumns"/>
+        FROM async_task_record
+        WHERE status IN
+        <foreach collection="statuses" item="status" open="(" separator="," close=")">
+            #{status}
+        </foreach>
+        ORDER BY id DESC
+        LIMIT #{limit}
+    </select>
+
     <select id="countByOwner" resultType="long">
         SELECT COUNT(*)
         FROM async_task_record
         WHERE owner_id = #{ownerId}
-        <if test="taskType != null and taskType != ''">
-            AND task_type = #{taskType}
+        <if test="taskTypes != null and taskTypes.size() > 0">
+            AND task_type IN
+            <foreach collection="taskTypes" item="taskType" open="(" separator="," close=")">
+                #{taskType}
+            </foreach>
         </if>
-        <if test="status != null and status != ''">
-            AND status = #{status}
+        <if test="statuses != null and statuses.size() > 0">
+            AND status IN
+            <foreach collection="statuses" item="status" open="(" separator="," close=")">
+                #{status}
+            </foreach>
         </if>
         <if test="businessKey != null and businessKey != ''">
             AND business_key = #{businessKey}
@@ -185,6 +227,15 @@
         </if>
         <if test="createdTo != null">
             AND created_at &lt;= #{createdTo}
+        </if>
+        <if test="minProgress != null">
+            AND progress_percent &gt;= #{minProgress}
+        </if>
+        <if test="maxProgress != null">
+            AND progress_percent &lt;= #{maxProgress}
+        </if>
+        <if test="retryable != null">
+            AND retryable = #{retryable}
         </if>
     </select>
 
@@ -192,11 +243,17 @@
         SELECT <include refid="BaseColumns"/>
         FROM async_task_record
         WHERE owner_id = #{ownerId}
-        <if test="taskType != null and taskType != ''">
-            AND task_type = #{taskType}
+        <if test="taskTypes != null and taskTypes.size() > 0">
+            AND task_type IN
+            <foreach collection="taskTypes" item="taskType" open="(" separator="," close=")">
+                #{taskType}
+            </foreach>
         </if>
-        <if test="status != null and status != ''">
-            AND status = #{status}
+        <if test="statuses != null and statuses.size() > 0">
+            AND status IN
+            <foreach collection="statuses" item="status" open="(" separator="," close=")">
+                #{status}
+            </foreach>
         </if>
         <if test="businessKey != null and businessKey != ''">
             AND business_key = #{businessKey}
@@ -218,7 +275,16 @@
         <if test="createdTo != null">
             AND created_at &lt;= #{createdTo}
         </if>
-        ORDER BY id DESC
+        <if test="minProgress != null">
+            AND progress_percent &gt;= #{minProgress}
+        </if>
+        <if test="maxProgress != null">
+            AND progress_percent &lt;= #{maxProgress}
+        </if>
+        <if test="retryable != null">
+            AND retryable = #{retryable}
+        </if>
+        ORDER BY ${orderBy}
         LIMIT #{limit} OFFSET #{offset}
     </select>
 
@@ -279,6 +345,16 @@
                 status = 'RUNNING'
                 AND (last_heartbeat_at IS NULL OR last_heartbeat_at &lt;= #{heartbeatBefore})
               )
+        ORDER BY id ASC
+        LIMIT #{limit}
+    </select>
+
+    <select id="listByTypeAndStatusAfterId" resultMap="AsyncTaskRecordMap">
+        SELECT <include refid="BaseColumns"/>
+        FROM async_task_record
+        WHERE task_type = #{taskType}
+          AND status = #{status}
+          AND id &gt; #{lastId}
         ORDER BY id ASC
         LIMIT #{limit}
     </select>

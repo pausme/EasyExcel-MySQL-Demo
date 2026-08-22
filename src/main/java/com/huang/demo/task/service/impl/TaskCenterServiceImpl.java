@@ -5,7 +5,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huang.demo.task.api.dto.AsyncTaskPageQueryRequest;
 import com.huang.demo.task.api.dto.AsyncTaskPageResponse;
 import com.huang.demo.task.api.dto.AsyncTaskResponse;
+import com.huang.demo.task.api.dto.AsyncTaskEventResponse;
 import com.huang.demo.task.config.TaskCenterProperties;
+import com.huang.demo.task.domain.entity.AsyncTaskEventLog;
 import com.huang.demo.task.domain.entity.AsyncTaskRecord;
 import com.huang.demo.task.domain.model.AsyncTaskFailureType;
 import com.huang.demo.task.domain.model.AsyncTaskStatus;
@@ -13,8 +15,11 @@ import com.huang.demo.task.domain.model.AsyncTaskType;
 import com.huang.demo.task.domain.model.CreateAsyncTaskCommand;
 import com.huang.demo.task.domain.model.MarkAsyncTaskFailedCommand;
 import com.huang.demo.task.monitor.TaskMetricsService;
+import com.huang.demo.task.repository.AsyncTaskEventLogMapper;
 import com.huang.demo.task.repository.AsyncTaskRecordMapper;
 import com.huang.demo.task.service.TaskCenterService;
+import com.huang.demo.common.web.RequestTraceFilter;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -27,6 +32,7 @@ import java.io.IOException;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -37,23 +43,35 @@ public class TaskCenterServiceImpl implements TaskCenterService {
     private static final Logger log = LoggerFactory.getLogger(TaskCenterServiceImpl.class);
 
     private final AsyncTaskRecordMapper taskRecordMapper;
+    private final AsyncTaskEventLogMapper taskEventLogMapper;
     private final StringRedisTemplate stringRedisTemplate;
     private final ObjectMapper objectMapper;
     private final TaskCenterProperties properties;
     private final TaskMetricsService taskMetricsService;
     private final String workerId;
 
+    @Autowired
     public TaskCenterServiceImpl(AsyncTaskRecordMapper taskRecordMapper,
+                                 AsyncTaskEventLogMapper taskEventLogMapper,
                                  StringRedisTemplate stringRedisTemplate,
                                  ObjectMapper objectMapper,
                                  TaskCenterProperties properties,
                                  TaskMetricsService taskMetricsService) {
         this.taskRecordMapper = taskRecordMapper;
+        this.taskEventLogMapper = taskEventLogMapper;
         this.stringRedisTemplate = stringRedisTemplate;
         this.objectMapper = objectMapper;
         this.properties = properties;
         this.taskMetricsService = taskMetricsService;
         this.workerId = resolveWorkerId(properties);
+    }
+
+    public TaskCenterServiceImpl(AsyncTaskRecordMapper taskRecordMapper,
+                                 StringRedisTemplate stringRedisTemplate,
+                                 ObjectMapper objectMapper,
+                                 TaskCenterProperties properties,
+                                 TaskMetricsService taskMetricsService) {
+        this(taskRecordMapper, null, stringRedisTemplate, objectMapper, properties, taskMetricsService);
     }
 
     @PostConstruct
@@ -63,6 +81,9 @@ public class TaskCenterServiceImpl implements TaskCenterService {
             return;
         }
         taskRecordMapper.createTableIfAbsent();
+        if (taskEventLogMapper != null) {
+            taskEventLogMapper.createTableIfAbsent();
+        }
         log.info("task center initialized");
     }
 
@@ -87,6 +108,7 @@ public class TaskCenterServiceImpl implements TaskCenterService {
                 .retryCount(0)
                 .maxRetryCount(normalizeMaxRetryCount(command.getMaxRetryCount()))
                 .requestPayload(command.getRequestPayload())
+                .traceId(normalizeTraceId(command.getTraceId()))
                 .createdAt(now)
                 .updatedAt(now)
                 .expireAt(now.plusHours(Math.max(1, properties.getCacheRetentionHours())))
@@ -94,6 +116,7 @@ public class TaskCenterServiceImpl implements TaskCenterService {
         taskRecordMapper.insert(record);
         cacheTaskQuietly(record);
         taskMetricsService.recordSubmitted(record);
+        recordTaskEvent(record, "CREATED", "任务已创建");
         return record;
     }
 
@@ -146,6 +169,7 @@ public class TaskCenterServiceImpl implements TaskCenterService {
         AsyncTaskRecord record = claimedTask.get();
         cacheTaskQuietly(record);
         taskMetricsService.recordStatusChanged(record);
+        recordTaskEvent(record, "RUNNING", "任务开始执行");
         return Optional.of(record);
     }
 
@@ -165,6 +189,7 @@ public class TaskCenterServiceImpl implements TaskCenterService {
         record.setLastHeartbeatAt(now);
         record.setUpdatedAt(now);
         updateRequired(record);
+        recordTaskEvent(record, "PROGRESS", "任务进度更新");
         return record;
     }
 
@@ -194,6 +219,7 @@ public class TaskCenterServiceImpl implements TaskCenterService {
         record.setFinishedAt(now);
         updateRequired(record);
         taskMetricsService.recordStatusChanged(record);
+        recordTaskEvent(record, "SUCCESS", "任务执行成功");
         return record;
     }
 
@@ -245,6 +271,7 @@ public class TaskCenterServiceImpl implements TaskCenterService {
         record.setFinishedAt(now);
         updateRequired(record);
         taskMetricsService.recordStatusChanged(record);
+        recordTaskEvent(record, "FAILED", record.getErrorMessage());
         return record;
     }
 
@@ -269,6 +296,7 @@ public class TaskCenterServiceImpl implements TaskCenterService {
         record.setFinishedAt(now);
         updateRequired(record);
         taskMetricsService.recordStatusChanged(record);
+        recordTaskEvent(record, "EXPIRED", record.getErrorMessage());
         return record;
     }
 
@@ -292,6 +320,7 @@ public class TaskCenterServiceImpl implements TaskCenterService {
         record.setLastHeartbeatAt(now);
         updateRequired(record);
         taskMetricsService.recordStatusChanged(record);
+        recordTaskEvent(record, "CANCELED", record.getErrorMessage());
         return true;
     }
 
@@ -345,6 +374,7 @@ public class TaskCenterServiceImpl implements TaskCenterService {
         record.setUpdatedAt(now);
         record.setExpireAt(now.plusHours(Math.max(1, properties.getCacheRetentionHours())));
         updateRequired(record);
+        recordTaskEvent(record, "RETRY", "任务已重新排队");
         return record;
     }
 
@@ -354,24 +384,30 @@ public class TaskCenterServiceImpl implements TaskCenterService {
         String normalizedOwnerId = normalizeOwnerId(ownerId);
         int pageNo = normalizePageNo(safeRequest.getPageNo());
         int pageSize = normalizePageSize(safeRequest.getPageSize());
-        String taskType = normalizeOptionalTaskType(safeRequest.getTaskType());
-        String status = normalizeOptionalStatus(safeRequest.getStatus());
+        List<String> taskTypes = normalizeTaskTypes(safeRequest);
+        List<String> statuses = normalizeStatuses(safeRequest);
         String businessKey = normalizeBusinessKey(safeRequest.getBusinessKey());
         String failureType = normalizeOptionalFailureType(safeRequest.getFailureType());
         String keyword = normalizeKeyword(safeRequest.getKeyword());
         LocalDateTime createdFrom = safeRequest.getCreatedFrom();
         LocalDateTime createdTo = safeRequest.getCreatedTo();
         validateTimeRange(createdFrom, createdTo);
+        Integer minProgress = normalizeOptionalProgress(safeRequest.getMinProgress());
+        Integer maxProgress = normalizeOptionalProgress(safeRequest.getMaxProgress());
+        validateProgressRange(minProgress, maxProgress);
+        String orderBy = resolveTaskOrderBy(safeRequest.getSortBy(), safeRequest.getSortDirection());
         int offset = (pageNo - 1) * pageSize;
 
         long total = taskRecordMapper.countByOwner(
-                normalizedOwnerId, taskType, status, businessKey, failureType, keyword, createdFrom, createdTo);
+                normalizedOwnerId, taskTypes, statuses, businessKey, failureType, keyword, createdFrom, createdTo,
+                minProgress, maxProgress, safeRequest.getRetryable());
         List<AsyncTaskRecord> records = taskRecordMapper.listByOwnerPage(
-                normalizedOwnerId, taskType, status, businessKey, failureType, keyword, createdFrom, createdTo,
-                offset, pageSize);
+                normalizedOwnerId, taskTypes, statuses, businessKey, failureType, keyword, createdFrom, createdTo,
+                minProgress, maxProgress, safeRequest.getRetryable(), orderBy, offset, pageSize);
         List<AsyncTaskResponse> responses = new ArrayList<AsyncTaskResponse>(records.size());
         for (AsyncTaskRecord record : records) {
-            responses.add(AsyncTaskResponse.from(refreshExpiredIfNecessary(record)));
+            AsyncTaskRecord refreshed = refreshExpiredIfNecessary(record);
+            responses.add(AsyncTaskResponse.from(refreshed, listTaskEvents(refreshed.getTaskId(), normalizedOwnerId)));
         }
         return AsyncTaskPageResponse.builder()
                 .total(total)
@@ -409,6 +445,21 @@ public class TaskCenterServiceImpl implements TaskCenterService {
                 .pageSize(pageSize)
                 .records(responses)
                 .build();
+    }
+
+    @Override
+    public List<AsyncTaskEventResponse> listTaskEvents(String taskId, String ownerId) {
+        if (taskEventLogMapper == null) {
+            return Collections.emptyList();
+        }
+        AsyncTaskRecord record = findTaskRequired(taskId);
+        assertOwner(record, ownerId);
+        List<AsyncTaskEventLog> eventLogs = taskEventLogMapper.listByTaskId(normalizeTaskId(taskId), 200);
+        List<AsyncTaskEventResponse> responses = new ArrayList<AsyncTaskEventResponse>(eventLogs.size());
+        for (AsyncTaskEventLog eventLog : eventLogs) {
+            responses.add(AsyncTaskEventResponse.from(eventLog));
+        }
+        return responses;
     }
 
     @Override
@@ -488,6 +539,7 @@ public class TaskCenterServiceImpl implements TaskCenterService {
         record.setFinishedAt(now);
         updateRequired(record);
         taskMetricsService.recordStatusChanged(record);
+        recordTaskEvent(record, "EXPIRED", "任务已过期");
         return record;
     }
 
@@ -589,6 +641,23 @@ public class TaskCenterServiceImpl implements TaskCenterService {
         return normalizeTaskType(taskType);
     }
 
+    private List<String> normalizeTaskTypes(AsyncTaskPageQueryRequest request) {
+        List<String> result = new ArrayList<String>();
+        String single = normalizeOptionalTaskType(request.getTaskType());
+        if (single != null) {
+            result.add(single);
+        }
+        if (request.getTaskTypes() != null) {
+            for (String taskType : request.getTaskTypes()) {
+                String normalized = normalizeOptionalTaskType(taskType);
+                if (normalized != null && !result.contains(normalized)) {
+                    result.add(normalized);
+                }
+            }
+        }
+        return result;
+    }
+
     private String normalizeOptionalStatus(String status) {
         if (status == null || status.trim().isEmpty()) {
             return null;
@@ -596,6 +665,23 @@ public class TaskCenterServiceImpl implements TaskCenterService {
         String normalized = status.trim().toUpperCase();
         AsyncTaskStatus.valueOf(normalized);
         return normalized;
+    }
+
+    private List<String> normalizeStatuses(AsyncTaskPageQueryRequest request) {
+        List<String> result = new ArrayList<String>();
+        String single = normalizeOptionalStatus(request.getStatus());
+        if (single != null) {
+            result.add(single);
+        }
+        if (request.getStatuses() != null) {
+            for (String status : request.getStatuses()) {
+                String normalized = normalizeOptionalStatus(status);
+                if (normalized != null && !result.contains(normalized)) {
+                    result.add(normalized);
+                }
+            }
+        }
+        return result;
     }
 
     private String normalizeOptionalFailureType(String failureType) {
@@ -637,6 +723,45 @@ public class TaskCenterServiceImpl implements TaskCenterService {
         }
     }
 
+    private Integer normalizeOptionalProgress(Integer progress) {
+        if (progress == null) {
+            return null;
+        }
+        return Math.max(0, Math.min(100, progress));
+    }
+
+    private void validateProgressRange(Integer minProgress, Integer maxProgress) {
+        if (minProgress != null && maxProgress != null && maxProgress < minProgress) {
+            throw new IllegalArgumentException("任务进度范围不正确");
+        }
+    }
+
+    private String resolveTaskOrderBy(String sortBy, String sortDirection) {
+        String column = "id";
+        if (sortBy != null) {
+            String normalized = sortBy.trim().toLowerCase();
+            if ("createdat".equals(normalized) || "created_at".equals(normalized)) {
+                column = "created_at";
+            } else if ("updatedat".equals(normalized) || "updated_at".equals(normalized)) {
+                column = "updated_at";
+            } else if ("progress".equals(normalized) || "progresspercent".equals(normalized)
+                    || "progress_percent".equals(normalized)) {
+                column = "progress_percent";
+            } else if ("status".equals(normalized)) {
+                column = "status";
+            } else if ("id".equals(normalized)) {
+                column = "id";
+            } else {
+                throw new IllegalArgumentException("不支持的任务排序字段，sortBy=" + sortBy);
+            }
+        }
+        String direction = "DESC";
+        if (sortDirection != null && "asc".equalsIgnoreCase(sortDirection.trim())) {
+            direction = "ASC";
+        }
+        return column + " " + direction + ", id DESC";
+    }
+
     private String normalizeBusinessKeyRequired(String businessKey) {
         String normalized = normalizeBusinessKey(businessKey);
         if (normalized == null) {
@@ -662,6 +787,18 @@ public class TaskCenterServiceImpl implements TaskCenterService {
     private String normalizeWorkerId(String value) {
         String normalized = value == null || value.trim().isEmpty() ? workerId : value.trim();
         return normalized.length() > 128 ? normalized.substring(0, 128) : normalized;
+    }
+
+    private String normalizeTraceId(String traceId) {
+        String normalized = traceId;
+        if (normalized == null || normalized.trim().isEmpty()) {
+            normalized = RequestTraceFilter.currentTraceId();
+        }
+        if (normalized == null || normalized.trim().isEmpty()) {
+            return null;
+        }
+        normalized = normalized.trim();
+        return normalized.length() > 64 ? normalized.substring(0, 64) : normalized;
     }
 
     private int normalizeMaxRetryCount(Integer maxRetryCount) {
@@ -725,5 +862,39 @@ public class TaskCenterServiceImpl implements TaskCenterService {
         }
         String normalized = suggestion.trim();
         return normalized.length() > 512 ? normalized.substring(0, 512) : normalized;
+    }
+
+    private void recordTaskEvent(AsyncTaskRecord record, String eventType, String message) {
+        if (taskEventLogMapper == null || record == null) {
+            return;
+        }
+        try {
+            taskEventLogMapper.insert(AsyncTaskEventLog.builder()
+                    .eventId(UUID.randomUUID().toString().replace("-", ""))
+                    .taskId(record.getTaskId())
+                    .ownerId(record.getOwnerId())
+                    .taskType(record.getTaskType())
+                    .eventType(eventType)
+                    .message(normalizeEventMessage(message))
+                    .progressPercent(record.getProgressPercent())
+                    .completedCount(record.getCompletedCount())
+                    .totalCount(record.getTotalCount())
+                    .failureType(record.getFailureType())
+                    .traceId(record.getTraceId())
+                    .workerId(record.getWorkerId())
+                    .createdAt(LocalDateTime.now())
+                    .build());
+        } catch (RuntimeException ex) {
+            log.warn("record async task event failed, taskId={}, eventType={}",
+                    record.getTaskId(), eventType, ex);
+        }
+    }
+
+    private String normalizeEventMessage(String message) {
+        if (message == null || message.trim().isEmpty()) {
+            return null;
+        }
+        String normalized = message.trim();
+        return normalized.length() > 1024 ? normalized.substring(0, 1024) : normalized;
     }
 }

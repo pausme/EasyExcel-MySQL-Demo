@@ -36,6 +36,7 @@ import org.springframework.web.server.ResponseStatusException;
 import java.io.IOException;
 import java.net.URI;
 import javax.servlet.http.HttpServletRequest;
+import javax.validation.Valid;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -226,7 +227,7 @@ public class FileCenterController {
 
     @ApiOperation("分页查询通用文件")
     @PostMapping("/page")
-    public FilePageResponse page(@RequestBody(required = false) FilePageQueryRequest request) {
+    public FilePageResponse page(@Valid @RequestBody(required = false) FilePageQueryRequest request) {
         return fileCenterService.page(request);
     }
 

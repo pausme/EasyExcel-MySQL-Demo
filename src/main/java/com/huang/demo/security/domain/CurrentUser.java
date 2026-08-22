@@ -27,7 +27,7 @@ public class CurrentUser {
 
     public static CurrentUser demo(String userId) {
         Set<String> roles = new HashSet<String>();
-        roles.add("USER");
+        roles.add(SecurityRoles.USER);
         return CurrentUser.builder()
                 .userId(userId)
                 .roles(Collections.unmodifiableSet(roles))
@@ -38,9 +38,20 @@ public class CurrentUser {
     public static CurrentUser authenticated(String userId, String role) {
         Set<String> roles = new HashSet<String>();
         roles.add(role);
+        return authenticated(userId, roles);
+    }
+
+    public static CurrentUser authenticated(String userId, Set<String> roles) {
+        Set<String> safeRoles = new HashSet<String>();
+        if (roles != null) {
+            safeRoles.addAll(roles);
+        }
+        if (safeRoles.isEmpty()) {
+            safeRoles.add(SecurityRoles.USER);
+        }
         return CurrentUser.builder()
                 .userId(userId)
-                .roles(Collections.unmodifiableSet(roles))
+                .roles(Collections.unmodifiableSet(safeRoles))
                 .demoUser(false)
                 .build();
     }

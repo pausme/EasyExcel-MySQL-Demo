@@ -29,6 +29,8 @@ public class FileResponse {
 
     private final String status;
 
+    private final String uploadType;
+
     private final LocalDateTime createdAt;
 
     private final LocalDateTime updatedAt;
@@ -43,6 +45,7 @@ public class FileResponse {
                 .fileMd5(record.getFileMd5())
                 .fileExt(record.getFileExt())
                 .status(record.getStatus())
+                .uploadType(record.getUploadType())
                 .createdAt(record.getCreatedAt())
                 .updatedAt(record.getUpdatedAt())
                 .build();

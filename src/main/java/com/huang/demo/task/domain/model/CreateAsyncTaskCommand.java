@@ -17,5 +17,7 @@ public class CreateAsyncTaskCommand {
 
     private final String requestPayload;
 
+    private final String traceId;
+
     private final Integer maxRetryCount;
 }

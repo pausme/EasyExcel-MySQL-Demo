@@ -6,6 +6,8 @@ import com.alibaba.excel.event.AnalysisEventListener;
 import com.alibaba.excel.exception.ExcelAnalysisStopException;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.huang.demo.common.compensation.domain.model.CompensationFailureType;
+import com.huang.demo.common.compensation.service.CompensationService;
 import com.huang.demo.excel.api.dto.ImportErrorPreviewResponse;
 import com.huang.demo.excel.api.dto.ImportPrecheckResponse;
 import com.huang.demo.excel.api.dto.ImportTaskResponse;
@@ -33,8 +35,10 @@ import com.huang.demo.task.service.TaskCenterService;
 import com.huang.demo.task.service.TaskExecutionGuard;
 import com.huang.demo.task.service.TaskRecoveryHandler;
 import com.huang.demo.task.service.TaskRetryHandler;
+import com.huang.demo.task.monitor.TaskMetricsService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -88,6 +92,8 @@ public class StudentImportTaskServiceImpl implements StudentImportTaskService, T
     private final MinioObjectStorageService minioObjectStorageService;
     private final MinioProperties minioProperties;
     private final TaskExecutionGuard taskExecutionGuard;
+    private final CompensationService compensationService;
+    private final TaskMetricsService taskMetricsService;
 
     @Autowired
     public StudentImportTaskServiceImpl(StudentService studentService,
@@ -97,7 +103,9 @@ public class StudentImportTaskServiceImpl implements StudentImportTaskService, T
                                         ObjectMapper objectMapper,
                                         MinioObjectStorageService minioObjectStorageService,
                                         MinioProperties minioProperties,
-                                        TaskExecutionGuard taskExecutionGuard) {
+                                        TaskExecutionGuard taskExecutionGuard,
+                                        CompensationService compensationService,
+                                        TaskMetricsService taskMetricsService) {
         this.studentService = studentService;
         this.properties = properties;
         this.importTaskExecutor = importTaskExecutor;
@@ -106,6 +114,8 @@ public class StudentImportTaskServiceImpl implements StudentImportTaskService, T
         this.minioObjectStorageService = minioObjectStorageService;
         this.minioProperties = minioProperties;
         this.taskExecutionGuard = taskExecutionGuard;
+        this.compensationService = compensationService;
+        this.taskMetricsService = taskMetricsService;
     }
 
     public StudentImportTaskServiceImpl(StudentService studentService,
@@ -116,7 +126,8 @@ public class StudentImportTaskServiceImpl implements StudentImportTaskService, T
                                         MinioObjectStorageService minioObjectStorageService,
                                         MinioProperties minioProperties) {
         this(studentService, properties, importTaskExecutor, taskCenterService,
-                objectMapper, minioObjectStorageService, minioProperties, new TaskExecutionGuard(taskCenterService));
+                objectMapper, minioObjectStorageService, minioProperties,
+                new TaskExecutionGuard(taskCenterService), CompensationService.noop(), null);
     }
 
     @PostConstruct
@@ -135,8 +146,20 @@ public class StudentImportTaskServiceImpl implements StudentImportTaskService, T
         String businessKey = UUID.randomUUID().toString().replace("-", "");
         String originalName = normalizeOriginalName(file.getOriginalFilename());
         String sourceObjectKey = buildImportSourceObjectKey(businessKey, resolveSuffix(originalName));
+        long uploadStart = System.currentTimeMillis();
+        boolean uploadSuccess = false;
         try (InputStream inputStream = file.getInputStream()) {
             minioObjectStorageService.uploadExcel(inputStream, file.getSize(), sourceObjectKey);
+            uploadSuccess = true;
+        } catch (RuntimeException ex) {
+            compensationService.recordPending(
+                    "IMPORT",
+                    businessKey,
+                    CompensationFailureType.OBJECT_UPLOAD_FAILED.name(),
+                    "objectKey=" + sourceObjectKey + ",error=" + safeErrorMessage(ex));
+            throw ex;
+        } finally {
+            recordStorageUpload("import-source", System.currentTimeMillis() - uploadStart, uploadSuccess);
         }
         StudentImportTaskPayload payload = StudentImportTaskPayload.builder()
                 .originalName(originalName)
@@ -155,6 +178,11 @@ public class StudentImportTaskServiceImpl implements StudentImportTaskService, T
                     .build());
         } catch (RuntimeException ex) {
             minioObjectStorageService.deleteQuietly(sourceObjectKey);
+            compensationService.recordPending(
+                    "IMPORT",
+                    businessKey,
+                    CompensationFailureType.ORPHAN_OBJECT.name(),
+                    "objectKey=" + sourceObjectKey + ",reason=task_create_failed");
             throw ex;
         }
         try {
@@ -310,6 +338,7 @@ public class StudentImportTaskServiceImpl implements StudentImportTaskService, T
             AsyncTaskRecord task = lease.getTask();
             StudentImportTaskPayload payload = readPayload(task.getRequestPayload());
             try (InputStream inputStream = openImportInputStream(payload)) {
+                putTaskMdc(task);
                 ImportTaskProgressCallback callback = new ImportTaskProgressCallback(taskId);
                 StudentImportResult result = studentService.importExcel(inputStream, payload.getBatchSize(), callback);
                 AsyncTaskRecord completedTask = taskCenterService.markSuccess(taskId, toJson(StudentImportTaskResult.builder()
@@ -321,6 +350,7 @@ public class StudentImportTaskServiceImpl implements StudentImportTaskService, T
                 }
                 log.info("import task finished, taskId={}, imported={}, batchCount={}, elapsedMs={}",
                         taskId, result.getImportedCount(), result.getBatchCount(), System.currentTimeMillis() - start);
+                recordRowsProcessed("import", result.getImportedCount(), System.currentTimeMillis() - start);
             } catch (TaskCanceledException ex) {
                 log.info("import task canceled, taskId={}, elapsedMs={}", taskId, System.currentTimeMillis() - start);
             } catch (StudentImportValidationException ex) {
@@ -332,8 +362,24 @@ public class StudentImportTaskServiceImpl implements StudentImportTaskService, T
                         ex.getMessage() == null ? "导入失败，请查看服务端日志" : ex.getMessage(),
                         classifySystemFailure(ex), "可稍后重试；若持续失败，请检查数据库、MinIO 或服务端日志"));
                 log.error("import task failed, taskId={}, elapsedMs={}", taskId, System.currentTimeMillis() - start, ex);
+            } finally {
+                clearTaskMdc();
             }
         }
+    }
+
+    private void putTaskMdc(AsyncTaskRecord taskRecord) {
+        MDC.put("taskId", taskRecord.getTaskId());
+        MDC.put("workerId", taskCenterService.currentWorkerId());
+        if (taskRecord.getTraceId() != null && !taskRecord.getTraceId().trim().isEmpty()) {
+            MDC.put("traceId", taskRecord.getTraceId());
+        }
+    }
+
+    private void clearTaskMdc() {
+        MDC.remove("taskId");
+        MDC.remove("workerId");
+        MDC.remove("traceId");
     }
 
     private void markValidationFailed(String taskId, StudentImportValidationException exception) {
@@ -347,7 +393,13 @@ public class StudentImportTaskServiceImpl implements StudentImportTaskService, T
                     .retryable(false)
                     .failureSuggestion("请下载错误明细，修正 Excel 后重新提交导入")
                     .build());
+            recordErrorFile("success");
         } catch (RuntimeException ex) {
+            compensationService.recordPending(
+                    "IMPORT",
+                    taskId,
+                    CompensationFailureType.OBJECT_UPLOAD_FAILED.name(),
+                    "errorFile=true,error=" + safeErrorMessage(ex));
             taskCenterService.markFailed(MarkAsyncTaskFailedCommand.builder()
                     .taskId(taskId)
                     .errorMessage(exception.getMessage())
@@ -355,8 +407,17 @@ public class StudentImportTaskServiceImpl implements StudentImportTaskService, T
                     .retryable(false)
                     .failureSuggestion("请根据接口返回的错误信息修正 Excel 后重新提交导入")
                     .build());
+            recordErrorFile("failed");
             log.error("write import validation error file failed, taskId={}", taskId, ex);
         }
+    }
+
+    private String safeErrorMessage(RuntimeException ex) {
+        if (ex == null || ex.getMessage() == null) {
+            return "unknown";
+        }
+        String message = ex.getMessage().replace('\n', ' ').replace('\r', ' ');
+        return message.length() > 512 ? message.substring(0, 512) : message;
     }
 
     private MarkAsyncTaskFailedCommand retryableFailure(String taskId,
@@ -392,12 +453,15 @@ public class StudentImportTaskServiceImpl implements StudentImportTaskService, T
         String errorFileName = "student-import-error-" + taskId + ".xlsx";
         String errorObjectKey = buildImportErrorObjectKey(errorFileName);
         Path errorFilePath = getImportDirectory().resolve(errorFileName);
+        long uploadStart = System.currentTimeMillis();
+        boolean uploadSuccess = false;
         try {
             Files.createDirectories(errorFilePath.getParent());
             EasyExcel.write(errorFilePath.toFile(), StudentImportErrorRow.class)
                     .sheet("错误明细")
                     .doWrite(errorRows);
             minioObjectStorageService.uploadExcel(errorFilePath, errorObjectKey);
+            uploadSuccess = true;
             return StudentImportTaskResult.builder()
                     .errorCount(errorRows == null ? 0 : errorRows.size())
                     .errorFileName(errorFileName)
@@ -408,7 +472,26 @@ public class StudentImportTaskServiceImpl implements StudentImportTaskService, T
         } catch (IOException ex) {
             throw new IllegalStateException("创建导入错误文件失败", ex);
         } finally {
+            recordStorageUpload("import-error-file", System.currentTimeMillis() - uploadStart, uploadSuccess);
             deleteTemporaryFileQuietly(errorFilePath);
+        }
+    }
+
+    private void recordRowsProcessed(String scene, long rows, long elapsedMs) {
+        if (taskMetricsService != null) {
+            taskMetricsService.recordRowsProcessed(scene, rows, elapsedMs);
+        }
+    }
+
+    private void recordStorageUpload(String scene, long elapsedMs, boolean success) {
+        if (taskMetricsService != null) {
+            taskMetricsService.recordStorageUpload(scene, elapsedMs, success);
+        }
+    }
+
+    private void recordErrorFile(String outcome) {
+        if (taskMetricsService != null) {
+            taskMetricsService.recordErrorFile(outcome);
         }
     }
 

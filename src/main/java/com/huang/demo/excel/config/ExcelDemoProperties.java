@@ -73,6 +73,18 @@ public class ExcelDemoProperties {
 
     private String exportRejectedExecutionPolicy = "abort";
 
+    private boolean taskCompensationEnabled = true;
+
+    private long taskCompensationInitialDelayMillis = 600000L;
+
+    private long taskCompensationFixedDelayMillis = 3600000L;
+
+    private int taskCompensationBatchSize = 100;
+
+    private String taskCompensationLockKey = "task:compensation:lock";
+
+    private int taskCompensationLockTtlSeconds = 300;
+
     private boolean initEnabled = true;
 
 }

@@ -6,6 +6,7 @@ import com.huang.demo.task.api.dto.AsyncTaskResponse;
 import com.huang.demo.task.api.dto.TaskCancelResponse;
 import com.huang.demo.task.api.dto.ThreadPoolMetricResponse;
 import com.huang.demo.task.domain.entity.AsyncTaskRecord;
+import com.huang.demo.security.service.PermissionService;
 import com.huang.demo.task.service.TaskCenterService;
 import com.huang.demo.task.service.TaskOwnerResolver;
 import com.huang.demo.task.service.TaskRetryHandler;
@@ -22,6 +23,7 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 
 import javax.servlet.http.HttpServletRequest;
+import javax.validation.Valid;
 import java.util.HashMap;
 import java.util.ArrayList;
 import java.util.List;
@@ -38,31 +40,35 @@ public class TaskCenterController {
     private final ThreadPoolTaskExecutor exportTaskExecutor;
     private final ThreadPoolTaskExecutor importTaskExecutor;
     private final ThreadPoolTaskExecutor importWorkerExecutor;
+    private final PermissionService permissionService;
 
     public TaskCenterController(TaskCenterService taskCenterService,
                                 TaskOwnerResolver taskOwnerResolver,
                                 List<TaskRetryHandler> retryHandlers,
                                 @Qualifier("exportTaskExecutor") ThreadPoolTaskExecutor exportTaskExecutor,
                                 @Qualifier("importTaskExecutor") ThreadPoolTaskExecutor importTaskExecutor,
-                                @Qualifier("importWorkerExecutor") ThreadPoolTaskExecutor importWorkerExecutor) {
+                                @Qualifier("importWorkerExecutor") ThreadPoolTaskExecutor importWorkerExecutor,
+                                PermissionService permissionService) {
         this.taskCenterService = taskCenterService;
         this.taskOwnerResolver = taskOwnerResolver;
         this.retryHandlerMap = buildRetryHandlerMap(retryHandlers);
         this.exportTaskExecutor = exportTaskExecutor;
         this.importTaskExecutor = importTaskExecutor;
         this.importWorkerExecutor = importWorkerExecutor;
+        this.permissionService = permissionService;
     }
 
     @ApiOperation("查询自己的异步任务详情")
     @GetMapping("/{taskId}")
     public AsyncTaskResponse detail(@PathVariable("taskId") String taskId, HttpServletRequest request) {
         AsyncTaskRecord task = findMyTask(taskId, request);
-        return AsyncTaskResponse.from(task);
+        return AsyncTaskResponse.from(task,
+                taskCenterService.listTaskEvents(task.getTaskId(), task.getOwnerId()));
     }
 
     @ApiOperation("分页查询自己的异步任务")
     @PostMapping("/page")
-    public AsyncTaskPageResponse page(@RequestBody(required = false) AsyncTaskPageQueryRequest request,
+    public AsyncTaskPageResponse page(@Valid @RequestBody(required = false) AsyncTaskPageQueryRequest request,
                                       HttpServletRequest httpServletRequest) {
         return taskCenterService.pageMyTasks(taskOwnerResolver.resolve(httpServletRequest), request);
     }
@@ -100,6 +106,7 @@ public class TaskCenterController {
     @ApiOperation("查询异步任务线程池监控快照")
     @GetMapping("/metrics/thread-pools")
     public List<ThreadPoolMetricResponse> threadPoolMetrics() {
+        permissionService.requireAdmin();
         List<ThreadPoolMetricResponse> result = new ArrayList<ThreadPoolMetricResponse>();
         result.add(toThreadPoolMetric("student-export", exportTaskExecutor));
         result.add(toThreadPoolMetric("student-import-task", importTaskExecutor));

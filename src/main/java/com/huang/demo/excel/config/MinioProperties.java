@@ -34,4 +34,14 @@ public class MinioProperties {
     private int lifecycleExpireDays = 1;
 
     private int importSourceRetentionDays = 1;
+
+    private long connectTimeoutMillis = 3000L;
+
+    private long writeTimeoutMillis = 60000L;
+
+    private long readTimeoutMillis = 60000L;
+
+    private int maxRetryTimes = 2;
+
+    private long retryBackoffMillis = 200L;
 }

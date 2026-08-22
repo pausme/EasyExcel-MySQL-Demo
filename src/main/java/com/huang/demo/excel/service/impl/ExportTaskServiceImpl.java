@@ -2,6 +2,8 @@ package com.huang.demo.excel.service.impl;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.huang.demo.common.compensation.domain.model.CompensationFailureType;
+import com.huang.demo.common.compensation.service.CompensationService;
 import com.huang.demo.excel.config.ExcelDemoProperties;
 import com.huang.demo.excel.config.MinioProperties;
 import com.huang.demo.excel.domain.model.ExportTask;
@@ -28,8 +30,10 @@ import com.huang.demo.task.service.TaskCenterService;
 import com.huang.demo.task.service.TaskExecutionGuard;
 import com.huang.demo.task.service.TaskRecoveryHandler;
 import com.huang.demo.task.service.TaskRetryHandler;
+import com.huang.demo.task.monitor.TaskMetricsService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -63,6 +67,8 @@ public class ExportTaskServiceImpl implements ExportTaskService, TaskRetryHandle
     private final ReportExportEngine reportExportEngine;
     private final StudentReportExportJob studentReportExportJob;
     private final TaskExecutionGuard taskExecutionGuard;
+    private final CompensationService compensationService;
+    private final TaskMetricsService taskMetricsService;
 
     @Autowired
     public ExportTaskServiceImpl(ExcelDemoProperties properties,
@@ -73,7 +79,9 @@ public class ExportTaskServiceImpl implements ExportTaskService, TaskRetryHandle
                                  MinioProperties minioProperties,
                                  ReportExportEngine reportExportEngine,
                                  StudentReportExportJob studentReportExportJob,
-                                 TaskExecutionGuard taskExecutionGuard) {
+                                 TaskExecutionGuard taskExecutionGuard,
+                                 CompensationService compensationService,
+                                 TaskMetricsService taskMetricsService) {
         this.properties = properties;
         this.exportTaskExecutor = exportTaskExecutor;
         this.taskCenterService = taskCenterService;
@@ -83,6 +91,8 @@ public class ExportTaskServiceImpl implements ExportTaskService, TaskRetryHandle
         this.reportExportEngine = reportExportEngine;
         this.studentReportExportJob = studentReportExportJob;
         this.taskExecutionGuard = taskExecutionGuard;
+        this.compensationService = compensationService;
+        this.taskMetricsService = taskMetricsService;
     }
 
     public ExportTaskServiceImpl(ExcelDemoProperties properties,
@@ -95,7 +105,7 @@ public class ExportTaskServiceImpl implements ExportTaskService, TaskRetryHandle
                                  StudentReportExportJob studentReportExportJob) {
         this(properties, exportTaskExecutor, taskCenterService, objectMapper,
                 minioObjectStorageService, minioProperties, reportExportEngine,
-                studentReportExportJob, new TaskExecutionGuard(taskCenterService));
+                studentReportExportJob, new TaskExecutionGuard(taskCenterService), CompensationService.noop(), null);
     }
 
     @PostConstruct
@@ -225,6 +235,7 @@ public class ExportTaskServiceImpl implements ExportTaskService, TaskRetryHandle
             AsyncTaskRecord taskRecord = lease.getTask();
             ExportTask task = toExportTask(taskRecord);
             try {
+                putTaskMdc(taskRecord);
                 Path temporaryFilePath = getTemporaryFilePath(task);
                 Files.createDirectories(temporaryFilePath.getParent());
                 Files.deleteIfExists(temporaryFilePath);
@@ -247,6 +258,7 @@ public class ExportTaskServiceImpl implements ExportTaskService, TaskRetryHandle
                 log.info("export task finished, taskId={}, total={}, exported={}, sheetCount={}, elapsedMs={}",
                         task.getTaskId(), task.getTotal(), task.getExported(), task.getSheetCount(),
                         System.currentTimeMillis() - start);
+                recordRowsProcessed("export", task.getExported(), System.currentTimeMillis() - start);
             } catch (TaskCanceledException ex) {
                 deletePartialFile(task);
                 log.info("export task canceled, taskId={}, elapsedMs={}",
@@ -259,15 +271,64 @@ public class ExportTaskServiceImpl implements ExportTaskService, TaskRetryHandle
                 log.error("export task failed, taskId={}, elapsedMs={}",
                         task.getTaskId(), System.currentTimeMillis() - start, ex);
             } finally {
+                clearTaskMdc();
                 deleteTemporaryFileQuietly(task);
             }
         }
     }
 
+    private void putTaskMdc(AsyncTaskRecord taskRecord) {
+        MDC.put("taskId", taskRecord.getTaskId());
+        MDC.put("workerId", taskCenterService.currentWorkerId());
+        if (taskRecord.getTraceId() != null && !taskRecord.getTraceId().trim().isEmpty()) {
+            MDC.put("traceId", taskRecord.getTraceId());
+        }
+    }
+
+    private void clearTaskMdc() {
+        MDC.remove("taskId");
+        MDC.remove("workerId");
+        MDC.remove("traceId");
+    }
+
     private void storeExportFile(ExportTask task, Path temporaryFilePath) {
         String objectKey = buildExportObjectKey(task);
-        minioObjectStorageService.uploadFile(temporaryFilePath, objectKey, task.getFormat().getContentType());
+        long start = System.currentTimeMillis();
+        boolean success = false;
+        try {
+            minioObjectStorageService.uploadFile(temporaryFilePath, objectKey, task.getFormat().getContentType());
+            success = true;
+        } catch (RuntimeException ex) {
+            compensationService.recordPending(
+                    "EXPORT",
+                    task.getTaskId(),
+                    CompensationFailureType.OBJECT_UPLOAD_FAILED.name(),
+                    "objectKey=" + objectKey + ",error=" + safeErrorMessage(ex));
+            throw ex;
+        } finally {
+            recordStorageUpload("export-result", System.currentTimeMillis() - start, success);
+        }
         task.setObjectKey(objectKey);
+    }
+
+    private void recordRowsProcessed(String scene, long rows, long elapsedMs) {
+        if (taskMetricsService != null) {
+            taskMetricsService.recordRowsProcessed(scene, rows, elapsedMs);
+        }
+    }
+
+    private void recordStorageUpload(String scene, long elapsedMs, boolean success) {
+        if (taskMetricsService != null) {
+            taskMetricsService.recordStorageUpload(scene, elapsedMs, success);
+        }
+    }
+
+    private String safeErrorMessage(RuntimeException ex) {
+        if (ex == null || ex.getMessage() == null) {
+            return "unknown";
+        }
+        String message = ex.getMessage().replace('\n', ' ').replace('\r', ' ');
+        return message.length() > 512 ? message.substring(0, 512) : message;
     }
 
     private MarkAsyncTaskFailedCommand buildRetryableFailure(String taskId,

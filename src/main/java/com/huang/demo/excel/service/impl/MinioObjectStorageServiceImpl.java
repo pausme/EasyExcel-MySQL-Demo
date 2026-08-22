@@ -1,5 +1,6 @@
 package com.huang.demo.excel.service.impl;
 
+import com.huang.demo.common.resilience.DependencyRetryTemplate;
 import com.huang.demo.excel.config.MinioProperties;
 import com.huang.demo.excel.service.MinioObjectStorageService;
 import io.minio.GetBucketLifecycleArgs;
@@ -113,8 +114,13 @@ public class MinioObjectStorageServiceImpl implements MinioObjectStorageService 
 
     @Override
     public void uploadFile(Path filePath, String objectKey, String contentType) {
-        try (InputStream inputStream = Files.newInputStream(filePath)) {
-            uploadFile(inputStream, Files.size(filePath), objectKey, contentType);
+        try {
+            DependencyRetryTemplate.execute("minio-upload-file", properties.getMaxRetryTimes(),
+                    properties.getRetryBackoffMillis(), log, () -> {
+                        try (InputStream inputStream = Files.newInputStream(filePath)) {
+                            putObject(inputStream, Files.size(filePath), objectKey, contentType);
+                        }
+                    });
         } catch (Exception ex) {
             throw new IllegalStateException("上传文件到 MinIO 失败", ex);
         }
@@ -129,15 +135,19 @@ public class MinioObjectStorageServiceImpl implements MinioObjectStorageService 
             throw new IllegalArgumentException("上传文件大小必须大于 0");
         }
         try {
-            minioClient.putObject(PutObjectArgs.builder()
-                    .bucket(properties.getBucketName())
-                    .object(objectKey)
-                    .stream(inputStream, fileSize, -1)
-                    .contentType(normalizeContentType(contentType))
-                    .build());
+            putObject(inputStream, fileSize, objectKey, contentType);
         } catch (Exception ex) {
             throw new IllegalStateException("上传文件到 MinIO 失败", ex);
         }
+    }
+
+    private void putObject(InputStream inputStream, long fileSize, String objectKey, String contentType) throws Exception {
+        minioClient.putObject(PutObjectArgs.builder()
+                .bucket(properties.getBucketName())
+                .object(objectKey)
+                .stream(inputStream, fileSize, -1)
+                .contentType(normalizeContentType(contentType))
+                .build());
     }
 
     private String normalizeContentType(String contentType) {
@@ -150,10 +160,11 @@ public class MinioObjectStorageServiceImpl implements MinioObjectStorageService 
     @Override
     public InputStream openObject(String objectKey) {
         try {
-            return minioClient.getObject(GetObjectArgs.builder()
-                    .bucket(properties.getBucketName())
-                    .object(objectKey)
-                    .build());
+            return DependencyRetryTemplate.execute("minio-open-object", properties.getMaxRetryTimes(),
+                    properties.getRetryBackoffMillis(), log, () -> minioClient.getObject(GetObjectArgs.builder()
+                            .bucket(properties.getBucketName())
+                            .object(objectKey)
+                            .build()));
         } catch (Exception ex) {
             throw new IllegalStateException("读取 MinIO 文件失败", ex);
         }
@@ -162,10 +173,11 @@ public class MinioObjectStorageServiceImpl implements MinioObjectStorageService 
     @Override
     public void ensureObjectExists(String objectKey) {
         try {
-            minioClient.statObject(StatObjectArgs.builder()
-                    .bucket(properties.getBucketName())
-                    .object(objectKey)
-                    .build());
+            DependencyRetryTemplate.execute("minio-stat-object", properties.getMaxRetryTimes(),
+                    properties.getRetryBackoffMillis(), log, () -> minioClient.statObject(StatObjectArgs.builder()
+                            .bucket(properties.getBucketName())
+                            .object(objectKey)
+                            .build()));
         } catch (Exception ex) {
             throw new IllegalStateException("MinIO 文件不存在或已过期", ex);
         }
@@ -175,14 +187,16 @@ public class MinioObjectStorageServiceImpl implements MinioObjectStorageService 
     public String createDownloadUrl(String objectKey, String fileName) {
         try {
             int expireMinutes = Math.max(1, properties.getDownloadUrlExpireMinutes());
-            return minioPublicClient.getPresignedObjectUrl(GetPresignedObjectUrlArgs.builder()
-                    .method(Method.GET)
-                    .bucket(properties.getBucketName())
-                    .object(objectKey)
-                    .expiry(expireMinutes, TimeUnit.MINUTES)
-                    .extraQueryParams(Collections.singletonMap(
-                            "response-content-disposition", "attachment; filename=\"" + fileName + "\""))
-                    .build());
+            return DependencyRetryTemplate.execute("minio-create-download-url", properties.getMaxRetryTimes(),
+                    properties.getRetryBackoffMillis(), log,
+                    () -> minioPublicClient.getPresignedObjectUrl(GetPresignedObjectUrlArgs.builder()
+                            .method(Method.GET)
+                            .bucket(properties.getBucketName())
+                            .object(objectKey)
+                            .expiry(expireMinutes, TimeUnit.MINUTES)
+                            .extraQueryParams(Collections.singletonMap(
+                                    "response-content-disposition", "attachment; filename=\"" + fileName + "\""))
+                            .build()));
         } catch (Exception ex) {
             throw new IllegalStateException("生成 MinIO 下载地址失败", ex);
         }

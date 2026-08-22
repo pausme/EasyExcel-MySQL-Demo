@@ -21,25 +21,37 @@
 | DONE | P1 | LCK-03 | 分布式锁和幂等 | 任务执行防重入 | 异步任务执行前通过任务状态 CAS + 分布式锁双重保护，避免多实例重复执行同一任务 |
 | DONE | P2 | LCK-04 | 分布式锁和幂等 | 文件上传完成幂等 | 直传 complete、分片 complete、abort 重复调用具备稳定返回，不重复入库、不重复删除对象 |
 | DONE | P1 | CON-01 | 数据一致性与补偿机制 | 补偿任务记录表 | 新增补偿记录模型，记录对象缺失、数据库状态不一致、任务终态异常等待补偿事项 |
-| TODO | P1 | CON-02 | 数据一致性与补偿机制 | 文件中心对象对账 | 定时对账 `file_record`、`file_upload_task` 和 MinIO 对象，发现缺失、孤儿对象、超期分片并生成补偿记录 |
-| TODO | P1 | CON-03 | 数据一致性与补偿机制 | 导入导出任务补偿 | 对 RUNNING 超时、对象上传失败、任务成功但文件缺失等场景提供自动补偿或失败归档 |
-| TODO | P2 | CON-04 | 数据一致性与补偿机制 | 管理端补偿重放接口 | 管理员可分页查看补偿记录、手动重试、忽略、查看最近处理结果 |
-| TODO | P1 | ERR-01 | 统一异常和响应体系 | 错误码字典收敛 | 按 common、task、excel、file、security、storage 分类整理错误码，避免直接透传模糊中文异常 |
-| TODO | P1 | ERR-02 | 统一异常和响应体系 | 业务异常上下文增强 | 业务异常支持 `errorCode`、`bizId`、`suggestion`、`retryable`，响应体和任务失败字段保持一致 |
-| TODO | P2 | ERR-03 | 统一异常和响应体系 | 参数校验标准化 | DTO 增加 Bean Validation，Controller 减少手写校验，统一返回字段级错误信息 |
-| TODO | P2 | ERR-04 | 统一异常和响应体系 | 错误响应文档和测试矩阵 | README/API 文档补齐错误码、HTTP 状态码、典型失败样例，并补接口回归用例 |
-| TODO | P1 | QRY-01 | 查询分页和复杂检索 | 任务中心复杂查询 | 任务分页支持状态集合、任务类型集合、时间范围、进度范围、是否可重试、排序字段白名单 |
-| TODO | P1 | QRY-02 | 查询分页和复杂检索 | 文件中心复杂查询 | 文件分页支持大小范围、创建时间范围、上传类型、状态、MD5、扩展名集合和稳定排序 |
-| TODO | P2 | QRY-03 | 查询分页和复杂检索 | 学生数据查询接口 | 新增学生分页检索，支持学号、姓名、班级、年龄范围、生日范围、导入版本过滤 |
-| TODO | P2 | QRY-04 | 查询分页和复杂检索 | 游标分页公共模型 | 为大结果集查询提供 cursor page DTO，避免深分页 OFFSET 性能退化 |
-| TODO | P1 | RES-01 | 限流、熔断和降级 | 接口级限流 | 对导入提交、导出提交、文件上传初始化、下载签名生成增加用户维度和全局维度限流 |
-| TODO | P1 | RES-02 | 限流、熔断和降级 | 外部依赖超时与重试策略 | MinIO、Redis、MySQL 关键操作补齐可配置超时、短重试和失败分类 |
-| TODO | P2 | RES-03 | 限流、熔断和降级 | 降级策略 | Redis 不可用时任务状态只走 MySQL，MinIO 临时异常时任务进入可重试失败，不拖垮 HTTP 线程 |
-| TODO | P2 | RES-04 | 限流、熔断和降级 | 线程池拒绝策略可观测 | 线程池满载时返回明确错误码，并记录指标、日志和任务拒绝原因 |
-| TODO | P1 | OBS-01 | 监控和可观测性 | 任务事件日志持久化 | 新增 `async_task_event_log`，记录创建、运行、进度、重试、取消、失败、成功事件 |
-| TODO | P1 | OBS-02 | 监控和可观测性 | TraceId 贯穿异步链路 | 提交请求 traceId 写入任务 payload/事件日志，后台线程日志带 taskId、traceId、workerId |
-| TODO | P2 | OBS-03 | 监控和可观测性 | 下载审计查询接口 | 基于 `download_audit_record` 提供 owner/admin 查询、资源过滤和时间范围过滤 |
-| TODO | P2 | OBS-04 | 监控和可观测性 | 业务指标补齐 | 增加导入行速率、导出行速率、MinIO 上传耗时、错误文件数量、补偿积压数等 Micrometer 指标 |
+| DONE | P1 | CON-02 | 数据一致性与补偿机制 | 文件中心对象对账 | 定时对账 `file_record`、`file_upload_task` 和 MinIO 对象，发现缺失、孤儿对象、超期分片并生成补偿记录 |
+| DONE | P1 | CON-03 | 数据一致性与补偿机制 | 导入导出任务补偿 | 对 RUNNING 超时、对象上传失败、任务成功但文件缺失等场景提供自动补偿或失败归档 |
+| DONE | P2 | CON-04 | 数据一致性与补偿机制 | 管理端补偿重放接口 | 管理员可分页查看补偿记录、手动重试、忽略、查看最近处理结果 |
+| DONE | P1 | ERR-01 | 统一异常和响应体系 | 错误码字典收敛 | 按 common、task、excel、file、security、storage 分类整理错误码，避免直接透传模糊中文异常 |
+| DONE | P1 | ERR-02 | 统一异常和响应体系 | 业务异常上下文增强 | 业务异常支持 `errorCode`、`bizId`、`suggestion`、`retryable`，响应体和任务失败字段保持一致 |
+| DONE | P2 | ERR-03 | 统一异常和响应体系 | 参数校验标准化 | DTO 增加 Bean Validation，Controller 减少手写校验，统一返回字段级错误信息 |
+| DONE | P2 | ERR-04 | 统一异常和响应体系 | 错误响应文档和测试矩阵 | README/API 文档补齐错误码、HTTP 状态码、典型失败样例，并补接口回归用例 |
+| DONE | P1 | QRY-01 | 查询分页和复杂检索 | 任务中心复杂查询 | 任务分页支持状态集合、任务类型集合、时间范围、进度范围、是否可重试、排序字段白名单 |
+| DONE | P1 | QRY-02 | 查询分页和复杂检索 | 文件中心复杂查询 | 文件分页支持大小范围、创建时间范围、上传类型、状态、MD5、扩展名集合和稳定排序 |
+| DONE | P2 | QRY-03 | 查询分页和复杂检索 | 学生数据查询接口 | 新增学生分页检索，支持学号、姓名、班级、年龄范围、生日范围、导入版本过滤 |
+| DONE | P2 | QRY-04 | 查询分页和复杂检索 | 游标分页公共模型 | 为大结果集查询提供 cursor page DTO，避免深分页 OFFSET 性能退化 |
+| DONE | P1 | RES-01 | 限流、熔断和降级 | 接口级限流 | 对导入提交、导出提交、文件上传初始化、下载签名生成增加用户维度和全局维度限流 |
+| DONE | P1 | RES-02 | 限流、熔断和降级 | 外部依赖超时与重试策略 | MinIO、Redis、MySQL 关键操作补齐可配置超时、短重试和失败分类 |
+| DONE | P2 | RES-03 | 限流、熔断和降级 | 降级策略 | Redis 不可用时任务状态只走 MySQL，MinIO 临时异常时任务进入可重试失败，不拖垮 HTTP 线程 |
+| DONE | P2 | RES-04 | 限流、熔断和降级 | 线程池拒绝策略可观测 | 线程池满载时返回明确错误码，并记录指标、日志和任务拒绝原因 |
+| DONE | P1 | OBS-01 | 监控和可观测性 | 任务事件日志持久化 | 新增 `async_task_event_log`，记录创建、运行、进度、重试、取消、失败、成功事件 |
+| DONE | P1 | OBS-02 | 监控和可观测性 | TraceId 贯穿异步链路 | 提交请求 traceId 写入任务 payload/事件日志，后台线程日志带 taskId、traceId、workerId |
+| DONE | P2 | OBS-03 | 监控和可观测性 | 下载审计查询接口 | 基于 `download_audit_record` 提供 owner/admin 查询、资源过滤和时间范围过滤 |
+| DONE | P2 | OBS-04 | 监控和可观测性 | 业务指标补齐 | 增加导入行速率、导出行速率、MinIO 上传耗时、错误文件数量、补偿积压数等 Micrometer 指标 |
+| DONE | P1 | DEP-01 | 生产部署与发布体系 | 标准 Docker 镜像与运行规范 | 明确 jar 挂载、镜像选择、启动命令、健康检查、日志目录和 JVM 参数 |
+| DONE | P1 | DEP-02 | 生产部署与发布体系 | docker-compose 部署与回滚流程 | 提供应用服务编排、依赖检查、启动验证、版本替换和回滚步骤 |
+| DONE | P1 | AUTH-01 | 权限与用户体系升级 | 用户表、登录接口和 JWT 鉴权 | 替代 demo token，支持用户登录、token 刷新、密码加密和 owner 识别 |
+| DONE | P1 | AUTH-02 | 权限与用户体系升级 | 角色权限模型和管理接口保护 | 管理端接口统一校验角色，普通用户不能访问补偿、审计和全局任务数据 |
+| DONE | P1 | OPS-01 | 异步任务运维后台 | 运维聚合查询接口 | 聚合任务、补偿、审计、线程池、限流和指标摘要，方便管理端展示 |
+| TODO | P2 | OPS-02 | 异步任务运维后台 | 轻量管理页面 | 提供任务列表、详情、取消、重试、补偿处理和审计查看页面 |
+| TODO | P1 | IMP-01 | 导入导出业务规则增强 | 导入模式策略 | 支持覆盖、追加、仅校验、不落库等导入模式，并明确冲突处理规则 |
+| TODO | P2 | IMP-02 | 导入导出业务规则增强 | 导入字段规则配置化 | 字段必填、长度、格式、枚举和唯一校验规则可配置，并体现在预检和正式导入 |
+| TODO | P2 | FILE-01 | 文件中心生产化 | 文件业务归属、标签和引用关系 | 文件支持业务类型、业务 ID、标签、引用计数，避免误删仍被业务引用的文件 |
+| TODO | P1 | CON-05 | 数据一致性与补偿机制 | 自动补偿执行器 | PENDING 补偿按退避策略自动重试，达到最大次数后进入人工处理 |
+| TODO | P1 | OBS-05 | 监控和可观测性 | Grafana Dashboard 和告警规则 | 提供导入导出、任务失败率、线程池、MinIO、补偿积压告警和排障说明 |
+| TODO | P1 | PERF-01 | 性能专项 | 300 万 / 500 万数据量压测矩阵 | 对 CSV、ZIP_CSV_PARTS、并发导入导出、MySQL 索引和线程池参数形成报告 |
 
 ## 待办任务拆分说明
 
@@ -114,6 +126,40 @@
 - 补偿记录写入失败只打印日志，不阻断原业务失败处理、文件元数据标记或清理批次推进。
 - 单元测试覆盖补偿记录创建、活动记录复用、状态流转、补偿写入失败不阻断，以及三个业务接入点。
 
+#### CON-02 完成记录
+
+- 新增 `FileObjectReconciliationService` 和 `FileObjectReconciliationServiceImpl`，按固定延迟定时执行文件对象对账。
+- 对账任务通过 Redis 分布式锁保护，避免多实例同时扫描 MinIO 和文件元数据。
+- `file_record` 增加按 ID 游标批量扫描能力，对正常文件记录与 MinIO 对象列表做比对。
+- 发现正常文件记录对应 MinIO 对象缺失时，自动将文件标记为 `DELETED`，并写入 `FILE + OBJECT_MISSING` 补偿记录。
+- `file_upload_task` 增加按 ID 游标扫描能力，收集上传任务正式对象和分片前缀，避免把合法上传残留误判为孤儿对象。
+- 对 `files/general` 和 `files/multipart` 前缀下的 MinIO 对象做反向对账，发现数据库无归属对象时写入 `ORPHAN_OBJECT` 补偿记录。
+- 对超过 `FILE_CENTER_RECONCILIATION_UPLOAD_STALE_HOURS` 的上传中任务，检测主对象和分片对象是否遗留，并生成 `FILE_UPLOAD + ORPHAN_OBJECT` 补偿记录。
+- MinIO 对象列表失败时不会误删数据库文件，只记录 `FILE_STORAGE + CLEANUP_OBJECT_FAILED` 补偿，等待后续补偿或人工处理。
+- 新增 `FileReconciliationResult` 返回扫描数量、缺失文件、超期上传、孤儿对象、清理失败和补偿记录数量。
+- 单元测试覆盖文件缺失、孤儿对象、超期上传残留、对象列表失败和分布式锁跳过场景。
+
+#### CON-03 完成记录
+
+- 新增 `ExcelTaskCompensationCoordinator`，通过 Redis 分布式锁保护导入导出任务补偿扫描，避免多实例重复对账。
+- `async_task_record` 增加按任务类型、状态和 ID 游标扫描能力，用于批量检查终态任务对象一致性。
+- 导出 `SUCCESS` 任务如果结果对象在 MinIO 中明确缺失，会生成 `EXPORT + OBJECT_MISSING` 补偿记录，并将任务归档为 `EXPIRED`。
+- 导入 `FAILED` 任务如果错误明细对象明确缺失，会生成 `IMPORT + OBJECT_MISSING` 补偿记录，但保留原失败状态，避免覆盖校验失败语义。
+- 导入依赖源文件在失败任务中明确缺失时，会生成 `IMPORT + OBJECT_MISSING` 补偿记录，便于人工判断是否重传源文件。
+- MinIO 连接失败、服务不可用等非明确缺失场景不会误记为对象丢失，等待下一轮扫描或依赖恢复。
+- 导出结果上传失败、导入源文件上传失败、导入错误明细上传失败会生成 `OBJECT_UPLOAD_FAILED` 补偿记录。
+- 已有 `TaskRecoveryCoordinator` 继续负责 `CREATED` 老任务和 `RUNNING` 心跳超时任务恢复投递，恢复投递失败仍写入 `ASYNC_TASK + RECOVERY_SUBMIT_FAILED`。
+- 新增任务补偿配置：`EXCEL_TASK_COMPENSATION_ENABLED`、扫描延迟、批大小、锁 key 和锁 TTL。
+- 单元测试覆盖导出成功对象缺失、导入错误明细缺失、MinIO 临时异常不误报、分布式锁占用跳过扫描。
+
+#### CON-04 完成记录
+
+- 新增 `/api/admin/compensations/page`、`/{compensationId}/retry`、`/{compensationId}/ignore` 管理接口。
+- 管理接口统一使用 `PermissionService.requireAdmin()`，非管理员返回 `SECURITY_FORBIDDEN`。
+- 补偿分页支持业务类型、业务 ID、失败类型、状态集合和创建时间范围过滤。
+- 手动重试会将补偿记录切回 `PENDING` 并立即可调度，不再误递增失败重试次数。
+- 单元测试覆盖分页过滤、手动重试、非法状态和权限异常语义。
+
 ### 3. 统一异常和响应体系
 
 目标是让同步接口、异步任务和后台补偿使用一致的错误语义，便于接口测试和前端处理。
@@ -124,6 +170,37 @@
 | ERR-02 | 业务异常上下文增强 | `BusinessException` 增加 `bizId`、`retryable`、`suggestion`；异步任务失败字段复用同一语义 | 任务失败详情和接口错误响应中的失败类型、建议动作保持一致 |
 | ERR-03 | 参数校验标准化 | DTO 添加 `@NotBlank`、`@NotNull`、`@Min`、`@Max`、`@Pattern`；全局异常处理字段错误 | 参数错误返回字段级错误列表；Controller 只做入参接收和调用 Service |
 | ERR-04 | 错误响应文档和测试矩阵 | 文档补齐错误码、HTTP 状态码、典型错误响应；测试覆盖参数错误、状态冲突、资源不存在 | README 和测试文档能直接作为接口联调用例参考 |
+
+#### ERR-01 完成记录
+
+- 新增模块化错误码枚举：`ExcelErrorCode`、`FileErrorCode`、`TaskErrorCode`、`SecurityErrorCode`、`StorageErrorCode`。
+- 新增 `ErrorCodeResolver`，按请求路径、HTTP 状态和存储异常关键词解析稳定错误码。
+- 全局异常处理从固定 `COMMON_*` 响应改为按模块返回 `EXCEL_*`、`FILE_*`、`TASK_*`、`SECURITY_*`、`STORAGE_*`。
+- 认证拦截器未登录响应从 `COMMON_UNAUTHORIZED` 收敛为 `SECURITY_UNAUTHORIZED`。
+- 保留 `CommonErrorCode` 作为非模块化通用兜底，避免未知路径和内部异常没有统一 code。
+- 更新 Web 异常回归测试，导入/导出接口参数错误返回 `EXCEL_PARAM_ERROR`，文件接口参数错误返回 `FILE_PARAM_ERROR`。
+- 新增 `ErrorCodeResolverTest`，覆盖 Excel、文件、任务、安全和存储异常优先级。
+
+#### ERR-02 完成记录
+
+- `BusinessException` 增加 `bizId`、`retryable`、`suggestion` 上下文字段，保留原有构造器兼容旧调用。
+- `ApiResponse` 失败响应增加 `bizId`、`retryable`、`suggestion`，并继续统一携带 `traceId`。
+- `GlobalExceptionHandler` 对业务异常返回稳定错误码、业务标识、可重试标记和建议动作。
+- 异步任务失败模型已有 `failureType`、`retryable`、`failureSuggestion`，接口错误响应和任务失败详情语义保持一致。
+
+#### ERR-03 完成记录
+
+- 引入 `spring-boot-starter-validation`，分页、查询类 DTO 增加 `@Min`、`@Max`、`@Size` 等基础校验。
+- Controller 查询入参接入 `@Valid`，稳定的长度、范围和分页边界在进入 Service 前拦截。
+- `ApiResponse` 增加 `fieldErrors`，全局异常处理器对 `MethodArgumentNotValidException` 和 `ConstraintViolationException` 返回字段级错误列表。
+- 保留 Service 层业务规则校验，用于跨字段范围、枚举白名单和排序白名单等业务语义。
+- 新增 `GlobalExceptionHandlerTest` 覆盖字段级错误响应。
+
+#### ERR-04 完成记录
+
+- README 补充统一错误响应结构、典型错误码、字段错误样例和联调建议。
+- 测试文档补充参数校验、补偿管理、学生查询、下载审计、指标和线程池拒绝的回归覆盖说明。
+- 当前本地回归基线为 `mvn test`：36 个测试类、155 个用例全部通过。
 
 ### 4. 查询分页和复杂检索
 
@@ -136,6 +213,35 @@
 | QRY-03 | 学生数据查询接口 | 新增学生分页接口和 DTO，支持学号、姓名、班级、年龄、生日、导入版本等条件 | 查询使用索引友好条件；分页响应统一；不暴露内部暂存表 |
 | QRY-04 | 游标分页公共模型 | 抽象 `CursorPageRequest`/`CursorPageResponse`，用于大数据量列表和导出预览 | 深分页场景不依赖大 OFFSET；游标翻页顺序稳定 |
 
+#### QRY-01 完成记录
+
+- `AsyncTaskPageQueryRequest` 支持 `taskTypes`、`statuses`、进度范围、可重试过滤和排序参数。
+- 任务分页 Mapper 支持多状态、多类型、业务标识、失败类型、关键词、时间范围、进度范围、可重试组合查询。
+- `TaskCenterServiceImpl` 对任务类型、状态、失败类型和排序字段做白名单校验，避免动态排序 SQL 注入。
+- 任务详情和任务分页返回真实持久化事件列表；无事件表时回退原生命周期推导。
+
+#### QRY-02 完成记录
+
+- `FilePageQueryRequest` 支持扩展名集合、MD5、状态、上传类型、大小范围、创建时间范围和排序参数。
+- 文件分页 Mapper 支持按 owner 隔离后的组合查询，默认只查当前用户自己的文件。
+- 文件记录新增 `uploadType`，普通服务端上传标记为 `SERVER`，直传/分片上传复用上传任务类型。
+- 文件排序字段限制在 `id`、`created_at`、`updated_at`、`file_size`、`original_name` 白名单内。
+
+#### QRY-03 完成记录
+
+- 新增 `/api/students/page` 学生数据分页查询接口。
+- 查询支持学号、姓名关键字、班级、性别、年龄范围、生日范围和导入版本过滤。
+- Service 只返回 `StudentResponse`，不暴露暂存表或数据库内部实体。
+- MyBatis XML 增加组合查询 SQL，并保持默认按 `id DESC` 稳定排序。
+- 单元测试覆盖分页边界归一化、结果转换和年龄范围校验。
+
+#### QRY-04 完成记录
+
+- 新增公共 `CursorPageRequest` 和 `CursorPageResponse<T>`。
+- 新增 `/api/students/cursor-page`，使用 `id > cursor` 的稳定游标翻页，避免深分页 OFFSET。
+- 游标分页每次多查一条判断 `hasMore`，返回 `nextCursor` 给前端继续翻页。
+- 单元测试覆盖多查一条、空页游标和分页大小边界。
+
 ### 5. 限流、熔断和降级
 
 目标是保护应用在高并发、依赖抖动和资源不足时可控失败，而不是把整机拖垮。
@@ -147,6 +253,37 @@
 | RES-03 | 降级策略 | Redis 不可用时查 MySQL；MinIO 不可用时任务可重试失败；监控不可用不影响主链路 | 单个依赖异常不会导致所有接口 500；降级行为有日志和指标 |
 | RES-04 | 线程池拒绝策略可观测 | 导入/导出/补偿线程池拒绝时记录拒绝事件、指标和统一响应 | 队列满时接口明确返回系统繁忙；不会留下半创建任务 |
 
+#### RES-01 完成记录
+
+- 新增 `RateLimitProperties`、`RateLimitService`、`RateLimitInterceptor` 和 Web 配置。
+- 对导入提交、导出提交、普通上传、直传初始化、分片初始化、文件下载签名、导出下载签名、导入错误文件下载签名增加限流。
+- 限流同时检查用户维度和全局维度，超限返回 HTTP 429，并写入 `Retry-After` 响应头。
+- 限流参数支持配置：`RATE_LIMIT_ENABLED`、窗口秒数、用户阈值、全局阈值和清理阈值。
+- 新增 `RateLimitServiceTest`，覆盖用户维度超限和关闭限流两类场景。
+
+#### RES-02 完成记录
+
+- MinIO 客户端增加连接、读、写超时配置，并启用 OkHttp 连接失败重试。
+- MinIO 关键操作补充短重试：路径文件上传、对象读取、对象 stat、签名 URL、分片合并等。
+- Redis 已配置连接超时；任务中心 Redis 缓存读写失败继续降级到 MySQL 或只打印告警，不阻断主状态流转。
+- MySQL 导入写库沿用批次事务超时、死锁/瞬断重试和回退等待校验；任务失败会按依赖异常或资源限制分类。
+- 新增配置：`MINIO_CONNECT_TIMEOUT_MILLIS`、`MINIO_WRITE_TIMEOUT_MILLIS`、`MINIO_READ_TIMEOUT_MILLIS`、`MINIO_MAX_RETRY_TIMES`、`MINIO_RETRY_BACKOFF_MILLIS`。
+
+#### RES-03 完成记录
+
+- 任务中心 Redis 读写失败继续保留 MySQL 作为权威状态，不因缓存异常中断任务创建、查询或状态流转。
+- MinIO 上传和对象缺失已按依赖异常分类为可重试失败或补偿记录，避免 HTTP 线程长时间阻塞。
+- 监控指标写入使用 Micrometer 本地注册，不参与业务事务，不影响主链路。
+- 依赖异常仍通过任务失败分类和补偿记录暴露，便于后续重试或人工处理。
+
+#### RES-04 完成记录
+
+- 导出任务、导入任务和导入 worker 线程池统一使用可观测拒绝策略。
+- 线程池拒绝时记录结构化 WARN 日志，包含线程池名称、活跃线程数、队列长度和剩余容量。
+- 线程池拒绝会写入 `demo.thread.pool.rejected.total{pool=...}` 指标。
+- 业务提交入口已捕获拒绝异常并把任务置为可重试失败，不留下无终态任务。
+- 单元测试覆盖拒绝策略指标记录。
+
 ### 6. 监控和可观测性
 
 目标是让问题能被发现、定位和复盘，覆盖日志、指标、事件和审计。
@@ -157,6 +294,34 @@
 | OBS-02 | TraceId 贯穿异步链路 | HTTP traceId 写入任务记录/事件日志，后台日志 MDC 增加 taskId、traceId、workerId | 从一次接口提交可以串起后台执行、MinIO 上传、任务终态日志 |
 | OBS-03 | 下载审计查询接口 | 下载审计增加分页 Mapper、Service、Controller，支持 owner/admin 查询 | 可按资源类型、资源 ID、时间范围查询下载记录 |
 | OBS-04 | 业务指标补齐 | Micrometer 增加导入/导出速率、文件上传耗时、补偿积压、失败分类计数 | Prometheus 可抓取核心业务指标；文档说明指标含义和告警建议 |
+
+#### OBS-01 完成记录
+
+- 新增 `async_task_event_log` 实体、Mapper、XML 和 Flyway V9 迁移脚本。
+- 任务创建、运行、进度更新、重试、取消、失败、成功、过期都会写入任务事件日志。
+- 任务事件记录进度、完成数、总数、失败类型、traceId、workerId 和发生时间。
+- 任务详情接口返回持久化事件列表；分页查询也会附带每个任务的最近事件视图。
+
+#### OBS-02 完成记录
+
+- `async_task_record` 增加 `trace_id`，任务创建时从 HTTP `X-Trace-Id` 或系统生成 TraceId 自动写入。
+- `AsyncTaskResponse` 和 `AsyncTaskEventResponse` 返回 traceId，便于前端或测试报告串联异步链路。
+- 导入/导出后台线程执行时写入 MDC：`taskId`、`traceId`、`workerId`。
+- Flyway V9 同步补齐 `trace_id`、`upload_type` 和 `async_task_event_log`，避免已有库结构缺字段。
+
+#### OBS-03 完成记录
+
+- 新增 `/api/download-audits/page` 下载审计分页接口。
+- 普通用户只能查询自己的审计记录；管理员可按 ownerId 过滤。
+- 支持资源类型、资源 ID 和创建时间范围过滤。
+- 单元测试覆盖 owner 隔离、管理员 owner 过滤和时间范围校验。
+
+#### OBS-04 完成记录
+
+- `TaskMetricsService` 补齐业务指标：导入/导出处理行数、处理耗时、行速率、MinIO 上传耗时、错误文件生成数、补偿积压采样和线程池拒绝数。
+- 导出完成后记录导出行速率，导出结果上传记录存储耗时和成功/失败标签。
+- 异步导入记录源文件上传、错误明细上传、导入行速率和错误文件生成结果。
+- 新增 `TaskMetricsServiceTest` 覆盖核心指标注册和计数。
 
 ## 已完成历史任务
 
@@ -182,6 +347,13 @@
 | DONE | P1 | 任务恢复与补偿调度 | 增加 worker 心跳、悬挂任务扫描、CAS 抢占和导入/导出恢复投递 |
 | DONE | P1 | 统一响应和异常处理 | 增加 `ApiResponse`、错误码、业务异常、全局异常处理和 JSON 响应包装 |
 | DONE | P1 | API 权限和用户体系 | 增加当前用户上下文、demo/auth 模式、Bearer token 和 owner 数据隔离 |
+| DONE | P1 | 业务异常上下文增强 | 业务异常与统一响应支持 bizId、retryable、suggestion，并和任务失败详情保持语义一致 |
+| DONE | P1 | 任务中心复杂查询 | 任务分页支持多状态、多类型、时间范围、进度范围、可重试和白名单排序 |
+| DONE | P1 | 文件中心复杂查询 | 文件分页支持大小范围、创建时间、上传类型、状态、MD5、扩展名集合和稳定排序 |
+| DONE | P1 | 接口级限流 | 导入导出、上传初始化和下载签名接口增加用户维度、全局维度限流 |
+| DONE | P1 | 外部依赖超时与重试策略 | MinIO 增加超时和短重试配置，Redis/MySQL 失败分类和降级路径完成收敛 |
+| DONE | P1 | 任务事件日志持久化 | 持久化任务关键生命周期事件，并在任务详情中返回真实事件列表 |
+| DONE | P1 | TraceId 贯穿异步链路 | HTTP traceId 写入任务记录和事件日志，后台执行日志带 taskId、traceId、workerId |
 | DONE | P1 | 数据库迁移版本管理 | 增加 Flyway 依赖、版本化迁移脚本、baseline 配置和生产初始化说明 |
 | DONE | P1 | 框架层参数异常映射 | 修复 R7 中 3 个 500，统一映射为 400/415，并补本地回归测试 |
 | DONE | P1 | 接口扁平化脚本加固 | 导出下载和任务重试按任务实际终态动态断言，避免空库取消竞态和超单 Sheet 边界误判 |
@@ -205,6 +377,9 @@
 | DONE | P1 | 统一分布式锁组件 | 新增 Redis 分布式锁服务，清理任务和恢复调度复用同一锁组件 |
 | DONE | P1 | 接口幂等键机制 | 新增幂等记录表和服务，导入/导出/文件上传初始化支持 `Idempotency-Key` |
 | DONE | P1 | 补偿任务记录表 | 新增通用补偿记录模型，任务恢复投递失败、文件对象缺失和上传清理失败可入库追踪 |
+| DONE | P1 | 文件中心对象对账 | 定时对账文件记录、上传任务和 MinIO 对象，缺失对象标记删除，孤儿对象生成补偿记录 |
+| DONE | P1 | 导入导出任务补偿 | 定时扫描导出/导入终态任务与 MinIO 对象一致性，上传失败和对象缺失进入补偿记录 |
+| DONE | P1 | 错误码字典收敛 | 按 common/task/excel/file/security/storage 分类整理错误码，全局异常响应按模块返回稳定 code |
 | DONE | P2 | 导出 CSV / 多文件兜底 | 导出接口支持 XLSX、CSV 和 ZIP 分片 CSV，超大数据可绕开单 Sheet 上限 |
 | DONE | P2 | 监控面板和告警规则 | 增加 Prometheus endpoint、指标说明、Grafana 面板建议、告警规则和排障手册 |
 | DONE | P2 | 回归数据集治理 | 新增统一 fixture 生成脚本和数据集说明，样本默认输出到 target/test-fixtures |
@@ -2060,6 +2235,474 @@ student_import_stage -> student_record
 
 ---
 
+## 34. 标准 Docker 镜像与运行规范
+
+状态：DONE
+
+编号：DEP-01
+
+优先级：P1
+
+### 目标
+
+把当前 jar 部署方式固化为可复用、可排查、可交接的生产运行规范。
+
+### 需求范围
+
+1. 镜像运行方式
+   - 明确使用 JDK/JRE 8 基础镜像。
+   - 明确 `/app` 工作目录、jar 文件路径、日志目录和临时目录。
+   - 明确 jar 挂载方式，避免路径不一致导致 `Invalid or corrupt jarfile`。
+
+2. JVM 参数
+   - 支持 `JAVA_OPTS` 配置堆大小、GC、时区和编码。
+   - 默认参数适配 2C4G 小规格服务器。
+
+3. 健康检查
+   - 通过 `/actuator/health` 判断启动成功。
+   - 容器启动失败时能通过日志快速定位配置缺失、数据库不可达、MinIO 不可达等问题。
+
+### 验收标准
+
+- docker 启动后应用可以稳定访问 `/actuator/health`。
+- README 或部署文档能清楚说明 jar 放置位置、启动命令和常见错误。
+- 不把生产密码、Token、AccessKey 写入仓库。
+
+### 完成记录
+
+- 新增 `deploy/easyexcel-demo.env.example`，整理应用、MySQL、Redis、MinIO、导入导出、任务中心、文件中心和清理任务的生产环境变量模板。
+- 新增 `deploy/docker-compose.easyexcel-demo.yml`，约定 `/app` 工作目录、`/app/easyexcel-demo.jar` jar 挂载路径、日志目录、临时目录、JVM 参数和健康检查。
+- 新增 [deployment-runbook.md](deployment-runbook.md)，明确 jar 构建、服务器目录、上传替换、日志查看、健康检查和常见错误排查。
+- `.gitignore` 增加 `deploy/*.env`，避免生产环境变量文件误提交；仅允许提交 `*.env.example`。
+- README 增加生产部署入口，说明 compose 覆盖文件和同网络服务名访问方式。
+
+---
+
+## 35. docker-compose 部署与回滚流程
+
+状态：DONE
+
+编号：DEP-02
+
+优先级：P1
+
+### 目标
+
+在已有中间件 compose 文件中增加应用服务，并形成一套明确的部署、验证和回滚流程。
+
+### 需求范围
+
+1. compose 服务
+   - 增加应用服务、端口映射、依赖服务、健康检查和重启策略。
+   - 明确应用与 MySQL、Redis、MinIO 在同一 Docker 网络内访问时使用服务名。
+
+2. 发布流程
+   - 上传新 jar。
+   - 保留旧 jar 备份。
+   - 重启应用服务。
+   - 查看日志和健康检查。
+
+3. 回滚流程
+   - 停止应用。
+   - 切回旧 jar。
+   - 重启并验证。
+
+### 验收标准
+
+- 使用一组命令可以完成部署。
+- 应用启动失败时不会影响 MySQL、Redis、MinIO 容器。
+- 回滚步骤可在 5 分钟内执行完成。
+
+### 完成记录
+
+- `deploy/docker-compose.easyexcel-demo.yml` 可通过 `docker compose -f docker-compose-software.yml -f deploy/docker-compose.easyexcel-demo.yml --env-file deploy/easyexcel-demo.env up -d easyexcel-demo` 与已有中间件 compose 叠加启动。
+- compose 服务只新增 `easyexcel-demo`，依赖已有 `mysql`、`redis`、`minio` 服务，不要求重建中间件。
+- Runbook 补齐发布步骤：上传 `.jar.new`、备份旧 jar、替换当前 jar、启动应用、查看日志和健康检查。
+- Runbook 补齐回滚步骤：备份问题 jar、恢复指定备份、`--force-recreate` 重建应用容器并验证 `/actuator/health`。
+- 常见问题表覆盖 `Invalid or corrupt jarfile`、未叠加 compose 文件、内外 MinIO 地址混淆、Docker daemon/context 不一致和 healthcheck 失败。
+
+---
+
+## 36. 用户表、登录接口和 JWT 鉴权
+
+状态：DONE
+
+编号：AUTH-01
+
+优先级：P1
+
+### 目标
+
+用真实用户体系替代 demo token，为后续管理端、审计和多用户隔离打基础。
+
+### 需求范围
+
+1. 数据模型
+   - 新增用户表、角色表或用户角色字段。
+   - 密码使用 BCrypt 或项目统一加密方式存储。
+   - 包含启用/禁用、创建时间、更新时间字段。
+
+2. 登录接口
+   - 用户名密码登录。
+   - 返回 JWT access token。
+   - 支持 token 过期时间配置。
+
+3. 鉴权拦截
+   - 从 Bearer token 解析当前用户。
+   - 写入 `UserContextHolder`。
+   - 保留 demo 模式作为本地开发开关。
+
+### 验收标准
+
+- 未登录访问受保护接口返回 401。
+- 普通用户登录后只能访问自己的任务、文件和审计数据。
+- 密码不会明文存储或写入日志。
+
+### 完成记录
+
+- 新增 `security_user` 用户表、MyBatis Mapper、Flyway V10 迁移脚本和本地初始化 SQL。
+- 新增 `/api/auth/login` 和 `/api/auth/refresh`，登录后返回 Bearer access token 与 refresh token。
+- 密码使用 PBKDF2 + 随机盐存储，登录校验对损坏哈希返回认证失败，不暴露底层异常。
+- JWT 使用 HS256 签名，支持 access token 和 refresh token 独立过期时间配置。
+- `UserContextInterceptor` 优先解析 JWT，demo token 继续作为本地开发兼容模式。
+- 支持可配置 bootstrap admin，用于首次初始化管理员账号；密码不写入日志。
+- 新增 `PasswordServiceTest`、`JwtTokenServiceTest`、`AuthServiceImplTest`，覆盖哈希校验、token 解析、登录失败、刷新和初始化管理员。
+
+---
+
+## 37. 角色权限模型和管理接口保护
+
+状态：DONE
+
+编号：AUTH-02
+
+优先级：P1
+
+### 目标
+
+让管理端接口从“代码中手动判断 admin”升级为统一权限模型。
+
+### 需求范围
+
+1. 权限模型
+   - 定义 `USER`、`ADMIN` 等基础角色。
+   - 后续可扩展资源权限码。
+
+2. 权限校验
+   - 管理接口统一校验管理员角色。
+   - 普通接口统一校验当前用户归属。
+
+3. 审计
+   - 管理员执行重试、忽略、删除等操作时记录操作者。
+
+### 验收标准
+
+- 普通用户访问补偿管理接口返回 403。
+- 管理员可访问管理接口。
+- 权限失败响应使用 `SECURITY_FORBIDDEN`。
+
+### 完成记录
+
+- 新增 `SecurityRoles` 统一定义 `USER`、`ADMIN` 基础角色，收敛权限判断中的散落字符串。
+- `PermissionService.requireAdmin()` 作为管理端统一入口，补偿管理接口继续统一校验管理员角色。
+- 下载审计查询保持 owner 隔离：普通用户只能查询自己的审计记录，管理员可按 `ownerId` 过滤。
+- `/api/tasks/metrics/thread-pools` 改为管理员接口，避免普通用户访问全局线程池运行数据。
+- 新增 `TaskCenterControllerTest` 覆盖普通用户无权访问线程池监控和管理员可查看快照。
+
+---
+
+## 38. 运维聚合查询接口
+
+状态：DONE
+
+编号：OPS-01
+
+优先级：P1
+
+### 目标
+
+为后续管理页面提供一个低成本的后端聚合入口，减少前端拼多个接口的复杂度。
+
+### 需求范围
+
+1. 首页摘要
+   - 今日任务数、失败任务数、运行中任务数。
+   - 补偿积压数。
+   - 文件上传数量和存储量。
+
+2. 运行状态
+   - 线程池快照。
+   - 最近失败任务。
+   - 最近补偿记录。
+
+3. 查询隔离
+   - 仅管理员可访问全局聚合数据。
+
+### 验收标准
+
+- 一个接口可以返回管理后台首页需要的核心摘要。
+- 聚合查询不会扫描大表全量数据。
+- 接口具备单元测试或 Mapper 测试覆盖。
+
+### 完成记录
+
+- 新增 `/api/admin/ops/overview` 运维首页聚合接口，统一返回今日任务数、今日失败任务数、运行中任务数、补偿积压、今日文件上传数、总存储量、线程池快照、最近失败任务和最近补偿记录。
+- Controller 只负责管理员权限校验和调用 Service，聚合逻辑放在 `OpsDashboardServiceImpl`。
+- 任务、补偿、文件 Mapper 新增按时间或状态的聚合查询和最近记录查询，避免在应用侧全量扫描大表。
+- 全局运维接口统一使用 `PermissionService.requireAdmin()`，普通用户不能查看全局运行数据。
+- 新增 `OpsDashboardServiceImplTest` 和 `OpsDashboardControllerTest`，覆盖聚合值转换、最近记录限制、线程池快照和管理员权限校验。
+
+---
+
+## 39. 轻量管理页面
+
+状态：TODO
+
+编号：OPS-02
+
+优先级：P2
+
+### 目标
+
+提供一个可以直接操作任务中心和补偿中心的轻量前端页面，方便演示和联调。
+
+### 需求范围
+
+1. 任务运维
+   - 任务列表、详情、事件日志。
+   - 取消、重试。
+
+2. 补偿运维
+   - 补偿列表。
+   - 手动重试、忽略。
+
+3. 审计与指标
+   - 下载审计查询。
+   - 线程池状态展示。
+
+### 验收标准
+
+- 本地启动应用后可以打开页面操作任务和补偿。
+- 页面不暴露密钥、Token 或真实服务器地址。
+- 失败操作能展示统一错误响应。
+
+---
+
+## 40. 导入模式策略
+
+状态：TODO
+
+编号：IMP-01
+
+优先级：P1
+
+### 目标
+
+把当前“整体发布新版本”的导入能力扩展为可选择的业务导入模式。
+
+### 需求范围
+
+1. 导入模式
+   - `REPLACE_ALL`：全量替换当前可见版本。
+   - `UPSERT`：按业务键插入或更新。
+   - `APPEND_ONLY`：只允许新增，遇到重复直接失败。
+   - `VALIDATE_ONLY`：只校验不落库。
+
+2. 接口参数
+   - 导入提交和预检支持传入模式。
+   - 任务 payload 记录导入模式。
+
+3. 冲突处理
+   - 明确重复学号、不存在记录、字段为空时各模式的处理规则。
+
+### 验收标准
+
+- 每种模式都有成功和失败测试用例。
+- `VALIDATE_ONLY` 不修改正式表数据。
+- 冲突错误能生成明确错误明细。
+
+---
+
+## 41. 导入字段规则配置化
+
+状态：TODO
+
+编号：IMP-02
+
+优先级：P2
+
+### 目标
+
+让导入校验从写死在代码中逐步升级为可配置规则，便于扩展不同业务表。
+
+### 需求范围
+
+1. 规则模型
+   - 字段名、是否必填、最大长度、正则、枚举值、唯一性。
+
+2. 规则应用
+   - 预检和正式导入使用同一套规则。
+   - 错误明细返回规则命中的具体字段和原因。
+
+3. 默认规则
+   - 先内置学生表规则。
+   - 后续可迁移到数据库配置。
+
+### 验收标准
+
+- 调整规则后预检和正式导入行为一致。
+- 错误明细能定位到字段级问题。
+- 不破坏现有学生导入兼容性。
+
+---
+
+## 42. 文件业务归属、标签和引用关系
+
+状态：TODO
+
+编号：FILE-01
+
+优先级：P2
+
+### 目标
+
+让文件中心从“存文件”升级为“管理业务文件资产”。
+
+### 需求范围
+
+1. 业务归属
+   - 文件记录支持 `bizType`、`bizId`。
+   - 支持按业务对象查询文件列表。
+
+2. 标签
+   - 支持文件标签或分类。
+   - 支持按标签筛选。
+
+3. 引用关系
+   - 增加引用计数或引用表。
+   - 被业务引用的文件不能直接物理清理。
+
+### 验收标准
+
+- 同一业务对象可以关联多个文件。
+- 删除文件时能识别是否仍被引用。
+- 文件分页支持业务归属过滤。
+
+---
+
+## 43. 自动补偿执行器
+
+状态：TODO
+
+编号：CON-05
+
+优先级：P1
+
+### 目标
+
+让补偿记录从“可查、可手动处理”升级为“可自动重试、可人工兜底”。
+
+### 需求范围
+
+1. 调度执行
+   - 定时扫描 `PENDING` 补偿。
+   - 使用分布式锁避免多实例重复处理。
+
+2. 退避策略
+   - 支持最大重试次数。
+   - 支持按失败次数计算下一次重试时间。
+
+3. 处理器模型
+   - 按 `bizType + failureType` 路由到具体补偿处理器。
+   - 未知类型保持人工处理。
+
+### 验收标准
+
+- 可重试补偿会自动推进到 `SUCCESS` 或 `FAILED`。
+- 超过最大次数后不再无限重试。
+- 每次补偿执行都有日志和指标。
+
+---
+
+## 44. Grafana Dashboard 和告警规则
+
+状态：TODO
+
+编号：OBS-05
+
+优先级：P1
+
+### 目标
+
+把已有 Prometheus 指标转化为可观察、可告警、可排障的运维能力。
+
+### 需求范围
+
+1. Dashboard
+   - 任务提交量、成功率、失败率。
+   - 导入/导出耗时和行速率。
+   - 线程池活跃数、队列长度、拒绝次数。
+   - MinIO 上传耗时。
+   - 补偿积压。
+
+2. 告警规则
+   - 任务失败率过高。
+   - 线程池持续满载。
+   - 补偿积压持续增长。
+   - MinIO 上传耗时异常。
+
+3. 排障说明
+   - 每个告警给出排查步骤。
+
+### 验收标准
+
+- Prometheus 能抓取应用指标。
+- Grafana 面板能展示关键趋势。
+- 告警规则文档化，可复制到 Prometheus/Alertmanager。
+
+---
+
+## 45. 300 万 / 500 万数据量压测矩阵
+
+状态：TODO
+
+编号：PERF-01
+
+优先级：P1
+
+### 目标
+
+验证当前架构在更大数据量和并发场景下的边界，形成明确容量结论。
+
+### 需求范围
+
+1. 导出压测
+   - 300 万、500 万 CSV 导出。
+   - 300 万、500 万 ZIP 分片 CSV 导出。
+   - 不建议 XLSX 单 Sheet 超过 Excel 上限。
+
+2. 导入压测
+   - 10 万、50 万、100 万导入基线。
+   - 并发导入和导出混合压力。
+
+3. 参数矩阵
+   - `EXPORT_PAGE_SIZE`
+   - `IMPORT_BATCH_SIZE`
+   - `IMPORT_WORKER_COUNT`
+   - Hikari 最大连接数
+   - MinIO 上传耗时
+
+### 验收标准
+
+- 输出性能报告，包含吞吐、耗时、CPU、内存、磁盘、数据库连接和失败原因。
+- 给出当前服务器规格下的推荐配置。
+- 明确不建议使用的参数组合。
+
+---
+
 ## 建议实施顺序
 
-当前登记任务已全部完成。后续可以继续新增安全、观测、部署或业务场景类任务。
+1. `OPS-02`：补齐轻量管理页面，让任务、补偿、审计可视化。
+2. `CON-05`、`OBS-05`：增强自动补偿和告警，提升生产稳定性。
+3. `IMP-01`、`IMP-02`、`FILE-01`：继续扩展业务规则和文件中心生产能力。
+4. `PERF-01`：在部署和观测稳定后再做 300 万 / 500 万压测，结论更可信。

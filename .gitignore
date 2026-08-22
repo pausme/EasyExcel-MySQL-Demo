@@ -4,6 +4,8 @@ target/
 docs/test/live-test-results*.json
 import-load-matrix*.json
 perf-*.json
+deploy/*.env
+!deploy/*.env.example
 !.mvn/wrapper/maven-wrapper.jar
 !**/src/main/**/target/
 !**/src/test/**/target/

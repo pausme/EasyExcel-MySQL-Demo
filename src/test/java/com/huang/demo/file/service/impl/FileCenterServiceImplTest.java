@@ -25,6 +25,7 @@ import org.springframework.mock.web.MockMultipartFile;
 import java.io.ByteArrayInputStream;
 import java.time.Duration;
 import java.util.Optional;
+import java.util.Collections;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -106,8 +107,10 @@ class FileCenterServiceImplTest {
         FileUploadTaskMapper taskMapper = mock(FileUploadTaskMapper.class);
         FileObjectStorageService storageService = mock(FileObjectStorageService.class);
         FileCenterServiceImpl service = newService(mapper, taskMapper, storageService);
-        when(mapper.countNormal("anonymous", null, null)).thenReturn(1L);
-        when(mapper.listNormalPage("anonymous", null, null, 0, 20)).thenReturn(java.util.Collections.singletonList(
+        when(mapper.countNormal("anonymous", null, Collections.emptyList(), null, "NORMAL",
+                null, null, null, null, null)).thenReturn(1L);
+        when(mapper.listNormalPage("anonymous", null, Collections.emptyList(), null, "NORMAL",
+                null, null, null, null, null, "id DESC, id DESC", 0, 20)).thenReturn(Collections.singletonList(
                 FileRecord.builder()
                         .fileId("file-1")
                         .originalName("demo.xlsx")

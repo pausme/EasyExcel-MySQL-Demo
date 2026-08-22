@@ -3,6 +3,8 @@ package com.huang.demo.excel.repository;
 import com.huang.demo.excel.domain.model.StudentExportRecord;
 import com.huang.demo.excel.domain.model.StudentExportQuery;
 import com.huang.demo.excel.domain.model.StudentImportStageRecord;
+import com.huang.demo.excel.api.dto.StudentCursorQueryRequest;
+import com.huang.demo.excel.api.dto.StudentPageQueryRequest;
 import com.huang.demo.excel.model.StudentExcelRow;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
@@ -51,6 +53,16 @@ public interface StudentMapper {
     int count();
 
     List<StudentExcelRow> listPage(@Param("offset") int offset, @Param("limit") int limit);
+
+    long countByPageQuery(@Param("query") StudentPageQueryRequest query);
+
+    List<StudentExportRecord> listByPageQuery(@Param("query") StudentPageQueryRequest query,
+                                              @Param("offset") int offset,
+                                              @Param("limit") int limit);
+
+    List<StudentExportRecord> listByCursorQuery(@Param("query") StudentCursorQueryRequest query,
+                                                @Param("lastId") long lastId,
+                                                @Param("limit") int limit);
 
     Long maxId();
 

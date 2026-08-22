@@ -45,6 +45,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -447,12 +448,23 @@ public class FileCenterServiceImpl implements FileCenterService {
         int pageNo = normalizePageNo(safeRequest.getPageNo());
         int pageSize = normalizePageSize(safeRequest.getPageSize());
         String originalName = normalizeQueryText(safeRequest.getOriginalName());
-        String fileExt = normalizeFileExt(safeRequest.getFileExt());
+        List<String> fileExts = normalizeFileExts(safeRequest);
+        String fileMd5 = normalizeOptionalFileMd5(safeRequest.getFileMd5());
+        String status = normalizeOptionalFileStatus(safeRequest.getStatus());
+        String uploadType = normalizeOptionalUploadType(safeRequest.getUploadType());
+        Long minFileSize = normalizeOptionalFileSize(safeRequest.getMinFileSize());
+        Long maxFileSize = normalizeOptionalFileSize(safeRequest.getMaxFileSize());
+        validateFileSizeRange(minFileSize, maxFileSize);
+        validateCreatedTimeRange(safeRequest.getCreatedFrom(), safeRequest.getCreatedTo());
+        String orderBy = resolveFileOrderBy(safeRequest.getSortBy(), safeRequest.getSortDirection());
         int offset = (pageNo - 1) * pageSize;
 
         String ownerId = currentOwnerId();
-        long total = fileRecordMapper.countNormal(ownerId, originalName, fileExt);
-        List<FileRecord> records = fileRecordMapper.listNormalPage(ownerId, originalName, fileExt, offset, pageSize);
+        long total = fileRecordMapper.countNormal(ownerId, originalName, fileExts, fileMd5, status, uploadType,
+                minFileSize, maxFileSize, safeRequest.getCreatedFrom(), safeRequest.getCreatedTo());
+        List<FileRecord> records = fileRecordMapper.listNormalPage(ownerId, originalName, fileExts, fileMd5, status,
+                uploadType, minFileSize, maxFileSize, safeRequest.getCreatedFrom(), safeRequest.getCreatedTo(),
+                orderBy, offset, pageSize);
         List<FileResponse> responseRecords = new ArrayList<FileResponse>(records.size());
         for (FileRecord record : records) {
             responseRecords.add(FileResponse.from(record));
@@ -482,6 +494,7 @@ public class FileCenterServiceImpl implements FileCenterService {
                 .fileMd5(storedFile.getFileMd5())
                 .fileExt(fileExt)
                 .storageType(StorageType.MINIO.name())
+                .uploadType("SERVER")
                 .status(FileStatus.NORMAL.name())
                 .createdAt(now)
                 .updatedAt(now)
@@ -501,6 +514,7 @@ public class FileCenterServiceImpl implements FileCenterService {
                 .fileMd5(task.getFileMd5())
                 .fileExt(task.getFileExt())
                 .storageType(StorageType.MINIO.name())
+                .uploadType(task.getUploadType())
                 .status(FileStatus.NORMAL.name())
                 .createdAt(now)
                 .updatedAt(now)
@@ -913,6 +927,98 @@ public class FileCenterServiceImpl implements FileCenterService {
             normalized = normalized.substring(1);
         }
         return normalized.length() > 32 ? normalized.substring(0, 32) : normalized;
+    }
+
+    private List<String> normalizeFileExts(FilePageQueryRequest request) {
+        LinkedHashSet<String> result = new LinkedHashSet<String>();
+        String single = normalizeFileExt(request.getFileExt());
+        if (single != null && !single.isEmpty()) {
+            result.add(single);
+        }
+        if (request.getFileExts() != null) {
+            for (String fileExt : request.getFileExts()) {
+                String normalized = normalizeFileExt(fileExt);
+                if (normalized != null && !normalized.isEmpty()) {
+                    result.add(normalized);
+                }
+            }
+        }
+        return new ArrayList<String>(result);
+    }
+
+    private String normalizeOptionalFileMd5(String fileMd5) {
+        if (fileMd5 == null || fileMd5.trim().isEmpty()) {
+            return null;
+        }
+        return normalizeFileMd5(fileMd5);
+    }
+
+    private String normalizeOptionalFileStatus(String status) {
+        if (status == null || status.trim().isEmpty()) {
+            return FileStatus.NORMAL.name();
+        }
+        String normalized = status.trim().toUpperCase();
+        FileStatus.valueOf(normalized);
+        return normalized;
+    }
+
+    private String normalizeOptionalUploadType(String uploadType) {
+        if (uploadType == null || uploadType.trim().isEmpty()) {
+            return null;
+        }
+        String normalized = uploadType.trim().toUpperCase();
+        if ("SERVER".equals(normalized)) {
+            return normalized;
+        }
+        FileUploadType.valueOf(normalized);
+        return normalized;
+    }
+
+    private Long normalizeOptionalFileSize(Long fileSize) {
+        if (fileSize == null) {
+            return null;
+        }
+        if (fileSize < 0L) {
+            throw new IllegalArgumentException("文件大小范围不能小于 0");
+        }
+        return fileSize;
+    }
+
+    private void validateFileSizeRange(Long minFileSize, Long maxFileSize) {
+        if (minFileSize != null && maxFileSize != null && maxFileSize < minFileSize) {
+            throw new IllegalArgumentException("文件大小范围不正确");
+        }
+    }
+
+    private void validateCreatedTimeRange(LocalDateTime createdFrom, LocalDateTime createdTo) {
+        if (createdFrom != null && createdTo != null && createdTo.isBefore(createdFrom)) {
+            throw new IllegalArgumentException("文件创建时间范围不正确");
+        }
+    }
+
+    private String resolveFileOrderBy(String sortBy, String sortDirection) {
+        String column = "id";
+        if (sortBy != null && !sortBy.trim().isEmpty()) {
+            String normalized = sortBy.trim().toLowerCase();
+            if ("createdat".equals(normalized) || "created_at".equals(normalized)) {
+                column = "created_at";
+            } else if ("updatedat".equals(normalized) || "updated_at".equals(normalized)) {
+                column = "updated_at";
+            } else if ("filesize".equals(normalized) || "file_size".equals(normalized) || "size".equals(normalized)) {
+                column = "file_size";
+            } else if ("originalname".equals(normalized) || "original_name".equals(normalized) || "name".equals(normalized)) {
+                column = "original_name";
+            } else if ("id".equals(normalized)) {
+                column = "id";
+            } else {
+                throw new IllegalArgumentException("不支持的文件排序字段，sortBy=" + sortBy);
+            }
+        }
+        String direction = "DESC";
+        if (sortDirection != null && "asc".equalsIgnoreCase(sortDirection.trim())) {
+            direction = "ASC";
+        }
+        return column + " " + direction + ", id DESC";
     }
 
     private String normalizeQueryText(String text) {

@@ -16,6 +16,7 @@
         <result property="fileMd5" column="file_md5"/>
         <result property="fileExt" column="file_ext"/>
         <result property="storageType" column="storage_type"/>
+        <result property="uploadType" column="upload_type"/>
         <result property="status" column="status"/>
         <result property="createdAt" column="created_at"/>
         <result property="updatedAt" column="updated_at"/>
@@ -34,6 +35,7 @@
             file_md5 CHAR(32) NOT NULL,
             file_ext VARCHAR(32),
             storage_type VARCHAR(32) NOT NULL,
+            upload_type VARCHAR(32),
             status VARCHAR(32) NOT NULL,
             created_at DATETIME NOT NULL,
             updated_at DATETIME NOT NULL,
@@ -46,17 +48,17 @@
     <insert id="insert" parameterType="com.huang.demo.file.domain.entity.FileRecord">
         INSERT INTO file_record (
             file_id, owner_id, original_name, object_key, bucket_name, content_type,
-            file_size, file_md5, file_ext, storage_type, status, created_at, updated_at
+            file_size, file_md5, file_ext, storage_type, upload_type, status, created_at, updated_at
         )
         VALUES (
             #{fileId}, #{ownerId}, #{originalName}, #{objectKey}, #{bucketName}, #{contentType},
-            #{fileSize}, #{fileMd5}, #{fileExt}, #{storageType}, #{status}, #{createdAt}, #{updatedAt}
+            #{fileSize}, #{fileMd5}, #{fileExt}, #{storageType}, #{uploadType}, #{status}, #{createdAt}, #{updatedAt}
         )
     </insert>
 
     <select id="findNormalByFileId" resultMap="FileRecordMap">
         SELECT id, file_id, owner_id, original_name, object_key, bucket_name, content_type,
-               file_size, file_md5, file_ext, storage_type, status, created_at, updated_at
+               file_size, file_md5, file_ext, storage_type, upload_type, status, created_at, updated_at
         FROM file_record
         WHERE owner_id = #{ownerId}
           AND file_id = #{fileId}
@@ -66,7 +68,7 @@
 
     <select id="findNormalByMd5AndSize" resultMap="FileRecordMap">
         SELECT id, file_id, owner_id, original_name, object_key, bucket_name, content_type,
-               file_size, file_md5, file_ext, storage_type, status, created_at, updated_at
+               file_size, file_md5, file_ext, storage_type, upload_type, status, created_at, updated_at
         FROM file_record
         WHERE owner_id = #{ownerId}
           AND file_md5 = #{fileMd5}
@@ -89,12 +91,33 @@
         SELECT COUNT(*)
         FROM file_record
         WHERE owner_id = #{ownerId}
-          AND status = 'NORMAL'
+          AND status = #{status}
         <if test="originalName != null and originalName != ''">
             AND original_name LIKE CONCAT('%', #{originalName}, '%')
         </if>
-        <if test="fileExt != null and fileExt != ''">
-            AND file_ext = #{fileExt}
+        <if test="fileExts != null and fileExts.size() > 0">
+            AND file_ext IN
+            <foreach collection="fileExts" item="fileExt" open="(" separator="," close=")">
+                #{fileExt}
+            </foreach>
+        </if>
+        <if test="fileMd5 != null and fileMd5 != ''">
+            AND file_md5 = #{fileMd5}
+        </if>
+        <if test="uploadType != null and uploadType != ''">
+            AND upload_type = #{uploadType}
+        </if>
+        <if test="minFileSize != null">
+            AND file_size &gt;= #{minFileSize}
+        </if>
+        <if test="maxFileSize != null">
+            AND file_size &lt;= #{maxFileSize}
+        </if>
+        <if test="createdFrom != null">
+            AND created_at &gt;= #{createdFrom}
+        </if>
+        <if test="createdTo != null">
+            AND created_at &lt;= #{createdTo}
         </if>
     </select>
 
@@ -113,28 +136,81 @@
           AND created_at &gt;= #{createdAt}
     </select>
 
+    <select id="countNormalGlobalCreatedAtOrAfter" resultType="long">
+        SELECT COUNT(*)
+        FROM file_record
+        WHERE status = 'NORMAL'
+          AND created_at &gt;= #{createdAt}
+    </select>
+
+    <select id="sumNormalFileSizeGlobal" resultType="long">
+        SELECT COALESCE(SUM(file_size), 0)
+        FROM file_record
+        WHERE status = 'NORMAL'
+    </select>
+
     <select id="listNormalPage" resultMap="FileRecordMap">
         SELECT id, file_id, owner_id, original_name, object_key, bucket_name, content_type,
-               file_size, file_md5, file_ext, storage_type, status, created_at, updated_at
+               file_size, file_md5, file_ext, storage_type, upload_type, status, created_at, updated_at
         FROM file_record
         WHERE owner_id = #{ownerId}
-          AND status = 'NORMAL'
+          AND status = #{status}
         <if test="originalName != null and originalName != ''">
             AND original_name LIKE CONCAT('%', #{originalName}, '%')
         </if>
-        <if test="fileExt != null and fileExt != ''">
-            AND file_ext = #{fileExt}
+        <if test="fileExts != null and fileExts.size() > 0">
+            AND file_ext IN
+            <foreach collection="fileExts" item="fileExt" open="(" separator="," close=")">
+                #{fileExt}
+            </foreach>
         </if>
-        ORDER BY id DESC
+        <if test="fileMd5 != null and fileMd5 != ''">
+            AND file_md5 = #{fileMd5}
+        </if>
+        <if test="uploadType != null and uploadType != ''">
+            AND upload_type = #{uploadType}
+        </if>
+        <if test="minFileSize != null">
+            AND file_size &gt;= #{minFileSize}
+        </if>
+        <if test="maxFileSize != null">
+            AND file_size &lt;= #{maxFileSize}
+        </if>
+        <if test="createdFrom != null">
+            AND created_at &gt;= #{createdFrom}
+        </if>
+        <if test="createdTo != null">
+            AND created_at &lt;= #{createdTo}
+        </if>
+        ORDER BY ${orderBy}
         LIMIT #{limit} OFFSET #{offset}
     </select>
 
     <select id="listDeletedBefore" resultMap="FileRecordMap">
         SELECT id, file_id, owner_id, original_name, object_key, bucket_name, content_type,
-               file_size, file_md5, file_ext, storage_type, status, created_at, updated_at
+               file_size, file_md5, file_ext, storage_type, upload_type, status, created_at, updated_at
         FROM file_record
         WHERE status = 'DELETED'
           AND updated_at &lt;= #{updatedBefore}
+        ORDER BY id ASC
+        LIMIT #{limit}
+    </select>
+
+    <select id="listAllAfterId" resultMap="FileRecordMap">
+        SELECT id, file_id, owner_id, original_name, object_key, bucket_name, content_type,
+               file_size, file_md5, file_ext, storage_type, upload_type, status, created_at, updated_at
+        FROM file_record
+        WHERE id &gt; #{lastId}
+        ORDER BY id ASC
+        LIMIT #{limit}
+    </select>
+
+    <select id="listNormalAfterId" resultMap="FileRecordMap">
+        SELECT id, file_id, owner_id, original_name, object_key, bucket_name, content_type,
+               file_size, file_md5, file_ext, storage_type, upload_type, status, created_at, updated_at
+        FROM file_record
+        WHERE status = 'NORMAL'
+          AND id &gt; #{lastId}
         ORDER BY id ASC
         LIMIT #{limit}
     </select>

@@ -21,6 +21,7 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 
 import javax.servlet.http.HttpServletRequest;
+import javax.validation.Valid;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -39,7 +40,7 @@ public class StudentReportRunController {
 
     @ApiOperation("分页查询学生报表运行控制")
     @PostMapping("/page")
-    public StudentReportRunPageResponse page(@RequestBody(required = false) StudentReportRunPageQueryRequest request,
+    public StudentReportRunPageResponse page(@Valid @RequestBody(required = false) StudentReportRunPageQueryRequest request,
                                              HttpServletRequest httpServletRequest) {
         return studentReportRunService.page(taskOwnerResolver.resolve(httpServletRequest), request);
     }
@@ -108,7 +109,7 @@ public class StudentReportRunController {
     @ApiOperation("分页查询学生报表运行历史任务")
     @PostMapping("/{runId}/tasks")
     public AsyncTaskPageResponse tasks(@PathVariable("runId") String runId,
-                                       @RequestBody(required = false) AsyncTaskPageQueryRequest request,
+                                       @Valid @RequestBody(required = false) AsyncTaskPageQueryRequest request,
                                        HttpServletRequest httpServletRequest) {
         try {
             return studentReportRunService.pageTasks(taskOwnerResolver.resolve(httpServletRequest), runId, request);

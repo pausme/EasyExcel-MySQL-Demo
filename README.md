@@ -9,12 +9,15 @@
 - Excel 导出：异步提交任务，记录当前数据版本和最大 id，使用游标分页读取数据库，支持单 Sheet Excel、CSV 和 ZIP 分片 CSV，生成后上传 MinIO。
 - 异步任务中心：统一记录任务状态、进度、失败原因、失败类型、可重试状态和重试次数，状态缓存 Redis，任务记录持久化 MySQL。
 - 任务恢复和监控：任务执行写入 worker 心跳，应用定时恢复悬挂任务，并暴露 Actuator/Micrometer 指标。
-- 统一 API 响应：常规 JSON 接口返回 `ApiResponse`，异常由全局处理器转换为稳定错误码。
+- 统一 API 响应：常规 JSON 接口返回 `ApiResponse`，异常由全局处理器转换为稳定错误码；参数校验失败返回字段级 `fieldErrors`。
 - 用户上下文：默认 demo 模式兼容本地调试，关闭 demo 后必须使用 Bearer token，任务、报表和文件按 owner 隔离。
 - 报表运行控制：支持保存学生报表查询条件，基于运行控制创建导出任务，并查询运行历史。
 - 通用报表导出引擎：抽象 Sheet 配置、快照计数、游标分页、Excel 写入、进度更新和取消检查。
 - 文件下载：应用只返回 MinIO 签名地址，不经过应用服务器转发大文件内容。
 - 通用文件中心：支持普通上传、元数据查询、逻辑删除、分页查询和签名下载。
+- 查询接口：任务、文件、学生数据、下载审计和补偿记录均提供组合条件分页查询；学生数据额外提供游标分页。
+- 补偿管理：管理员可分页查看补偿记录，并手动重试或忽略补偿项。
+- 可观测性：任务事件、TraceId、下载审计、线程池指标、导入导出行速率、MinIO 上传耗时和错误文件指标已接入 Micrometer。
 - 文件中心测试页：启动应用后访问 `/file-upload-test.html`，可测试秒传、客户端直传和分片上传。
 - 文件中心测试页还能展示分片状态、断点继续和失败分片重试，适合联调文件中心。
 - 数据更新：同一可见版本内使用 `student_no` 作为唯一业务键，重复导入时按新版本整体发布。
@@ -27,7 +30,7 @@
 
 | 项目 | 数据量 | 结果 |
 | --- | ---: | --- |
-| 单元/切片测试 | 15 类 / 77 用例 | 全部通过 |
+| 单元/切片测试 | 36 类 / 155 用例 | 全部通过 |
 | 接口扁平化测试 | 77 用例 | R11 标准环境 77/77 通过；F-02/F-09/F-12 已关闭，F-11 受控，新增文件安全扫描用例通过 |
 | 异步导出 | 1,000,006 行 × 3 | 全部成功，平均约 23,317 行/s |
 | 异步导入 | 100,000 行 × 3 | 全部成功，平均约 4,511 行/s |
@@ -40,6 +43,32 @@
 - 标准环境已经通过 swap 缓解小规格机器 OOM；默认还会用最大行数和文件大小限制拒绝超出当前环境容量的导入任务。
 
 ## 实现思路
+
+### 统一错误响应
+
+异常响应由 `GlobalExceptionHandler` 统一处理，核心结构如下：
+
+```json
+{
+  "success": false,
+  "code": "EXCEL_PARAM_ERROR",
+  "message": "请求参数校验失败",
+  "traceId": "trace-id",
+  "bizId": null,
+  "retryable": false,
+  "suggestion": "请根据 fieldErrors 修正请求参数",
+  "fieldErrors": [
+    {
+      "field": "pageSize",
+      "message": "每页条数不能超过100",
+      "rejectedValue": "500"
+    }
+  ],
+  "timestamp": "2026-08-22T09:34:00"
+}
+```
+
+错误码按模块收敛：`EXCEL_*`、`FILE_*`、`TASK_*`、`SECURITY_*`、`STORAGE_*` 和 `COMMON_*`。业务异常可额外返回 `bizId`、`retryable`、`suggestion`，异步任务失败详情也使用同一套语义。
 
 ### 导入流程
 
@@ -122,6 +151,39 @@ IMPORT_WORKER_COUNT * IMPORT_MAX_CONCURRENT_TASKS <= HIKARI_MAXIMUM_POOL_SIZE
 导入和导出任务都已经接入统一任务中心，进度、失败原因、失败类型、可重试状态、取消和重试都会同步到 `async_task_record`，并缓存到 Redis。
 为了让导出的文件可以直接作为导入文件使用，当前导出只生成一个 Sheet；超过 Excel 单 Sheet 行数限制时任务失败。
 
+### 查询和管理接口
+
+| 功能 | 方法与路径 | 说明 |
+| --- | --- | --- |
+| 用户登录 | `POST /api/auth/login` | 用户名密码登录，返回 Bearer access token 和 refresh token |
+| 刷新令牌 | `POST /api/auth/refresh` | 使用 refresh token 换取新的 access token 和 refresh token |
+| 学生分页查询 | `POST /api/students/page` | 支持学号、姓名、班级、性别、年龄范围、生日范围、导入版本过滤 |
+| 学生游标查询 | `POST /api/students/cursor-page` | 使用 `cursor` + `pageSize` 翻页，适合大结果集连续浏览 |
+| 下载审计查询 | `POST /api/download-audits/page` | 普通用户只查自己，管理员可按 ownerId 查询 |
+| 补偿记录查询 | `POST /api/admin/compensations/page` | 管理员查看补偿原因、状态、重试次数和最近错误 |
+| 补偿重试 | `POST /api/admin/compensations/{compensationId}/retry` | 将补偿记录切回 `PENDING`，等待调度重放 |
+| 补偿忽略 | `POST /api/admin/compensations/{compensationId}/ignore` | 将补偿记录标记为 `IGNORED` |
+| 运维首页聚合 | `GET /api/admin/ops/overview` | 管理员查看今日任务、失败任务、补偿积压、文件容量、线程池和最近异常 |
+| 线程池监控 | `GET /api/tasks/metrics/thread-pools` | 管理员查看导入、导出线程池快照 |
+
+分页查询统一限制 `pageSize <= 100`；学生游标分页限制 `pageSize <= 1000`。
+关闭 demo 模式后，受保护接口必须携带 `Authorization: Bearer <accessToken>`。`API_SECURITY_INIT_ENABLED=true` 时会初始化 `security_user` 表；需要首次登录账号时，可临时开启 `API_SECURITY_BOOTSTRAP_ADMIN_ENABLED=true` 并配置启动管理员用户名和密码，启动完成后建议关闭 bootstrap 配置。
+
+### 监控指标
+
+Prometheus 可通过 `/actuator/prometheus` 抓取指标。核心业务指标包括：
+
+| 指标 | 标签 | 含义 |
+| --- | --- | --- |
+| `demo.async.task.total` | `taskType`,`outcome` | 异步任务提交和状态流转次数 |
+| `demo.async.task.duration` | `taskType`,`status` | 异步任务执行耗时 |
+| `demo.thread.pool.rejected.total` | `pool` | 导入/导出线程池拒绝次数 |
+| `demo.excel.rows.total` | `scene` | 导入/导出处理行数 |
+| `demo.excel.row.rate` | `scene` | 导入/导出行处理速率采样 |
+| `demo.storage.upload.duration` | `scene`,`success` | MinIO 上传耗时 |
+| `demo.excel.error.file.total` | `outcome` | 导入错误明细文件生成结果 |
+| `demo.compensation.backlog` | `status` | 补偿积压采样 |
+
 ## 项目结构
 
 ```text
@@ -187,9 +249,17 @@ export TASK_RECOVERY_HEARTBEAT_TIMEOUT_SECONDS='120'
 export TASK_RECOVERY_BATCH_SIZE='20'
 
 # API 权限
+export API_SECURITY_INIT_ENABLED='true'
 export API_SECURITY_DEMO_MODE='true'
 export API_SECURITY_DEMO_USER_TOKEN='<配置的普通用户 Token>'
 export API_SECURITY_DEMO_ADMIN_TOKEN='<配置的管理员 Token>'
+export API_SECURITY_JWT_SECRET='<至少 32 位随机字符串>'
+export API_SECURITY_ACCESS_TOKEN_EXPIRE_MINUTES='60'
+export API_SECURITY_REFRESH_TOKEN_EXPIRE_MINUTES='10080'
+export API_SECURITY_BOOTSTRAP_ADMIN_ENABLED='false'
+export API_SECURITY_BOOTSTRAP_ADMIN_USER_ID='admin'
+export API_SECURITY_BOOTSTRAP_ADMIN_USERNAME=''
+export API_SECURITY_BOOTSTRAP_ADMIN_PASSWORD=''
 
 # Flyway，默认关闭；开启后建议关闭各模块 INIT_ENABLED
 export FLYWAY_ENABLED='false'
@@ -266,6 +336,30 @@ export EXCEL_INIT_ENABLED='false'
 ```
 
 已有数据库接入时可以通过 `FLYWAY_BASELINE_ON_MIGRATE=true` 建立基线，后续表结构变更只新增迁移版本，不直接修改历史脚本。
+
+## 生产部署
+
+生产部署推荐继续使用“应用 jar + JRE 镜像 + 现有中间件 compose”的方式，不在仓库内放生产密钥，也不强制引入 Dockerfile。
+
+部署相关模板：
+
+| 文件 | 说明 |
+| --- | --- |
+| [deploy/easyexcel-demo.env.example](deploy/easyexcel-demo.env.example) | 生产环境变量模板，复制为服务器上的 `deploy/easyexcel-demo.env` 后替换占位符 |
+| [deploy/docker-compose.easyexcel-demo.yml](deploy/docker-compose.easyexcel-demo.yml) | 应用服务 compose 覆盖文件，可与已有中间件 compose 叠加使用 |
+| [docs/deployment-runbook.md](docs/deployment-runbook.md) | jar 构建、上传、启动、健康检查、日志排查和回滚手册 |
+
+典型启动方式：
+
+```bash
+docker compose \
+  -f docker-compose-software.yml \
+  -f deploy/docker-compose.easyexcel-demo.yml \
+  --env-file deploy/easyexcel-demo.env \
+  up -d easyexcel-demo
+```
+
+同一 Docker 网络内建议使用服务名访问中间件：`MYSQL_URL=mysql:3306`、`REDIS_HOST=redis`、`MINIO_ENDPOINT=http://minio:9000`。浏览器下载签名地址使用 `MINIO_PUBLIC_ENDPOINT`。
 
 ## 启动和测试
 

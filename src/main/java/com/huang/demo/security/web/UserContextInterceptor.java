@@ -2,11 +2,12 @@ package com.huang.demo.security.web;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huang.demo.common.api.dto.ApiResponse;
-import com.huang.demo.common.exception.CommonErrorCode;
+import com.huang.demo.common.exception.SecurityErrorCode;
 import com.huang.demo.security.config.ApiSecurityProperties;
 import com.huang.demo.security.domain.CurrentUser;
 import com.huang.demo.security.domain.UserContextHolder;
 import com.huang.demo.security.service.DemoTokenService;
+import com.huang.demo.security.service.JwtTokenService;
 import com.huang.demo.task.service.TaskOwnerResolver;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
@@ -23,19 +24,26 @@ public class UserContextInterceptor implements HandlerInterceptor {
 
     private final ApiSecurityProperties properties;
     private final DemoTokenService demoTokenService;
+    private final JwtTokenService jwtTokenService;
     private final ObjectMapper objectMapper;
 
     public UserContextInterceptor(ApiSecurityProperties properties,
                                   DemoTokenService demoTokenService,
+                                  JwtTokenService jwtTokenService,
                                   ObjectMapper objectMapper) {
         this.properties = properties;
         this.demoTokenService = demoTokenService;
+        this.jwtTokenService = jwtTokenService;
         this.objectMapper = objectMapper;
     }
 
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) throws IOException {
-        Optional<CurrentUser> tokenUser = demoTokenService.resolve(request.getHeader("Authorization"));
+        String authorizationHeader = request.getHeader("Authorization");
+        Optional<CurrentUser> tokenUser = jwtTokenService.resolveAccessToken(authorizationHeader);
+        if (!tokenUser.isPresent()) {
+            tokenUser = demoTokenService.resolve(authorizationHeader);
+        }
         if (tokenUser.isPresent()) {
             UserContextHolder.set(tokenUser.get());
             return true;
@@ -70,6 +78,7 @@ public class UserContextInterceptor implements HandlerInterceptor {
         response.setCharacterEncoding(StandardCharsets.UTF_8.name());
         response.setContentType(MediaType.APPLICATION_JSON_VALUE);
         response.getWriter().write(objectMapper.writeValueAsString(
-                ApiResponse.failed(CommonErrorCode.UNAUTHORIZED.getCode(), CommonErrorCode.UNAUTHORIZED.getMessage())));
+                ApiResponse.failed(SecurityErrorCode.UNAUTHORIZED.getCode(),
+                        SecurityErrorCode.UNAUTHORIZED.getMessage())));
     }
 }

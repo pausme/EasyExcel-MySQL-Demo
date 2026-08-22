@@ -43,6 +43,20 @@ public class FileCenterProperties {
 
     private int maxDailyUploadCountPerOwner = 0;
 
+    private boolean reconciliationEnabled = true;
+
+    private long reconciliationInitialDelayMillis = 600000L;
+
+    private long reconciliationFixedDelayMillis = 3600000L;
+
+    private int reconciliationBatchSize = 200;
+
+    private int reconciliationUploadStaleHours = 24;
+
+    private String reconciliationLockKey = "file:reconciliation:lock";
+
+    private int reconciliationLockTtlSeconds = 1800;
+
     private boolean corsEnabled = true;
 
     private List<String> corsAllowedOriginPatterns = new ArrayList<String>(Arrays.asList(

@@ -1,11 +1,14 @@
 package com.huang.demo.excel.config;
 
 import io.minio.MinioClient;
+import okhttp3.OkHttpClient;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
 import org.springframework.util.StringUtils;
+
+import java.util.concurrent.TimeUnit;
 
 @Configuration
 public class MinioConfig {
@@ -22,6 +25,7 @@ public class MinioConfig {
         return MinioClient.builder()
                 .endpoint(properties.getEndpoint())
                 .credentials(properties.getAccessKey(), properties.getSecretKey())
+                .httpClient(buildHttpClient(properties))
                 .build();
     }
 
@@ -34,6 +38,16 @@ public class MinioConfig {
         return MinioClient.builder()
                 .endpoint(publicEndpoint)
                 .credentials(properties.getAccessKey(), properties.getSecretKey())
+                .httpClient(buildHttpClient(properties))
+                .build();
+    }
+
+    private OkHttpClient buildHttpClient(MinioProperties properties) {
+        return new OkHttpClient.Builder()
+                .connectTimeout(Math.max(1000L, properties.getConnectTimeoutMillis()), TimeUnit.MILLISECONDS)
+                .writeTimeout(Math.max(1000L, properties.getWriteTimeoutMillis()), TimeUnit.MILLISECONDS)
+                .readTimeout(Math.max(1000L, properties.getReadTimeoutMillis()), TimeUnit.MILLISECONDS)
+                .retryOnConnectionFailure(true)
                 .build();
     }
 }

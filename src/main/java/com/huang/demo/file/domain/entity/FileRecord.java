@@ -37,6 +37,8 @@ public class FileRecord {
 
     private String storageType;
 
+    private String uploadType;
+
     private String status;
 
     private LocalDateTime createdAt;

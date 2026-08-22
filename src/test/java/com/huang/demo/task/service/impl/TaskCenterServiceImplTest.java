@@ -228,15 +228,21 @@ class TaskCenterServiceImplTest {
         request.setBusinessKey("biz-1");
         request.setFailureType("validation_error");
         request.setKeyword("学生");
+        request.setMinProgress(10);
+        request.setMaxProgress(90);
+        request.setRetryable(false);
+        request.setSortBy("created_at");
+        request.setSortDirection("asc");
         LocalDateTime createdFrom = LocalDateTime.now().minusDays(1);
         LocalDateTime createdTo = LocalDateTime.now();
         request.setCreatedFrom(createdFrom);
         request.setCreatedTo(createdTo);
         AsyncTaskRecord record = buildTask(AsyncTaskStatus.FAILED);
-        when(taskRecordMapper.countByOwner("user-1", "EXPORT", "FAILED", "biz-1",
-                "VALIDATION_ERROR", "学生", createdFrom, createdTo)).thenReturn(1L);
-        when(taskRecordMapper.listByOwnerPage("user-1", "EXPORT", "FAILED", "biz-1",
-                "VALIDATION_ERROR", "学生", createdFrom, createdTo, 5, 5))
+        when(taskRecordMapper.countByOwner("user-1", Arrays.asList("EXPORT"), Arrays.asList("FAILED"), "biz-1",
+                "VALIDATION_ERROR", "学生", createdFrom, createdTo, 10, 90, false)).thenReturn(1L);
+        when(taskRecordMapper.listByOwnerPage("user-1", Arrays.asList("EXPORT"), Arrays.asList("FAILED"), "biz-1",
+                "VALIDATION_ERROR", "学生", createdFrom, createdTo, 10, 90, false,
+                "created_at ASC, id DESC", 5, 5))
                 .thenReturn(Arrays.asList(record));
 
         AsyncTaskPageResponse response = taskCenterService.pageMyTasks("user-1", request);

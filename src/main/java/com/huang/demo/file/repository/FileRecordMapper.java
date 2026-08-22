@@ -27,20 +27,45 @@ public interface FileRecordMapper {
 
     long countNormal(@Param("ownerId") String ownerId,
                      @Param("originalName") String originalName,
-                     @Param("fileExt") String fileExt);
+                     @Param("fileExts") List<String> fileExts,
+                     @Param("fileMd5") String fileMd5,
+                     @Param("status") String status,
+                     @Param("uploadType") String uploadType,
+                     @Param("minFileSize") Long minFileSize,
+                     @Param("maxFileSize") Long maxFileSize,
+                     @Param("createdFrom") LocalDateTime createdFrom,
+                     @Param("createdTo") LocalDateTime createdTo);
 
     long sumNormalFileSize(@Param("ownerId") String ownerId);
 
     long countNormalCreatedAtOrAfter(@Param("ownerId") String ownerId,
                                      @Param("createdAt") LocalDateTime createdAt);
 
+    long countNormalGlobalCreatedAtOrAfter(@Param("createdAt") LocalDateTime createdAt);
+
+    long sumNormalFileSizeGlobal();
+
     List<FileRecord> listNormalPage(@Param("ownerId") String ownerId,
                                     @Param("originalName") String originalName,
-                                    @Param("fileExt") String fileExt,
+                                    @Param("fileExts") List<String> fileExts,
+                                    @Param("fileMd5") String fileMd5,
+                                    @Param("status") String status,
+                                    @Param("uploadType") String uploadType,
+                                    @Param("minFileSize") Long minFileSize,
+                                    @Param("maxFileSize") Long maxFileSize,
+                                    @Param("createdFrom") LocalDateTime createdFrom,
+                                    @Param("createdTo") LocalDateTime createdTo,
+                                    @Param("orderBy") String orderBy,
                                     @Param("offset") int offset,
                                     @Param("limit") int limit);
 
     List<FileRecord> listDeletedBefore(@Param("updatedBefore") LocalDateTime updatedBefore,
+                                       @Param("limit") int limit);
+
+    List<FileRecord> listAllAfterId(@Param("lastId") long lastId,
+                                    @Param("limit") int limit);
+
+    List<FileRecord> listNormalAfterId(@Param("lastId") long lastId,
                                        @Param("limit") int limit);
 
     int deleteById(@Param("id") Long id);

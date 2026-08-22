@@ -49,6 +49,8 @@ public class AsyncTaskRecord {
 
     private String failureSuggestion;
 
+    private String traceId;
+
     private String workerId;
 
     private LocalDateTime lastHeartbeatAt;

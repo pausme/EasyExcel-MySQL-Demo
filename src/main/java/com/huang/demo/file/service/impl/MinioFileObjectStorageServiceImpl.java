@@ -1,5 +1,6 @@
 package com.huang.demo.file.service.impl;
 
+import com.huang.demo.common.resilience.DependencyRetryTemplate;
 import com.huang.demo.excel.config.MinioProperties;
 import com.huang.demo.file.config.FileCenterProperties;
 import com.huang.demo.file.domain.model.StoredFile;
@@ -86,12 +87,14 @@ public class MinioFileObjectStorageServiceImpl implements FileObjectStorageServi
     public String createUploadUrl(String objectKey) {
         try {
             int expireMinutes = Math.max(1, fileCenterProperties.getUploadUrlExpireMinutes());
-            return minioPublicClient.getPresignedObjectUrl(GetPresignedObjectUrlArgs.builder()
-                    .method(Method.PUT)
-                    .bucket(minioProperties.getBucketName())
-                    .object(objectKey)
-                    .expiry(expireMinutes, TimeUnit.MINUTES)
-                    .build());
+            return DependencyRetryTemplate.execute("minio-create-upload-url", minioProperties.getMaxRetryTimes(),
+                    minioProperties.getRetryBackoffMillis(), log,
+                    () -> minioPublicClient.getPresignedObjectUrl(GetPresignedObjectUrlArgs.builder()
+                            .method(Method.PUT)
+                            .bucket(minioProperties.getBucketName())
+                            .object(objectKey)
+                            .expiry(expireMinutes, TimeUnit.MINUTES)
+                            .build()));
         } catch (Exception ex) {
             throw new IllegalStateException("生成文件上传地址失败", ex);
         }
@@ -101,14 +104,16 @@ public class MinioFileObjectStorageServiceImpl implements FileObjectStorageServi
     public String createDownloadUrl(String objectKey, String fileName) {
         try {
             int expireMinutes = Math.max(1, fileCenterProperties.getDownloadUrlExpireMinutes());
-            return minioPublicClient.getPresignedObjectUrl(GetPresignedObjectUrlArgs.builder()
-                    .method(Method.GET)
-                    .bucket(minioProperties.getBucketName())
-                    .object(objectKey)
-                    .expiry(expireMinutes, TimeUnit.MINUTES)
-                    .extraQueryParams(Collections.singletonMap(
-                            "response-content-disposition", "attachment; filename=\"" + sanitizeFileName(fileName) + "\""))
-                    .build());
+            return DependencyRetryTemplate.execute("minio-create-file-download-url", minioProperties.getMaxRetryTimes(),
+                    minioProperties.getRetryBackoffMillis(), log,
+                    () -> minioPublicClient.getPresignedObjectUrl(GetPresignedObjectUrlArgs.builder()
+                            .method(Method.GET)
+                            .bucket(minioProperties.getBucketName())
+                            .object(objectKey)
+                            .expiry(expireMinutes, TimeUnit.MINUTES)
+                            .extraQueryParams(Collections.singletonMap(
+                                    "response-content-disposition", "attachment; filename=\"" + sanitizeFileName(fileName) + "\""))
+                            .build()));
         } catch (Exception ex) {
             throw new IllegalStateException("生成文件下载地址失败", ex);
         }
@@ -117,10 +122,12 @@ public class MinioFileObjectStorageServiceImpl implements FileObjectStorageServi
     @Override
     public StoredObject statObject(String objectKey) {
         try {
-            StatObjectResponse response = minioClient.statObject(StatObjectArgs.builder()
-                    .bucket(minioProperties.getBucketName())
-                    .object(objectKey)
-                    .build());
+            StatObjectResponse response = DependencyRetryTemplate.execute("minio-stat-file-object",
+                    minioProperties.getMaxRetryTimes(), minioProperties.getRetryBackoffMillis(), log,
+                    () -> minioClient.statObject(StatObjectArgs.builder()
+                            .bucket(minioProperties.getBucketName())
+                            .object(objectKey)
+                            .build()));
             return StoredObject.builder()
                     .objectKey(objectKey)
                     .contentType(response.contentType())
@@ -135,10 +142,11 @@ public class MinioFileObjectStorageServiceImpl implements FileObjectStorageServi
     @Override
     public InputStream openObject(String objectKey) {
         try {
-            return minioClient.getObject(GetObjectArgs.builder()
-                    .bucket(minioProperties.getBucketName())
-                    .object(objectKey)
-                    .build());
+            return DependencyRetryTemplate.execute("minio-open-file-object", minioProperties.getMaxRetryTimes(),
+                    minioProperties.getRetryBackoffMillis(), log, () -> minioClient.getObject(GetObjectArgs.builder()
+                            .bucket(minioProperties.getBucketName())
+                            .object(objectKey)
+                            .build()));
         } catch (Exception ex) {
             throw new IllegalStateException("读取文件对象内容失败", ex);
         }
@@ -159,12 +167,13 @@ public class MinioFileObjectStorageServiceImpl implements FileObjectStorageServi
             }
             Map<String, String> headers = new HashMap<String, String>();
             headers.put("Content-Type", normalizeContentType(contentType));
-            minioClient.composeObject(ComposeObjectArgs.builder()
-                    .bucket(minioProperties.getBucketName())
-                    .object(objectKey)
-                    .sources(sources)
-                    .headers(headers)
-                    .build());
+            DependencyRetryTemplate.execute("minio-compose-file-object", minioProperties.getMaxRetryTimes(),
+                    minioProperties.getRetryBackoffMillis(), log, () -> minioClient.composeObject(ComposeObjectArgs.builder()
+                            .bucket(minioProperties.getBucketName())
+                            .object(objectKey)
+                            .sources(sources)
+                            .headers(headers)
+                            .build()));
         } catch (Exception ex) {
             throw new IllegalStateException("合并 MinIO 分片失败", ex);
         }

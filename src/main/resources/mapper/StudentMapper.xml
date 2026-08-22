@@ -173,6 +173,64 @@
         LIMIT #{limit} OFFSET #{offset}
     </select>
 
+    <sql id="StudentPageQueryCondition">
+        <if test="query != null and query.importVersion != null">
+            AND import_version = #{query.importVersion}
+        </if>
+        <if test="query == null or query.importVersion == null">
+            AND <include refid="CurrentStudentVersionCondition"/>
+        </if>
+        <if test="query != null and query.studentNo != null and query.studentNo != ''">
+            AND student_no = #{query.studentNo}
+        </if>
+        <if test="query != null and query.nameKeyword != null and query.nameKeyword != ''">
+            AND name LIKE CONCAT('%', #{query.nameKeyword}, '%')
+        </if>
+        <if test="query != null and query.className != null and query.className != ''">
+            AND class_name = #{query.className}
+        </if>
+        <if test="query != null and query.gender != null and query.gender != ''">
+            AND gender = #{query.gender}
+        </if>
+        <if test="query != null and query.minAge != null">
+            AND age &gt;= #{query.minAge}
+        </if>
+        <if test="query != null and query.maxAge != null">
+            AND age &lt;= #{query.maxAge}
+        </if>
+        <if test="query != null and query.birthdayFrom != null and query.birthdayFrom != ''">
+            AND birthday &gt;= #{query.birthdayFrom}
+        </if>
+        <if test="query != null and query.birthdayTo != null and query.birthdayTo != ''">
+            AND birthday &lt;= #{query.birthdayTo}
+        </if>
+    </sql>
+
+    <select id="countByPageQuery" resultType="long">
+        SELECT COUNT(*)
+        FROM student_record
+        WHERE 1 = 1
+        <include refid="StudentPageQueryCondition"/>
+    </select>
+
+    <select id="listByPageQuery" resultType="com.huang.demo.excel.domain.model.StudentExportRecord">
+        SELECT id, student_no, name, age, gender, class_name, email, birthday
+        FROM student_record
+        WHERE 1 = 1
+        <include refid="StudentPageQueryCondition"/>
+        ORDER BY id DESC
+        LIMIT #{limit} OFFSET #{offset}
+    </select>
+
+    <select id="listByCursorQuery" resultType="com.huang.demo.excel.domain.model.StudentExportRecord">
+        SELECT id, student_no, name, age, gender, class_name, email, birthday
+        FROM student_record
+        WHERE id &gt; #{lastId}
+        <include refid="StudentPageQueryCondition"/>
+        ORDER BY id ASC
+        LIMIT #{limit}
+    </select>
+
     <select id="maxId" resultType="long">
         SELECT MAX(id) FROM student_record
         WHERE <include refid="CurrentStudentVersionCondition"/>

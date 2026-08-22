@@ -1,8 +1,14 @@
 package com.huang.demo.excel.config;
 
+import com.huang.demo.task.monitor.TaskMetricsService;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.env.MockEnvironment;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
+
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -49,6 +55,39 @@ class AsyncExportConfigTest {
                 () -> new AsyncExportConfig(properties, new MockEnvironment()).importWorkerExecutor());
 
         assertTrue(exception.getMessage().contains("缺少数据库连接池最大连接数配置"));
+    }
+
+    @Test
+    void observableRejectPolicyRecordsMetric() throws Exception {
+        ExcelDemoProperties properties = new ExcelDemoProperties();
+        properties.setExportCorePoolSize(1);
+        properties.setExportMaxPoolSize(1);
+        properties.setExportQueueCapacity(0);
+        SimpleMeterRegistry meterRegistry = new SimpleMeterRegistry();
+        ThreadPoolTaskExecutor executor = new AsyncExportConfig(
+                properties, hikariEnvironment(10), new TaskMetricsService(meterRegistry)).exportTaskExecutor();
+        CountDownLatch running = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        try {
+            executor.execute(() -> {
+                running.countDown();
+                try {
+                    release.await(5, TimeUnit.SECONDS);
+                } catch (InterruptedException ex) {
+                    Thread.currentThread().interrupt();
+                }
+            });
+            assertTrue(running.await(2, TimeUnit.SECONDS));
+
+            assertThrows(RejectedExecutionException.class, () -> executor.execute(() -> {
+            }));
+
+            assertEquals(1.0D, meterRegistry.get("demo.thread.pool.rejected.total")
+                    .tag("pool", "student-export").counter().count());
+        } finally {
+            release.countDown();
+            executor.shutdown();
+        }
     }
 
     private MockEnvironment hikariEnvironment(int maximumPoolSize) {

@@ -1,0 +1,35 @@
+services:
+  easyexcel-demo:
+    image: ${EASYEXCEL_JAVA_IMAGE:-dragonwell-registry.cn-hangzhou.cr.aliyuncs.com/dragonwell/dragonwell:8}
+    container_name: ${EASYEXCEL_CONTAINER_NAME:-easyexcel-demo}
+    working_dir: /app
+    command:
+      - sh
+      - -c
+      - exec java $${JAVA_OPTS} -jar /app/easyexcel-demo.jar
+    env_file:
+      - ${EASYEXCEL_ENV_FILE:-./deploy/easyexcel-demo.env}
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+    ports:
+      - "${EASYEXCEL_HOST_PORT:-18088}:${SERVER_PORT:-18088}"
+    volumes:
+      - ${EASYEXCEL_JAR_PATH:-./apps/easyexcel-demo.jar}:/app/easyexcel-demo.jar:ro
+      - ${EASYEXCEL_LOG_DIR:-./logs/easyexcel-demo}:/app/logs
+      - ${EASYEXCEL_TMP_DIR:-./tmp/easyexcel-demo}:/app/tmp
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_started
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - "wget -q -O - http://127.0.0.1:$${SERVER_PORT:-18088}/actuator/health | grep -q '\"status\":\"UP\"'"
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 40s
+    restart: unless-stopped

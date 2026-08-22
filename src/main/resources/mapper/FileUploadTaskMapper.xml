@@ -121,6 +121,27 @@
         LIMIT #{limit}
     </select>
 
+    <select id="listAllAfterId" resultMap="FileUploadTaskMap">
+        SELECT id, upload_id, file_id, owner_id, upload_type, original_name, object_key, part_object_prefix,
+               bucket_name, content_type, file_size, file_md5, file_ext, status,
+               part_size, part_count, created_at, updated_at, completed_at
+        FROM file_upload_task
+        WHERE id &gt; #{lastId}
+        ORDER BY id ASC
+        LIMIT #{limit}
+    </select>
+
+    <select id="listUploadingAfterId" resultMap="FileUploadTaskMap">
+        SELECT id, upload_id, file_id, owner_id, upload_type, original_name, object_key, part_object_prefix,
+               bucket_name, content_type, file_size, file_md5, file_ext, status,
+               part_size, part_count, created_at, updated_at, completed_at
+        FROM file_upload_task
+        WHERE status = 'UPLOADING'
+          AND id &gt; #{lastId}
+        ORDER BY id ASC
+        LIMIT #{limit}
+    </select>
+
     <delete id="deleteById">
         DELETE FROM file_upload_task
         WHERE id = #{id}

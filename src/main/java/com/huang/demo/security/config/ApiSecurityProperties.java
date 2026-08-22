@@ -11,6 +11,8 @@ import org.springframework.stereotype.Component;
 @Setter
 public class ApiSecurityProperties {
 
+    private boolean initEnabled = true;
+
     private boolean demoMode = true;
 
     private String demoUserToken;
@@ -18,4 +20,18 @@ public class ApiSecurityProperties {
     private String demoAdminToken;
 
     private String demoDefaultUserId = "anonymous";
+
+    private String jwtSecret;
+
+    private int accessTokenExpireMinutes = 60;
+
+    private int refreshTokenExpireMinutes = 10080;
+
+    private boolean bootstrapAdminEnabled = false;
+
+    private String bootstrapAdminUserId = "admin";
+
+    private String bootstrapAdminUsername;
+
+    private String bootstrapAdminPassword;
 }

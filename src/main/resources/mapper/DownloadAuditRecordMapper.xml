@@ -4,6 +4,20 @@
         "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
 <mapper namespace="com.huang.demo.common.audit.repository.DownloadAuditRecordMapper">
 
+    <resultMap id="DownloadAuditRecordMap"
+               type="com.huang.demo.common.audit.domain.entity.DownloadAuditRecord">
+        <id property="id" column="id"/>
+        <result property="auditId" column="audit_id"/>
+        <result property="ownerId" column="owner_id"/>
+        <result property="resourceType" column="resource_type"/>
+        <result property="resourceId" column="resource_id"/>
+        <result property="objectKey" column="object_key"/>
+        <result property="fileName" column="file_name"/>
+        <result property="requestIp" column="request_ip"/>
+        <result property="userAgent" column="user_agent"/>
+        <result property="createdAt" column="created_at"/>
+    </resultMap>
+
     <update id="createTableIfAbsent">
         CREATE TABLE IF NOT EXISTS download_audit_record (
             id BIGINT AUTO_INCREMENT PRIMARY KEY,
@@ -32,4 +46,39 @@
             #{requestIp}, #{userAgent}, #{createdAt}
         )
     </insert>
+
+    <sql id="DownloadAuditPageWhere">
+        <where>
+            <if test="ownerId != null and ownerId != ''">
+                AND owner_id = #{ownerId}
+            </if>
+            <if test="resourceType != null and resourceType != ''">
+                AND resource_type = #{resourceType}
+            </if>
+            <if test="resourceId != null and resourceId != ''">
+                AND resource_id = #{resourceId}
+            </if>
+            <if test="createdFrom != null">
+                AND created_at &gt;= #{createdFrom}
+            </if>
+            <if test="createdTo != null">
+                AND created_at &lt;= #{createdTo}
+            </if>
+        </where>
+    </sql>
+
+    <select id="countPage" resultType="long">
+        SELECT COUNT(*)
+        FROM download_audit_record
+        <include refid="DownloadAuditPageWhere"/>
+    </select>
+
+    <select id="listPage" resultMap="DownloadAuditRecordMap">
+        SELECT id, audit_id, owner_id, resource_type, resource_id, object_key, file_name,
+               request_ip, user_agent, created_at
+        FROM download_audit_record
+        <include refid="DownloadAuditPageWhere"/>
+        ORDER BY id DESC
+        LIMIT #{limit} OFFSET #{offset}
+    </select>
 </mapper>

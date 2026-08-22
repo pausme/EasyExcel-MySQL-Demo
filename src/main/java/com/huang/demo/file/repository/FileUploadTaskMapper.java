@@ -31,6 +31,12 @@ public interface FileUploadTaskMapper {
     List<FileUploadTask> listUploadingBefore(@Param("createdBefore") LocalDateTime createdBefore,
                                              @Param("limit") int limit);
 
+    List<FileUploadTask> listAllAfterId(@Param("lastId") long lastId,
+                                        @Param("limit") int limit);
+
+    List<FileUploadTask> listUploadingAfterId(@Param("lastId") long lastId,
+                                              @Param("limit") int limit);
+
     int deleteById(@Param("id") Long id);
 
     int deleteFinishedBefore(@Param("completedBefore") LocalDateTime completedBefore,
