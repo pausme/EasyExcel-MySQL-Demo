@@ -30,6 +30,10 @@ public interface CompensationRecordMapper {
                    @Param("nextRetryAt") LocalDateTime nextRetryAt,
                    @Param("updatedAt") LocalDateTime updatedAt);
 
+    int markFailedTerminal(@Param("compensationId") String compensationId,
+                           @Param("lastError") String lastError,
+                           @Param("updatedAt") LocalDateTime updatedAt);
+
     int markPendingForRetry(@Param("compensationId") String compensationId,
                             @Param("nextRetryAt") LocalDateTime nextRetryAt,
                             @Param("updatedAt") LocalDateTime updatedAt);
@@ -41,6 +45,9 @@ public interface CompensationRecordMapper {
 
     List<CompensationRecord> listRecentByStatuses(@Param("statuses") List<String> statuses,
                                                   @Param("limit") int limit);
+
+    List<CompensationRecord> listDueForAutoExecute(@Param("now") LocalDateTime now,
+                                                   @Param("limit") int limit);
 
     long countPage(@Param("bizType") String bizType,
                    @Param("bizId") String bizId,

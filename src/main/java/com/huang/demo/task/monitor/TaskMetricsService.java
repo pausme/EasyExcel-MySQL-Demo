@@ -92,6 +92,16 @@ public class TaskMetricsService {
                 .record(Math.max(0L, count));
     }
 
+    public void recordCompensationAutoExecution(String outcome, String bizType, String failureType) {
+        Counter.builder("demo.compensation.auto.execution.total")
+                .description("Compensation auto execution result count")
+                .tags("outcome", normalizeTag(outcome),
+                        "bizType", normalizeTag(bizType),
+                        "failureType", normalizeTag(failureType))
+                .register(meterRegistry)
+                .increment();
+    }
+
     private void increment(String outcome, AsyncTaskRecord record) {
         if (record == null) {
             return;

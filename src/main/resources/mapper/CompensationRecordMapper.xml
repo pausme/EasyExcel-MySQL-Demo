@@ -98,6 +98,18 @@
             updated_at = #{updatedAt}
         WHERE compensation_id = #{compensationId}
           AND status IN ('PENDING', 'RUNNING', 'FAILED')
+          AND retry_count &lt; max_retry_count
+    </update>
+
+    <update id="markFailedTerminal">
+        UPDATE compensation_record
+        SET status = 'FAILED',
+            retry_count = max_retry_count,
+            next_retry_at = NULL,
+            last_error = #{lastError},
+            updated_at = #{updatedAt}
+        WHERE compensation_id = #{compensationId}
+          AND status IN ('PENDING', 'RUNNING', 'FAILED')
     </update>
 
     <update id="markPendingForRetry">
@@ -139,6 +151,18 @@
             #{status}
         </foreach>
         ORDER BY id DESC
+        LIMIT #{limit}
+    </select>
+
+    <select id="listDueForAutoExecute" resultMap="CompensationRecordMap">
+        SELECT id, compensation_id, biz_type, biz_id, failure_type, status,
+               retry_count, max_retry_count, next_retry_at, payload, last_error,
+               created_at, updated_at, completed_at
+        FROM compensation_record
+        WHERE status IN ('PENDING', 'FAILED')
+          AND retry_count &lt; max_retry_count
+          AND (next_retry_at IS NULL OR next_retry_at &lt;= #{now})
+        ORDER BY id ASC
         LIMIT #{limit}
     </select>
 

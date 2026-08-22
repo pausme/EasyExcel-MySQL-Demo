@@ -49,7 +49,7 @@
 | TODO | P1 | IMP-01 | 导入导出业务规则增强 | 导入模式策略 | 支持覆盖、追加、仅校验、不落库等导入模式，并明确冲突处理规则 |
 | TODO | P2 | IMP-02 | 导入导出业务规则增强 | 导入字段规则配置化 | 字段必填、长度、格式、枚举和唯一校验规则可配置，并体现在预检和正式导入 |
 | TODO | P2 | FILE-01 | 文件中心生产化 | 文件业务归属、标签和引用关系 | 文件支持业务类型、业务 ID、标签、引用计数，避免误删仍被业务引用的文件 |
-| TODO | P1 | CON-05 | 数据一致性与补偿机制 | 自动补偿执行器 | PENDING 补偿按退避策略自动重试，达到最大次数后进入人工处理 |
+| DONE | P1 | CON-05 | 数据一致性与补偿机制 | 自动补偿执行器 | PENDING 补偿按退避策略自动重试，达到最大次数后进入人工处理 |
 | TODO | P1 | OBS-05 | 监控和可观测性 | Grafana Dashboard 和告警规则 | 提供导入导出、任务失败率、线程池、MinIO、补偿积压告警和排障说明 |
 | TODO | P1 | PERF-01 | 性能专项 | 300 万 / 500 万数据量压测矩阵 | 对 CSV、ZIP_CSV_PARTS、并发导入导出、MySQL 索引和线程池参数形成报告 |
 
@@ -200,7 +200,7 @@
 
 - README 补充统一错误响应结构、典型错误码、字段错误样例和联调建议。
 - 测试文档补充参数校验、补偿管理、学生查询、下载审计、指标和线程池拒绝的回归覆盖说明。
-- 当前本地回归基线为 `mvn test`：36 个测试类、155 个用例全部通过。
+- 当前本地回归基线为 `mvn test`：38 个测试类、164 个用例全部通过。
 
 ### 4. 查询分页和复杂检索
 
@@ -2456,7 +2456,7 @@ student_import_stage -> student_record
 
 ## 39. 轻量管理页面
 
-状态：TODO
+状态：DONE
 
 编号：OPS-02
 
@@ -2622,6 +2622,17 @@ student_import_stage -> student_record
 - 超过最大次数后不再无限重试。
 - 每次补偿执行都有日志和指标。
 
+### 完成记录
+
+- 新增 `CompensationAutoExecutor`，定时扫描到期的 `PENDING/FAILED` 补偿记录，批量执行自动补偿。
+- 自动执行器使用 Redis 分布式锁保护，避免多实例同时处理同一批补偿。
+- `compensation_record` Mapper 增加到期扫描、带退避失败更新和终态失败更新；超过最大重试次数后不再继续自动调度。
+- 新增 `CompensationHandler` 处理器模型，按补偿记录内容判断是否支持自动处理；未知类型会标记为需要人工处理。
+- 新增 `ObjectCleanupCompensationHandler`，自动处理 `ORPHAN_OBJECT` 和 `CLEANUP_OBJECT_FAILED` 中携带 `objectKey` 的 MinIO 对象清理补偿。
+- 新增自动补偿配置：`COMPENSATION_AUTO_EXECUTE_*` 与 `COMPENSATION_RETRY_BACKOFF_*`，部署 env 模板已同步。
+- `TaskMetricsService` 增加 `demo.compensation.auto.execution.total` 指标，记录 success、failed、unsupported、skipped 等自动补偿结果。
+- 单元测试覆盖锁占用跳过、成功执行、无处理器转人工、失败退避、达到最大次数停止重试和对象清理处理器路由。
+
 ---
 
 ## 44. Grafana Dashboard 和告警规则
@@ -2702,7 +2713,8 @@ student_import_stage -> student_record
 
 ## 建议实施顺序
 
-1. `OPS-02`：补齐轻量管理页面，让任务、补偿、审计可视化。
-2. `CON-05`、`OBS-05`：增强自动补偿和告警，提升生产稳定性。
-3. `IMP-01`、`IMP-02`、`FILE-01`：继续扩展业务规则和文件中心生产能力。
-4. `PERF-01`：在部署和观测稳定后再做 300 万 / 500 万压测，结论更可信。
+1. `OBS-05`：补齐 Grafana Dashboard 和告警规则，让已有指标真正可用。
+2. `IMP-01`：完成导入模式策略，这是剩余 P1 中业务价值最高的一项。
+3. `OPS-02`：补齐轻量管理页面，让任务、补偿、审计可视化。
+4. `IMP-02`、`FILE-01`：继续扩展业务规则和文件中心生产能力。
+5. `PERF-01`：在部署和观测稳定后再做 300 万 / 500 万压测，结论更可信。

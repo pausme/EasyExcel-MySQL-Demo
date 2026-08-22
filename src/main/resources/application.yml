@@ -52,6 +52,15 @@ app:
       user-limit: ${RATE_LIMIT_USER_LIMIT:30}
       global-limit: ${RATE_LIMIT_GLOBAL_LIMIT:300}
       cleanup-max-keys: ${RATE_LIMIT_CLEANUP_MAX_KEYS:1000}
+  compensation:
+    auto-execute-enabled: ${COMPENSATION_AUTO_EXECUTE_ENABLED:true}
+    auto-execute-initial-delay-millis: ${COMPENSATION_AUTO_EXECUTE_INITIAL_DELAY_MILLIS:60000}
+    auto-execute-fixed-delay-millis: ${COMPENSATION_AUTO_EXECUTE_FIXED_DELAY_MILLIS:60000}
+    auto-execute-batch-size: ${COMPENSATION_AUTO_EXECUTE_BATCH_SIZE:20}
+    auto-execute-lock-key: ${COMPENSATION_AUTO_EXECUTE_LOCK_KEY:compensation:auto-execute:lock}
+    auto-execute-lock-ttl-seconds: ${COMPENSATION_AUTO_EXECUTE_LOCK_TTL_SECONDS:300}
+    retry-backoff-base-seconds: ${COMPENSATION_RETRY_BACKOFF_BASE_SECONDS:60}
+    retry-backoff-max-seconds: ${COMPENSATION_RETRY_BACKOFF_MAX_SECONDS:3600}
   task:
     init-enabled: ${TASK_CENTER_INIT_ENABLED:true}
     redis-key-prefix: ${TASK_CENTER_REDIS_KEY_PREFIX:task:center:}

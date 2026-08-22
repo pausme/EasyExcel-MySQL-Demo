@@ -18,6 +18,7 @@ class TaskMetricsServiceTest {
         service.recordStorageUpload("export-result", 120L, true);
         service.recordErrorFile("success");
         service.recordCompensationBacklog("PENDING", 3L);
+        service.recordCompensationAutoExecution("success", "FILE", "ORPHAN_OBJECT");
 
         assertEquals(1.0D, meterRegistry.get("demo.thread.pool.rejected.total")
                 .tag("pool", "student-export").counter().count());
@@ -29,5 +30,10 @@ class TaskMetricsServiceTest {
         assertEquals(1.0D, meterRegistry.get("demo.excel.error.file.total")
                 .tag("outcome", "success").counter().count());
         assertNotNull(meterRegistry.get("demo.compensation.backlog").tag("status", "PENDING").summary());
+        assertEquals(1.0D, meterRegistry.get("demo.compensation.auto.execution.total")
+                .tag("outcome", "success")
+                .tag("bizType", "FILE")
+                .tag("failureType", "ORPHAN_OBJECT")
+                .counter().count());
     }
 }

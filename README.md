@@ -16,7 +16,7 @@
 - 文件下载：应用只返回 MinIO 签名地址，不经过应用服务器转发大文件内容。
 - 通用文件中心：支持普通上传、元数据查询、逻辑删除、分页查询和签名下载。
 - 查询接口：任务、文件、学生数据、下载审计和补偿记录均提供组合条件分页查询；学生数据额外提供游标分页。
-- 补偿管理：管理员可分页查看补偿记录，并手动重试或忽略补偿项。
+- 补偿管理：管理员可分页查看补偿记录并手动重试或忽略；对象清理类补偿支持后台自动重试和退避。
 - 可观测性：任务事件、TraceId、下载审计、线程池指标、导入导出行速率、MinIO 上传耗时和错误文件指标已接入 Micrometer。
 - 文件中心测试页：启动应用后访问 `/file-upload-test.html`，可测试秒传、客户端直传和分片上传。
 - 文件中心测试页还能展示分片状态、断点继续和失败分片重试，适合联调文件中心。
@@ -30,7 +30,7 @@
 
 | 项目 | 数据量 | 结果 |
 | --- | ---: | --- |
-| 单元/切片测试 | 36 类 / 155 用例 | 全部通过 |
+| 单元/切片测试 | 38 类 / 164 用例 | 全部通过 |
 | 接口扁平化测试 | 77 用例 | R11 标准环境 77/77 通过；F-02/F-09/F-12 已关闭，F-11 受控，新增文件安全扫描用例通过 |
 | 异步导出 | 1,000,006 行 × 3 | 全部成功，平均约 23,317 行/s |
 | 异步导入 | 100,000 行 × 3 | 全部成功，平均约 4,511 行/s |
@@ -183,6 +183,7 @@ Prometheus 可通过 `/actuator/prometheus` 抓取指标。核心业务指标包
 | `demo.storage.upload.duration` | `scene`,`success` | MinIO 上传耗时 |
 | `demo.excel.error.file.total` | `outcome` | 导入错误明细文件生成结果 |
 | `demo.compensation.backlog` | `status` | 补偿积压采样 |
+| `demo.compensation.auto.execution.total` | `outcome`,`bizType`,`failureType` | 自动补偿执行结果次数 |
 
 ## 项目结构
 
@@ -264,6 +265,16 @@ export API_SECURITY_BOOTSTRAP_ADMIN_PASSWORD=''
 # Flyway，默认关闭；开启后建议关闭各模块 INIT_ENABLED
 export FLYWAY_ENABLED='false'
 export FLYWAY_BASELINE_ON_MIGRATE='true'
+
+# 自动补偿
+export COMPENSATION_AUTO_EXECUTE_ENABLED='true'
+export COMPENSATION_AUTO_EXECUTE_INITIAL_DELAY_MILLIS='60000'
+export COMPENSATION_AUTO_EXECUTE_FIXED_DELAY_MILLIS='60000'
+export COMPENSATION_AUTO_EXECUTE_BATCH_SIZE='20'
+export COMPENSATION_AUTO_EXECUTE_LOCK_KEY='compensation:auto-execute:lock'
+export COMPENSATION_AUTO_EXECUTE_LOCK_TTL_SECONDS='300'
+export COMPENSATION_RETRY_BACKOFF_BASE_SECONDS='60'
+export COMPENSATION_RETRY_BACKOFF_MAX_SECONDS='3600'
 
 # MinIO
 export MINIO_ENDPOINT='http://<MinIO地址>:<MinIO API端口>'
