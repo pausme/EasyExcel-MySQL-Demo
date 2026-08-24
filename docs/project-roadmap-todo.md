@@ -67,6 +67,7 @@
 | TODO | P3 | NEXT-04 | 收尾与演进 | 多模块 Maven 拆分 | 30 类规模下收益低于重构风险；若需展示架构能力可拆 excel/file/task/cleanup/common |
 | TODO | P3 | NEXT-05 | 收尾与演进 | Swagger UI / OpenAPI | 已有 swagger 注解，引入 springdoc 暴露文档界面 |
 | TODO | P3 | NEXT-06 | 收尾与演进 | 任务进度 SSE 推送 | 当前轮询改 SSE 推送，改善演示体验（非必需） |
+| TODO | P1 | FE-01 | 前端工程 | Vue 3 管理台脚手架 | Vite + Vue 3 + Pinia + Vue Router + Element Plus；JWT 登录/自动刷新/登出撤销；Vite 代理对接后端；核心页面：登录/运维概览/学生查询(含 AI 自然语言)/导入向导/导出任务/文件中心/管理端 |
 
 #### PERF-01 完成记录
 
@@ -116,6 +117,8 @@
 | NEXT-04 多模块拆分 | 纯架构展示，当前规模收益低 | 无 |
 | NEXT-05 OpenAPI 文档 | 开发体验改善 | 无 |
 | NEXT-06 SSE 推送 | 演示体验改善，轮询已够用 | 无 |
+
+**FE-01 前端工程（2026-08-24 立项）**：Vue 3 + Vite + Pinia + Element Plus（与 Spring Boot 生态最常见的企业组合）；目录 `frontend/`，开发期 Vite proxy 转发 `/api`，生产 nginx 或打进 Spring Boot static。核心页面：登录、运维概览、学生查询（分页/游标/AI 自然语言）、导入向导（上传→预检→进度→错误预览）、导出任务、文件中心、报表运行控制、管理端（补偿/审计）。
 
 **明确不做的**（有数据支撑的判断）：5M 导入（3M 已证线性，4,521→4,757 行/s）、继续扩测试矩阵/压测变体（94 用例 + 混沌 + 双实例覆盖已扎实）。
 
