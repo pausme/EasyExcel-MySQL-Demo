@@ -95,6 +95,7 @@ public class StudentServiceImpl implements StudentService {
         }
         long start = System.currentTimeMillis();
         studentMapper.createTableIfAbsent();
+        studentMapper.createAppendBackupTableIfAbsent();
         studentMapper.createVersionControlTableIfAbsent();
         studentMapper.initVersionControl();
         studentMapper.ensureStudentRecordVersionColumns();
@@ -699,23 +700,47 @@ public class StudentServiceImpl implements StudentService {
         long start = System.currentTimeMillis();
         int mergeChunkSize = getImportMergeChunkSize();
         int mergeChunkCount = expectedRows == 0 ? 0 : Math.max(1, (expectedRows + mergeChunkSize - 1) / mergeChunkSize);
-        for (int startRowNo = 1; startRowNo <= expectedRows; startRowNo += mergeChunkSize) {
-            progressCallback.checkCanceled();
-            final int chunkStartRowNo = startRowNo;
-            final int chunkEndRowNo = Math.min(expectedRows, chunkStartRowNo + mergeChunkSize - 1);
-            long chunkStart = System.currentTimeMillis();
-            Integer affectedRows = newImportTransactionTemplate()
-                    .execute(status -> studentMapper.mergeImportStageRangeToCurrentStudent(
-                            importTaskId, chunkStartRowNo, chunkEndRowNo));
-            progressCallback.onCommitted(chunkEndRowNo, mergeChunkCount);
-            log.info("import stage append chunk finished, importTaskId={}, startRowNo={}, endRowNo={}, "
-                            + "affectedRows={}, elapsedMs={}",
-                    importTaskId, chunkStartRowNo, chunkEndRowNo,
-                    affectedRows == null ? 0 : affectedRows, System.currentTimeMillis() - chunkStart);
+        try {
+            // QA-06：备份本次 APPEND 将要改写的当前版本存量行，失败时用于恢复
+            //（懒建表：环境可能关闭启动建表，IF NOT EXISTS 幂等）
+            studentMapper.createAppendBackupTableIfAbsent();
+            studentMapper.backupCurrentRowsForStage(importTaskId);
+            for (int startRowNo = 1; startRowNo <= expectedRows; startRowNo += mergeChunkSize) {
+                progressCallback.checkCanceled();
+                final int chunkStartRowNo = startRowNo;
+                final int chunkEndRowNo = Math.min(expectedRows, chunkStartRowNo + mergeChunkSize - 1);
+                long chunkStart = System.currentTimeMillis();
+                Integer affectedRows = newImportTransactionTemplate()
+                        .execute(status -> studentMapper.mergeImportStageRangeToCurrentStudent(
+                                importTaskId, chunkStartRowNo, chunkEndRowNo));
+                progressCallback.onCommitted(chunkEndRowNo, mergeChunkCount);
+                log.info("import stage append chunk finished, importTaskId={}, startRowNo={}, endRowNo={}, "
+                                + "affectedRows={}, elapsedMs={}",
+                        importTaskId, chunkStartRowNo, chunkEndRowNo,
+                        affectedRows == null ? 0 : affectedRows, System.currentTimeMillis() - chunkStart);
+            }
+            progressCallback.onCommitted(expectedRows, mergeChunkCount);
+            log.info("import stage appended to current version, rows={}, chunks={}, chunkSize={}, elapsedMs={}",
+                    expectedRows, mergeChunkCount, mergeChunkSize, System.currentTimeMillis() - start);
+            studentMapper.deleteAppendBackup(importTaskId);
+        } catch (RuntimeException ex) {
+            // QA-06：APPEND 行级回滚——先恢复被 upsert 改写的存量行，再删除本任务新增行，最后清理备份
+            rollbackAppendQuietly(importTaskId);
+            throw ex;
         }
-        progressCallback.onCommitted(expectedRows, mergeChunkCount);
-        log.info("import stage appended to current version, rows={}, chunks={}, chunkSize={}, elapsedMs={}",
-                expectedRows, mergeChunkCount, mergeChunkSize, System.currentTimeMillis() - start);
+    }
+
+    private void rollbackAppendQuietly(String importTaskId) {
+        try {
+            int restored = studentMapper.restoreAppendBackup(importTaskId);
+            int deleted = studentMapper.deleteInsertedRowsByTaskInCurrentVersion(importTaskId);
+            studentMapper.deleteAppendBackup(importTaskId);
+            log.warn("import stage append rolled back, importTaskId={}, restoredRows={}, deletedInsertedRows={}",
+                    importTaskId, restored, deleted);
+        } catch (RuntimeException rollbackEx) {
+            log.error("import stage append rollback failed, manual review required, importTaskId={}",
+                    importTaskId, rollbackEx);
+        }
     }
 
     private void promoteImportVersion(String importTaskId, long expectedVersion, long importVersion) {

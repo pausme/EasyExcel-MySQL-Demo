@@ -33,4 +33,13 @@ public class AuthController {
     public AuthTokenResponse refresh(@Valid @RequestBody RefreshTokenRequest request) {
         return authService.refresh(request.getRefreshToken());
     }
+
+    @ApiOperation("登出并撤销刷新令牌")
+    @PostMapping("/logout")
+    public java.util.Map<String, Object> logout(@Valid @RequestBody RefreshTokenRequest request) {
+        authService.logout(request.getRefreshToken());
+        java.util.Map<String, Object> result = new java.util.LinkedHashMap<String, Object>();
+        result.put("loggedOut", true);
+        return result;
+    }
 }

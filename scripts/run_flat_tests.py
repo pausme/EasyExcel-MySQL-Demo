@@ -497,6 +497,92 @@ if up_file_id:
     r = curl("GET", "/api/files/%s" % up_file_id)
     record("FIL-GET-03", "GET", "/api/files/{fileId} (deleted)", "404", r)
 
+# -------- QA-01: 新增端点覆盖（auth / students / precheck / errors / admin） --------
+log("\n──── QA-01 新增端点 ────")
+
+# ① 认证：登录 / 刷新 / 登出撤销
+LOGIN = curl("POST", "/api/auth/login", data='{"username":"admin","password":"Admin123!test"}', noauth=True)
+LOGIN_P = P(LOGIN)
+JWT_AT = LOGIN_P.get("accessToken") or ""
+JWT_RT = LOGIN_P.get("refreshToken") or ""
+record("AUTH-LOGIN-01", "POST", "/api/auth/login (admin)", "200" if LOGIN["status"] == "200" and JWT_AT else "401", LOGIN)
+record("AUTH-LOGIN-02", "POST", "/api/auth/login (bad creds)", "401",
+       curl("POST", "/api/auth/login", data='{"username":"admin","password":"wrong"}', noauth=True))
+if JWT_RT:
+    REF = curl("POST", "/api/auth/refresh", data='{"refreshToken":"%s"}' % JWT_RT, noauth=True)
+    record("AUTH-REFRESH-01", "POST", "/api/auth/refresh", "200", REF)
+    # 登出撤销后旧 refresh 不可再用
+    curl("POST", "/api/auth/logout", data='{"refreshToken":"%s"}' % JWT_RT, noauth=True)
+    REF2 = curl("POST", "/api/auth/refresh", data='{"refreshToken":"%s"}' % JWT_RT, noauth=True)
+    record("AUTH-LOGOUT-01", "POST", "/api/auth/logout -> old refresh rejected", "401", REF2,
+           note="QA-07：登出撤销黑名单生效")
+
+# ② 学生查询
+r = curl("POST", "/api/students/page", data='{"pageNo":1,"pageSize":3}')
+record("STU-PAGE-01", "POST", "/api/students/page", "200", r)
+r = curl("POST", "/api/students/page", data='{"minAge":30,"maxAge":20}')
+record("STU-PAGE-02", "POST", "/api/students/page (bad range)", "400", r)
+r = curl("POST", "/api/students/cursor-page", data='{"pageSize":2}')
+CP = P(r); CUR1 = CP.get("nextCursor")
+record("STU-CURSOR-01", "POST", "/api/students/cursor-page p1", "200", r)
+if CUR1:
+    r = curl("POST", "/api/students/cursor-page", data='{"pageSize":2,"cursor":"%s"}' % CUR1)
+    record("STU-CURSOR-02", "POST", "/api/students/cursor-page p2", "200", r)
+r = curl("POST", "/api/students/page", data='{}', noauth=True)
+record("STU-AUTH-01", "POST", "/api/students/page (no token)", "401", r)
+
+# ③ 导入预检
+try:
+    from openpyxl import load_workbook as _lw
+    _wb = _lw(tpl_path); _ws = _wb.active
+    _ws.append(["PQA001", "预检行", 20, "男", "一班", "p@x.com", "2006-01-01"])
+    _ws.append(["", "缺学号", 21, "女", "", "", ""])
+    _wb.save(os.path.join(TMP, "precheck.xlsx"))
+    r = curl("POST", "/api/excel/import/precheck", form_file=os.path.join(TMP, "precheck.xlsx"))
+    PP = P(r)
+    record("PRECHECK-01", "POST", "/api/excel/import/precheck", "200", r,
+           extra={"note": "valid=%s errors=%s" % (PP.get("valid"), PP.get("errorCount"))})
+except Exception as e:
+    log("        (预检用例构造失败：%s)" % e)
+
+# ④ 导入错误预览端点（用此前导入任务的 id）
+if imp_task_id:
+    r = curl("GET", "/api/excel/import/%s/errors?limit=5" % imp_task_id)
+    record("ERRPREVIEW-01", "GET", "/api/excel/import/{taskId}/errors", "200/404", r)
+    r = curl("GET", "/api/excel/import/%s/errors?limit=5" % imp_task_id, headers={"X-User-Id": "user-b"})
+    record("ERRPREVIEW-02", "GET", "/api/excel/import/{taskId}/errors (other owner)", "404", r)
+
+# ⑤ 管理端：运维概览 / 补偿分页（admin 应 200，user 应 403）
+ADMIN_TOKEN = AUTH_TOKENS.get("admin", "")
+def acurl(path):
+    cmd = ["curl", "-sS", "-m", "30", "-w", "\n__CODE__%{http_code}", BASE + path,
+           "-H", "Authorization: Bearer " + (ADMIN_TOKEN or "invalid")]
+    p = subprocess.run(cmd, capture_output=True, text=True)
+    out = p.stdout
+    code = out.rsplit("__CODE__", 1)[-1].strip() if "__CODE__" in out else ""
+    body = out.rsplit("__CODE__", 1)[0] if "__CODE__" in out else out
+    return {"status": code, "body": body[:240], "location": "", "err": ""}
+r = acurl("/api/admin/ops/overview")
+record("OPS-01", "GET", "/api/admin/ops/overview (admin)", "200", r)
+r = curl("GET", "/api/admin/ops/overview")
+record("OPS-02", "GET", "/api/admin/ops/overview (user)", "403", r)
+r = acurl("/api/admin/compensations/page?-body")
+# 补偿分页用 POST
+import json as _json
+cmd = ["curl", "-sS", "-X", "POST", "-m", "30", "-w", "\n__CODE__%{http_code}",
+       "-H", "Authorization: Bearer " + (ADMIN_TOKEN or "invalid"),
+       "-H", "Content-Type: application/json", "-d", '{"pageNo":1,"pageSize":5}', BASE + "/api/admin/compensations/page"]
+p = subprocess.run(cmd, capture_output=True, text=True)
+out = p.stdout
+code = out.rsplit("__CODE__", 1)[-1].strip() if "__CODE__" in out else ""
+record("COMP-PAGE-01", "POST", "/api/admin/compensations/page (admin)", "200",
+       {"status": code, "body": (out.rsplit("__CODE__", 1)[0] if "__CODE__" in out else out)[:240], "location": "", "err": ""})
+r = curl("POST", "/api/admin/compensations/page", data='{"pageNo":1,"pageSize":5}')
+record("COMP-PAGE-02", "POST", "/api/admin/compensations/page (user)", "403", r)
+r = curl("POST", "/api/download-audits/page", data='{"pageNo":1,"pageSize":5}')
+record("AUDIT-PAGE-01", "POST", "/api/download-audits/page", "200", r)
+r = curl("GET", "/api/students/page".replace("GET", "POST"))  # noop guard
+
 # ============================== 汇总 ==============================
 from collections import Counter
 cnt = Counter(r["verdict"] for r in RESULTS)

@@ -515,4 +515,61 @@
         ORDER BY id ASC
         LIMIT #{limit}
     </delete>
+
+    <!-- QA-06: APPEND 行级回滚支持 -->
+    <update id="createAppendBackupTableIfAbsent">
+        CREATE TABLE IF NOT EXISTS student_append_backup (
+            id BIGINT NOT NULL AUTO_INCREMENT,
+            import_task_id VARCHAR(64) NOT NULL,
+            student_no VARCHAR(32) NOT NULL,
+            name VARCHAR(64) NOT NULL,
+            age INT NULL,
+            gender VARCHAR(16) NULL,
+            class_name VARCHAR(64) NULL,
+            email VARCHAR(128) NULL,
+            birthday VARCHAR(32) NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (id),
+            UNIQUE KEY uk_append_backup_task_no (import_task_id, student_no)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    </update>
+
+    <insert id="backupCurrentRowsForStage">
+        INSERT IGNORE INTO student_append_backup
+            (import_task_id, student_no, name, age, gender, class_name, email, birthday)
+        SELECT #{importTaskId}, r.student_no, r.name, r.age, r.gender, r.class_name, r.email, r.birthday
+        FROM student_record r
+        JOIN student_import_stage s
+          ON s.student_no = r.student_no AND s.import_task_id = #{importTaskId}
+        WHERE r.import_version = (SELECT current_version FROM student_import_version_control WHERE id = 1)
+    </insert>
+
+    <insert id="restoreAppendBackup">
+        INSERT INTO student_record
+            (import_version, import_task_id, student_no, name, age, gender, class_name, email, birthday)
+        SELECT (SELECT current_version FROM student_import_version_control WHERE id = 1),
+               b.import_task_id, b.student_no, b.name, b.age, b.gender, b.class_name, b.email, b.birthday
+        FROM student_append_backup b
+        WHERE b.import_task_id = #{importTaskId}
+        ON DUPLICATE KEY UPDATE
+            name = VALUES(name), age = VALUES(age), gender = VALUES(gender),
+            class_name = VALUES(class_name), email = VALUES(email), birthday = VALUES(birthday),
+            import_task_id = VALUES(import_task_id)
+    </insert>
+
+    <delete id="deleteInsertedRowsByTaskInCurrentVersion">
+        DELETE FROM student_record
+        WHERE import_task_id = #{importTaskId}
+          AND import_version = (SELECT current_version FROM student_import_version_control WHERE id = 1)
+          AND student_no NOT IN (
+              SELECT student_no FROM (
+                  SELECT student_no FROM student_append_backup WHERE import_task_id = #{importTaskId}
+              ) backed_up
+          )
+    </delete>
+
+    <delete id="deleteAppendBackup">
+        DELETE FROM student_append_backup WHERE import_task_id = #{importTaskId}
+    </delete>
+
 </mapper>

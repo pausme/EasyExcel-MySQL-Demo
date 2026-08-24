@@ -509,4 +509,36 @@ class StudentServiceImplTest {
         public void rollback(TransactionStatus status) {
         }
     }
+
+    @org.junit.jupiter.api.Test
+    void appendFailureTriggersBackupRollback() throws Exception {
+        // QA-06：APPEND 合并失败 → 恢复备份 → 删除本任务新增行 → 清理备份 → 重抛
+        StudentMapper studentMapper = mock(StudentMapper.class);
+        ExcelDemoProperties properties = new ExcelDemoProperties();
+        properties.setImportMergeChunkSize(5000);
+        StudentServiceImpl studentService = new StudentServiceImpl(
+                studentMapper, properties, mock(PlatformTransactionManager.class), new RejectingTaskExecutor());
+        org.mockito.Mockito.doThrow(new RuntimeException("merge chunk failed"))
+                .when(studentMapper).mergeImportStageRangeToCurrentStudent(
+                        org.mockito.ArgumentMatchers.anyString(),
+                        org.mockito.ArgumentMatchers.anyInt(),
+                        org.mockito.ArgumentMatchers.anyInt());
+        java.lang.reflect.Method method = StudentServiceImpl.class
+                .getDeclaredMethod("appendImportStageToCurrentVersion", String.class, int.class,
+                        com.huang.demo.excel.domain.model.StudentImportProgressCallback.class);
+        method.setAccessible(true);
+        com.huang.demo.excel.domain.model.StudentImportProgressCallback callback =
+                org.mockito.Mockito.mock(com.huang.demo.excel.domain.model.StudentImportProgressCallback.class);
+        try {
+            method.invoke(studentService, "task-rb", 2000, callback);
+            org.junit.jupiter.api.Assertions.fail("应抛出合并异常");
+        } catch (java.lang.reflect.InvocationTargetException ex) {
+            org.junit.jupiter.api.Assertions.assertEquals("merge chunk failed", ex.getCause().getMessage());
+        }
+        org.mockito.Mockito.verify(studentMapper).createAppendBackupTableIfAbsent();
+        org.mockito.Mockito.verify(studentMapper).backupCurrentRowsForStage("task-rb");
+        org.mockito.Mockito.verify(studentMapper).restoreAppendBackup("task-rb");
+        org.mockito.Mockito.verify(studentMapper).deleteInsertedRowsByTaskInCurrentVersion("task-rb");
+        org.mockito.Mockito.verify(studentMapper).deleteAppendBackup("task-rb");
+    }
 }

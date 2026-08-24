@@ -128,4 +128,14 @@ public interface StudentMapper {
 
     int deleteImportStageBefore(@Param("createdBefore") LocalDateTime createdBefore,
                                 @Param("limit") int limit);
+
+    void createAppendBackupTableIfAbsent();
+
+    int backupCurrentRowsForStage(@Param("importTaskId") String importTaskId);
+
+    int restoreAppendBackup(@Param("importTaskId") String importTaskId);
+
+    int deleteInsertedRowsByTaskInCurrentVersion(@Param("importTaskId") String importTaskId);
+
+    int deleteAppendBackup(@Param("importTaskId") String importTaskId);
 }

@@ -8,4 +8,6 @@ public interface AuthService {
     AuthTokenResponse login(LoginRequest request);
 
     AuthTokenResponse refresh(String refreshToken);
+
+    void logout(String refreshToken);
 }

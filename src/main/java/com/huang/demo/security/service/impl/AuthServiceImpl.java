@@ -32,15 +32,18 @@ public class AuthServiceImpl implements AuthService {
     private final SecurityUserMapper userMapper;
     private final PasswordService passwordService;
     private final JwtTokenService jwtTokenService;
+    private final org.springframework.data.redis.core.StringRedisTemplate stringRedisTemplate;
 
     public AuthServiceImpl(ApiSecurityProperties properties,
                            SecurityUserMapper userMapper,
                            PasswordService passwordService,
-                           JwtTokenService jwtTokenService) {
+                           JwtTokenService jwtTokenService,
+                           org.springframework.data.redis.core.StringRedisTemplate stringRedisTemplate) {
         this.properties = properties;
         this.userMapper = userMapper;
         this.passwordService = passwordService;
         this.jwtTokenService = jwtTokenService;
+        this.stringRedisTemplate = stringRedisTemplate;
     }
 
     @PostConstruct
@@ -74,10 +77,58 @@ public class AuthServiceImpl implements AuthService {
     public AuthTokenResponse refresh(String refreshToken) {
         JwtTokenService.TokenClaims claims = jwtTokenService.parseRefreshToken(refreshToken)
                 .orElseThrow(() -> new BusinessException(SecurityErrorCode.UNAUTHORIZED, "刷新令牌无效或已过期"));
+        assertRefreshTokenNotRevoked(refreshToken);
         SecurityUser user = userMapper.findByUserId(claims.getUserId())
                 .orElseThrow(() -> new BusinessException(SecurityErrorCode.UNAUTHORIZED, "用户不存在或已停用"));
         assertEnabled(user);
         return buildTokenResponse(user);
+    }
+
+    @Override
+    public void logout(String refreshToken) {
+        // 无状态 refresh token 撤销（QA-07）：登出时将 token 哈希写入 Redis 黑名单，TTL 取剩余有效期
+        JwtTokenService.TokenClaims claims = jwtTokenService.parseRefreshToken(refreshToken).orElse(null);
+        long remainingSeconds = claims == null
+                ? jwtTokenService.refreshTokenExpiresInSeconds()
+                : Math.max(60L, claims.getExpireAtEpochSeconds() - java.time.Instant.now().getEpochSecond());
+        try {
+            stringRedisTemplate.opsForValue().set(
+                    buildRefreshRevocationKey(refreshToken), "1", java.time.Duration.ofSeconds(remainingSeconds));
+        } catch (RuntimeException ex) {
+            // Redis 不可用时降级：撤销信息丢失但登出仍返回成功（与任务缓存降级策略一致）
+            log.warn("save refresh token revocation failed, degraded mode", ex);
+        }
+    }
+
+    private void assertRefreshTokenNotRevoked(String refreshToken) {
+        try {
+            if (Boolean.TRUE.equals(stringRedisTemplate.hasKey(buildRefreshRevocationKey(refreshToken)))) {
+                throw new BusinessException(SecurityErrorCode.UNAUTHORIZED, "刷新令牌已撤销，请重新登录");
+            }
+        } catch (BusinessException ex) {
+            throw ex;
+        } catch (RuntimeException ex) {
+            // Redis 不可用时放行（降级不阻断登录链路）
+            log.warn("check refresh token revocation failed, degraded mode", ex);
+        }
+    }
+
+    private String buildRefreshRevocationKey(String refreshToken) {
+        return "auth:refresh:revoked:" + sha256Hex(refreshToken);
+    }
+
+    private String sha256Hex(String value) {
+        try {
+            java.security.MessageDigest digest = java.security.MessageDigest.getInstance("SHA-256");
+            byte[] hash = digest.digest(value.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            StringBuilder sb = new StringBuilder(hash.length * 2);
+            for (byte b : hash) {
+                sb.append(String.format("%02x", b));
+            }
+            return sb.toString();
+        } catch (java.security.NoSuchAlgorithmException ex) {
+            throw new IllegalStateException("SHA-256 不可用", ex);
+        }
     }
 
     private AuthTokenResponse buildTokenResponse(SecurityUser user) {

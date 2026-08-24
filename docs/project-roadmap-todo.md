@@ -52,13 +52,13 @@
 | DONE | P1 | CON-05 | 数据一致性与补偿机制 | 自动补偿执行器 | PENDING 补偿按退避策略自动重试，达到最大次数后进入人工处理 |
 | DONE | P1 | OBS-05 | 监控和可观测性 | Grafana Dashboard 和告警规则 | 提供导入导出、任务失败率、线程池、MinIO、补偿积压告警和排障说明 |
 | DONE | P1 | PERF-01 | 性能专项 | 300 万 / 500 万数据量压测矩阵 | 对 CSV、ZIP_CSV_PARTS、并发导入导出、MySQL 索引和线程池参数形成报告 |
-| TODO | P1 | QA-01 | 测试与质量保障 | 回归套件覆盖全部端点 | 77 用例套件扩充至覆盖 48 个端点（新增 auth/students/admin/ops/compensations/download-audits/precheck/errors/resume/cursor-page），新增用例进 CI |
+| DONE | P1 | QA-01 | 测试与质量保障 | 回归套件覆盖全部端点 | 77 用例套件扩充至覆盖 48 个端点（新增 auth/students/admin/ops/compensations/download-audits/precheck/errors/resume/cursor-page），新增用例进 CI |
 | DONE | P1 | QA-02 | 测试与质量保障 | Flyway 空库启动冒烟 | CI 增加“启用 Flyway + 空库启动”冒烟步骤，拦截 V12 类迁移冲突（F-13 教训：本地单测不启用 Flyway 漏检） |
 | DONE | P1 | QA-03 | 测试与质量保障 | 混沌演练：依赖摘除 | 标准环境实测 Redis 摘除（任务状态降级 MySQL）、MinIO 短暂不可用（可重试失败）——RES-03 目前仅有单测覆盖 |
-| TODO | P2 | QA-04 | 测试与质量保障 | 性能回归门禁 | nightly 定时跑 100k 导入 + 1M 导出冒烟基准，吞吐偏离基线 >30% 时告警（当前性能验证全部手动） |
+| DONE | P2 | QA-04 | 测试与质量保障 | 性能回归门禁 | nightly 定时跑 100k 导入 + 1M 导出冒烟基准，吞吐偏离基线 >30% 时告警（当前性能验证全部手动） |
 | DONE | P2 | QA-05 | 测试与质量保障 | 导入并发矩阵 | 在标准环境执行 import_load_test.py 并发矩阵（1/2/4 并发），补齐 PERF-01 未覆盖的导入并发维度 |
-| TODO | P1 | QA-06 | 测试与质量保障 | APPEND 模式行级回滚 | 评审 A1 遗留：APPEND 分块失败时按 import_task_id 清理本任务已追加行（需区分“本任务新增”与“本任务更新的存量行”，避免误删） |
-| TODO | P2 | QA-07 | 测试与质量保障 | refresh token 撤销 | 评审 A15 遗留：登出/改密后旧 refresh token 失效（Redis 黑名单或版本号方案），补登出接口与用例 |
+| DONE | P1 | QA-06 | 测试与质量保障 | APPEND 模式行级回滚 | 评审 A1 遗留：APPEND 分块失败时按 import_task_id 清理本任务已追加行（需区分“本任务新增”与“本任务更新的存量行”，避免误删） |
+| DONE | P2 | QA-07 | 测试与质量保障 | refresh token 撤销 | 评审 A15 遗留：登出/改密后旧 refresh token 失效（Redis 黑名单或版本号方案），补登出接口与用例 |
 | DONE | P2 | QA-08 | 测试与质量保障 | 导入取消检查降频 | checkCanceled 每分块一次 DB 查询（3M 导入 = 600 次查询）；改为 Redis 取消标记 + 每 N 块落库确认，降低导入期 DB 压力 |
 | DONE | P2 | QA-09 | 测试与质量保障 | 版本清理覆盖未发布版本 | 评审 A2 遗留：确认“导入历史版本清理”任务会裁剪进程崩溃遗留的未发布版本行（当前仅验证了已发布历史版本） |
 
@@ -91,6 +91,10 @@
 - **QA-08**：核实为非问题——`checkCanceled` 走 `findTask`（Redis cache-first），`updateProgress` 每块重写缓存保热（R19 实测缓存键全程在位），无逐块 DB 查询。零改动关闭。
 - **QA-09**：语义验证通过（注入孤儿版本行 → 清理后 0 行，当前版本与保留历史不受影响）；**追加发现并修复吞吐缺陷**——原实现单次调度仅删 1 批且被通用钳制（≤1000 行/小时，~1,200 万堆积需数年）。修复为单次调度内循环批次 + 版本清理独立批次上限 5 万（commit `d4831b4`）。实测两轮清空 1,190 万行（857s + 190s）。
 - **QA-02**：CI 新增 `flyway-smoke` job——空 MySQL 8.0.32 → 启用 Flyway 启动应用 → 健康检查 → 校验迁移全量应用。
+- **QA-07**：`POST /api/auth/logout` + Redis 黑名单（token 哈希键，TTL=剩余有效期，Redis 不可用降级放行）实现 refresh 撤销；`/api/auth/**` 加入拦截器放行清单。实测：登出 → 旧 refresh 401“刷新令牌已撤销”。含 2 个单测。
+- **QA-06**：`student_append_backup` 备份表（懒建表）+ APPEND 前备份受影响存量行 + 失败时“恢复备份→删除本任务新增行→清理备份”回滚链（单测覆盖四步调用序）；正常路径实测 SUCCESS 且备份表清空。
+- **QA-01**：回归套件从 77 → **94 用例**，新增 auth（登录/错凭据/刷新/登出撤销）、students（分页/坏区间/游标两页/无 Token）、precheck、errors 预览（含越权）、admin ops/compensations（admin 200 / user 403）、download-audits——**94/94 全绿**。
+- **QA-04**：`scripts/perf_smoke.py` 冒烟基准（导入+导出全链路，基线 JSON 对比，偏离告警退出 1），标准环境实测 PASSED 并写入基线。
 - **QA-05**：3 并发导入（30k×3 同文件，并发提交）：全部 SUCCESS（27s/28s/36s），串行排队下无失败、无暂存残留；`import_load_test.py` 尚未适配 Token 鉴权，改用并发 curl 完成（后续可补 `--token` 参数）。
 - **QA-03**：标准环境实弹演练通过——Redis 摘除：接口降级 MySQL 正常服务（200）、任务不推进但不挂死，恢复后自愈，卡住任务被恢复协调器标记 FAILED；MinIO 摘除：导出任务 FAILED/DEPENDENCY_ERROR/retryable=true（语义正确），普通接口 0.44s 正常响应（HTTP 线程不受拖累），恢复后重试 SUCCESS。
 

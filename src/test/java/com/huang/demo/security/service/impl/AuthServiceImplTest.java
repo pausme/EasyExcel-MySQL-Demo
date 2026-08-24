@@ -46,10 +46,51 @@ class AuthServiceImplTest {
         userMapper = mock(SecurityUserMapper.class);
         passwordService = new PasswordService();
         jwtTokenService = new JwtTokenService(properties, new ObjectMapper());
-        authService = new AuthServiceImpl(properties, userMapper, passwordService, jwtTokenService);
+        org.springframework.data.redis.core.StringRedisTemplate redisTemplate =
+                org.mockito.Mockito.mock(org.springframework.data.redis.core.StringRedisTemplate.class);
+        org.mockito.Mockito.when(redisTemplate.hasKey(org.mockito.ArgumentMatchers.anyString())).thenReturn(false);
+        authService = new AuthServiceImpl(properties, userMapper, passwordService, jwtTokenService, redisTemplate);
     }
 
-    @Test
+    
+    @org.junit.jupiter.api.Test
+    void refreshFailsAfterLogoutRevocation() {
+        // QA-07：登出撤销后旧 refresh 不可再用（Redis 黑名单命中）
+        org.springframework.data.redis.core.StringRedisTemplate redisTemplate =
+                org.mockito.Mockito.mock(org.springframework.data.redis.core.StringRedisTemplate.class);
+        org.springframework.data.redis.core.ValueOperations<String, String> valueOps =
+                org.mockito.Mockito.mock(org.springframework.data.redis.core.ValueOperations.class);
+        org.mockito.Mockito.when(redisTemplate.opsForValue()).thenReturn(valueOps);
+        org.mockito.Mockito.when(redisTemplate.hasKey(org.mockito.ArgumentMatchers.startsWith("auth:refresh:revoked:")))
+                .thenReturn(true);
+        AuthServiceImpl revokedService = new AuthServiceImpl(properties, userMapper, passwordService, jwtTokenService, redisTemplate);
+        com.huang.demo.common.exception.BusinessException ex = assertThrows(
+                com.huang.demo.common.exception.BusinessException.class,
+                () -> revokedService.refresh(validRefreshToken()));
+        org.assertj.core.api.Assertions.assertThat(ex.getMessage()).contains("已撤销");
+    }
+
+    @org.junit.jupiter.api.Test
+    void logoutWritesRevocationWithTtl() {
+        org.springframework.data.redis.core.StringRedisTemplate redisTemplate =
+                org.mockito.Mockito.mock(org.springframework.data.redis.core.StringRedisTemplate.class);
+        org.springframework.data.redis.core.ValueOperations<String, String> valueOps =
+                org.mockito.Mockito.mock(org.springframework.data.redis.core.ValueOperations.class);
+        org.mockito.Mockito.when(redisTemplate.opsForValue()).thenReturn(valueOps);
+        AuthServiceImpl service = new AuthServiceImpl(properties, userMapper, passwordService, jwtTokenService, redisTemplate);
+        service.logout(validRefreshToken());
+        org.mockito.Mockito.verify(valueOps).set(
+                org.mockito.ArgumentMatchers.startsWith("auth:refresh:revoked:"),
+                org.mockito.ArgumentMatchers.eq("1"),
+                org.mockito.ArgumentMatchers.any(java.time.Duration.class));
+    }
+
+    private String validRefreshToken() {
+        return jwtTokenService.createRefreshToken("admin", "admin",
+                new java.util.LinkedHashSet<>(java.util.Arrays.asList("ADMIN")));
+    }
+
+@Test
     void loginReturnsJwtTokensForEnabledUser() {
         when(userMapper.findByUsername("admin")).thenReturn(Optional.of(user("admin", "ADMIN,USER", "secret123")));
         LoginRequest request = new LoginRequest();
