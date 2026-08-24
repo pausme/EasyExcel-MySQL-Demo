@@ -147,6 +147,18 @@
 - `EXPORT_CORE_POOL_SIZE=2`：双任务并发已打满磁盘（聚合=单跑），继续加线程只会增加内存与上下文切换，维持 2 为最优。
 - `IMPORT_WORKER_COUNT=6`：3M 导入稳定 4,757 行/s，瓶颈为全持久化 fsync（§5.1），worker 增益已尽。
 
+### 5.7 持久化配置 A/B 实测（R28，2026-08-24）
+
+| 配置 | run | 处理耗时(s) | 吞吐(行/s) |
+| --- | ---: | ---: | ---: |
+| `trx_commit=1` + `sync_binlog=1`（全持久化，基线） | 1 | 25.74 | 3,885 |
+| `trx_commit=2` + `sync_binlog=100`（relaxed） | 1 | 18.50 | **5,405** |
+| `trx_commit=2` + `sync_binlog=100`（relaxed） | 2 | 20.93 | 4,778 |
+
+- **实测提升 ~31%（均值 5,092 vs 3,885），最佳单次 +39%**——修正了此前"约 2 倍"的推断；fsync 只是瓶颈之一，解析、EasyExcel、网络转发同样占耗时。
+- 测试后配置已恢复全持久化（`trx_commit=1`、`sync_binlog=1`）。
+- 语义提醒：relaxed 下 OS 崩溃可能丢最后一秒事务（MySQL 进程崩溃不丢）；仅建议测试/可容忍环境使用。
+
 ## 6. 推荐配置
 
 | 场景 | 推荐参数 | 理由 |
@@ -156,7 +168,7 @@
 | 标准环境导出（≤100 万） | 单任务单 Sheet，`EXPORT_CORE_POOL_SIZE=2` | ~23.3k 行/s，3/3 稳定 |
 | 标准环境导出（>100 万） | **`format=ZIP_CSV_PARTS`**（或 CSV） | R25 实测 90.7k 行/s，300 万行 33s；XLSX 受单 Sheet 上限必然失败 |
 | 本地 DB / 高配环境 | 导入 `IMPORT_WORKER_COUNT=16`、`HIKARI≥24` 可达 ~64k 行/s；默认 6 性价比更稳 | 本地基线矩阵 |
-| 全持久化云盘调优 | 测试库可评估 `innodb_flush_log_at_trx_commit=2`、`sync_binlog=100` | 以断电丢秒级数据换 ~2 倍写入吞吐 |
+| 全持久化云盘调优 | 测试库可评估 `innodb_flush_log_at_trx_commit=2`、`sync_binlog=100` | **A/B 实测（R28）**：+31~39% 导入吞吐（见 §5.7），非此前推测的 2 倍；断电丢秒级数据 |
 
 ## 7. 暂存校验导入的额外成本（实测）
 

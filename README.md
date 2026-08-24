@@ -176,6 +176,7 @@ IMPORT_WORKER_COUNT * IMPORT_MAX_CONCURRENT_TASKS <= HIKARI_MAXIMUM_POOL_SIZE
 | 补偿重试 | `POST /api/admin/compensations/{compensationId}/retry` | 将补偿记录切回 `PENDING`，等待调度重放 |
 | 补偿忽略 | `POST /api/admin/compensations/{compensationId}/ignore` | 将补偿记录标记为 `IGNORED` |
 | 运维首页聚合 | `GET /api/admin/ops/overview` | 管理员查看今日任务、失败任务、补偿积压、文件容量、线程池和最近异常 |
+| AI 自然语言查询 | `POST /api/ai/students/query` | 自然语言 → 结构化过滤条件 → 学生分页（需配置 `APP_AI_ENABLED=true` 与 OpenAI 兼容端点） |
 | 线程池监控 | `GET /api/tasks/metrics/thread-pools` | 管理员查看导入、导出线程池快照 |
 | 轻量运维页面 | `GET /ops-dashboard.html` | 浏览器查看运维概览、任务列表、补偿处理和审计记录 |
 

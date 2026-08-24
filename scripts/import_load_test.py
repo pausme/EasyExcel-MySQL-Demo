@@ -26,21 +26,24 @@ def parse_args():
     parser.add_argument("--chunk-size", type=int, default=1024 * 1024,
                         help="Upload read chunk size in bytes, default: 1 MiB")
     parser.add_argument("--output", help="Write the complete result to a JSON file")
+    parser.add_argument("--token", default=os.environ.get("API_SECURITY_DEMO_USER_TOKEN", ""),
+                        help="Bearer token for auth-enabled deployments "
+                             "(default: env API_SECURITY_DEMO_USER_TOKEN)")
     return parser.parse_args()
 
 
-def parse_endpoint(base_url):
+def parse_endpoint(base_url, token=""):
     parsed = urlsplit(base_url)
     if parsed.scheme not in ("http", "https") or not parsed.hostname:
         raise ValueError("--base-url must include an http/https scheme and hostname")
 
     endpoint = parsed.path.rstrip("/") + "/api/excel/import"
     connection_type = HTTPSConnection if parsed.scheme == "https" else HTTPConnection
-    return connection_type, parsed.hostname, parsed.port, endpoint
+    return connection_type, parsed.hostname, parsed.port, endpoint, token
 
 
 def upload_file(endpoint, file_path, timeout, chunk_size, request_no):
-    connection_type, hostname, port, path = endpoint
+    connection_type, hostname, port, path, token = endpoint
     boundary = "----CodexImportLoadTest-" + uuid.uuid4().hex
     filename = os.path.basename(file_path)
     prefix = (
@@ -59,6 +62,8 @@ def upload_file(endpoint, file_path, timeout, chunk_size, request_no):
         connection.putheader("Content-Type", "multipart/form-data; boundary={0}".format(boundary))
         connection.putheader("Content-Length", str(content_length))
         connection.putheader("Connection", "close")
+        if token:
+            connection.putheader("Authorization", "Bearer {0}".format(token))
         connection.endheaders()
         connection.send(prefix)
         with open(file_path, "rb") as file_handle:
@@ -146,7 +151,7 @@ def main():
     if not os.path.isfile(args.file_path):
         raise FileNotFoundError(args.file_path)
 
-    endpoint = parse_endpoint(args.base_url)
+    endpoint = parse_endpoint(args.base_url, args.token)
     concurrency_levels = [args.concurrency]
     if args.matrix:
         concurrency_levels = [int(value.strip()) for value in args.matrix.split(",") if value.strip()]

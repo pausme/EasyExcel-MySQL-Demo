@@ -32,6 +32,12 @@ mybatis:
     map-underscore-to-camel-case: true
 
 app:
+  ai:
+    enabled: ${APP_AI_ENABLED:false}
+    chat-endpoint: ${APP_AI_CHAT_ENDPOINT:}
+    api-key: ${APP_AI_API_KEY:}
+    model: ${APP_AI_MODEL:gpt-4o-mini}
+    timeout-seconds: ${APP_AI_TIMEOUT_SECONDS:15}
   security:
     init-enabled: ${API_SECURITY_INIT_ENABLED:true}
     demo-mode: ${API_SECURITY_DEMO_MODE:true}
