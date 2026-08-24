@@ -165,16 +165,21 @@ public class AuthServiceImpl implements AuthService {
             return;
         }
         LocalDateTime now = LocalDateTime.now();
-        userMapper.insert(SecurityUser.builder()
-                .userId(normalizeUserId(properties.getBootstrapAdminUserId()))
-                .username(username)
-                .passwordHash(passwordService.hash(password))
-                .roles(SecurityRoles.ADMIN + "," + SecurityRoles.USER)
-                .status(STATUS_ENABLED)
-                .createdAt(now)
-                .updatedAt(now)
-                .build());
-        log.info("bootstrap admin created, username={}", username);
+        try {
+            userMapper.insert(SecurityUser.builder()
+                    .userId(normalizeUserId(properties.getBootstrapAdminUserId()))
+                    .username(username)
+                    .passwordHash(passwordService.hash(password))
+                    .roles(SecurityRoles.ADMIN + "," + SecurityRoles.USER)
+                    .status(STATUS_ENABLED)
+                    .createdAt(now)
+                    .updatedAt(now)
+                    .build());
+            log.info("bootstrap admin created, username={}", username);
+        } catch (org.springframework.dao.DuplicateKeyException ex) {
+            // 多实例同时启动 / 引导账号与既有唯一键冲突：视为已引导成功，不阻断启动
+            log.info("bootstrap admin already exists (unique key conflict resolved), username={}", username);
+        }
     }
 
     private Set<String> parseRoles(String rolesText) {
