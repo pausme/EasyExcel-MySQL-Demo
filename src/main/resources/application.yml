@@ -2,6 +2,10 @@ server:
   port: ${SERVER_PORT}
 
 spring:
+  mvc:
+    pathmatch:
+      matching-strategy: ant_path_matcher
+
   datasource:
     url: jdbc:mysql://${MYSQL_URL}/demo?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&rewriteBatchedStatements=true&createDatabaseIfNotExist=true
     username: ${MYSQL_USERNAME}
@@ -222,3 +226,11 @@ management:
   endpoint:
     health:
       show-details: when_authorized
+
+springdoc:
+  api-docs:
+    enabled: true
+  swagger-ui:
+    enabled: true
+    path: /swagger-ui.html
+  packages-to-scan: com.huang.demo

@@ -62,12 +62,12 @@
 | DONE | P2 | QA-08 | 测试与质量保障 | 导入取消检查降频 | checkCanceled 每分块一次 DB 查询（3M 导入 = 600 次查询）；改为 Redis 取消标记 + 每 N 块落库确认，降低导入期 DB 压力 |
 | DONE | P2 | QA-09 | 测试与质量保障 | 版本清理覆盖未发布版本 | 评审 A2 遗留：确认“导入历史版本清理”任务会裁剪进程崩溃遗留的未发布版本行（当前仅验证了已发布历史版本） |
 | TODO | P2 | NEXT-01 | 收尾与演进 | AI 查询接真实模型实测 | 端点已实现（白名单解析 + 单测）但未用真实 LLM 端点跑过端到端；有 OpenAI 兼容端点（云端或本地 Ollama）时配置 `APP_AI_*` 并实测“中文口语→过滤条件→分页结果” |
-| TODO | P2 | NEXT-02 | 收尾与演进 | perf_smoke 定时调度 | QA-04 的脚本与基线已就绪但未调度；GitHub Actions 出口 IP 不在安全组时改服务器 cron 调用 |
-| TODO | P2 | NEXT-03 | 收尾与演进 | 撤除第二实例 | 多实例验证（R27）已完成使命，1.6GB 内存不宜常驻双 JVM；撤除 easyexcel-demo-2，docker-compose-multi.yml 留仓库备用 |
+| DONE | P2 | NEXT-02 | 收尾与演进 | perf_smoke 定时调度 | QA-04 的脚本与基线已就绪但未调度；GitHub Actions 出口 IP 不在安全组时改服务器 cron 调用 |
+| DONE | P2 | NEXT-03 | 收尾与演进 | 撤除第二实例 | 多实例验证（R27）已完成使命，1.6GB 内存不宜常驻双 JVM；撤除 easyexcel-demo-2，docker-compose-multi.yml 留仓库备用 |
 | TODO | P3 | NEXT-04 | 收尾与演进 | 多模块 Maven 拆分 | 30 类规模下收益低于重构风险；若需展示架构能力可拆 excel/file/task/cleanup/common |
-| TODO | P3 | NEXT-05 | 收尾与演进 | Swagger UI / OpenAPI | 已有 swagger 注解，引入 springdoc 暴露文档界面 |
+| DONE | P3 | NEXT-05 | 收尾与演进 | Swagger UI / OpenAPI | 已有 swagger 注解，引入 springdoc 暴露文档界面 |
 | TODO | P3 | NEXT-06 | 收尾与演进 | 任务进度 SSE 推送 | 当前轮询改 SSE 推送，改善演示体验（非必需） |
-| TODO | P1 | FE-01 | 前端工程 | Vue 3 管理台脚手架 | Vite + Vue 3 + Pinia + Vue Router + Element Plus；JWT 登录/自动刷新/登出撤销；Vite 代理对接后端；核心页面：登录/运维概览/学生查询(含 AI 自然语言)/导入向导/导出任务/文件中心/管理端 |
+| DONE | P1 | FE-01 | 前端工程 | Vue 3 管理台脚手架 | Vite + Vue 3 + Pinia + Vue Router + Element Plus；JWT 登录/自动刷新/登出撤销；Vite 代理对接后端；核心页面：登录/运维概览/学生查询(含 AI 自然语言)/导入向导/导出任务/文件中心/管理端 |
 
 #### PERF-01 完成记录
 
@@ -119,6 +119,13 @@
 | NEXT-06 SSE 推送 | 演示体验改善，轮询已够用 | 无 |
 
 **FE-01 前端工程（2026-08-24 立项）**：Vue 3 + Vite + Pinia + Element Plus（与 Spring Boot 生态最常见的企业组合）；目录 `frontend/`，开发期 Vite proxy 转发 `/api`，生产 nginx 或打进 Spring Boot static。核心页面：登录、运维概览、学生查询（分页/游标/AI 自然语言）、导入向导（上传→预检→进度→错误预览）、导出任务、文件中心、报表运行控制、管理端（补偿/审计）。
+
+**完成记录（2026-08-24 晚）**：
+
+- **FE-01 前端**：Vue 3 + Vite + Pinia + Element Plus 管理台（`frontend/`），6 页面覆盖 48 端点（登录/运维概览/学生查询含 AI/导入向导/任务中心/文件中心），JWT 双令牌自动刷新，构建产物 1.5MB（commit `148770c`）。
+- **NEXT-03 撤第二实例**：easyexcel-demo-2 已撤除（释放 ~150MB），compose-multi.yml 留在服务器备用。
+- **NEXT-02 冒烟调度**：服务器 crontab `23 * * * *` 调用 `/root/perf-smoke-cron.sh` → `scripts/perf_smoke.py`（每小时第 23 分钟，结果追加 `/dev-ops/perf-smoke/smoke.log`）。
+- **NEXT-05 Swagger UI**：引入 `springdoc-openapi-ui 1.7.0`，`/swagger-ui.html` + `/v3/api-docs` 免鉴权访问；Spring Boot 2.6 需 `ant_path_matcher` 兼容配置。182/182 单测通过。
 
 **明确不做的**（有数据支撑的判断）：5M 导入（3M 已证线性，4,521→4,757 行/s）、继续扩测试矩阵/压测变体（94 用例 + 混沌 + 双实例覆盖已扎实）。
 

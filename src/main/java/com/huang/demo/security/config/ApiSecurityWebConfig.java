@@ -18,6 +18,6 @@ public class ApiSecurityWebConfig implements WebMvcConfigurer {
     public void addInterceptors(InterceptorRegistry registry) {
         registry.addInterceptor(userContextInterceptor)
                 .addPathPatterns("/api/**")
-                .excludePathPatterns("/actuator/**", "/api/auth/**");
+                .excludePathPatterns("/actuator/**", "/api/auth/**", "/swagger-ui/**", "/v3/api-docs/**");
     }
 }
