@@ -68,12 +68,12 @@
 | DONE | P3 | NEXT-05 | 收尾与演进 | Swagger UI / OpenAPI | 已有 swagger 注解，引入 springdoc 暴露文档界面 |
 | TODO | P3 | NEXT-06 | 收尾与演进 | 任务进度 SSE 推送 | 当前轮询改 SSE 推送，改善演示体验（非必需） |
 | DONE | P1 | FE-01 | 前端工程 | Vue 3 管理台脚手架 | Vite + Vue 3 + Pinia + Vue Router + Element Plus；JWT 登录/自动刷新/登出撤销；Vite 代理对接后端；核心页面：登录/运维概览/学生查询(含 AI 自然语言)/导入向导/导出任务/文件中心/管理端 |
-| TODO | P1 | REV-01 | 前端下载链路 | 修复 302 下载处理 | 文件中心下载、导出文件下载、导入错误文件下载不再依赖 Axios 读取 302 `Location`；提供 JSON 签名 URL 接口或直接浏览器导航，确保大文件下载链路可用 |
-| TODO | P1 | REV-02 | 前端鉴权稳定性 | 修复 refresh token 失效循环刷新 | 刷新 token 请求使用独立 axios 实例或在拦截器中排除 `/api/auth/**`；refresh 失效时只清理登录态并跳转登录页，不重复触发刷新 |
-| TODO | P1 | REV-03 | 仓库安全与忽略规则 | 恢复 `.gitignore` 防泄露规则 | 恢复 `.DS_Store`、`deploy/*.env`、测试结果、压测结果、IDE 文件等忽略规则；删除已入库的 `docs/.DS_Store`；保留 `.env.example` 可提交 |
-| TODO | P2 | REV-04 | 前端依赖治理 | 提交前端 lock 文件 | 不再忽略 `frontend/package-lock.json`，提交 lock 文件，避免前端构建依赖版本漂移 |
-| TODO | P2 | REV-05 | 前端部署兼容 | 补齐 API CORS 或明确同源部署策略 | 若支持独立前端 origin，统一配置 `/api/auth/**`、`/api/excel/**`、`/api/tasks/**`、`/api/students/**` 跨域；若只支持同源/代理部署，则在 README 中明确 |
-| TODO | P2 | REV-06 | 前端性能 | 优化 Vite 构建 chunk 体积 | Element Plus 按需引入或配置 `manualChunks`，消除主 JS chunk 超过 500KB 的构建警告 |
+| DONE | P1 | REV-01 | 前端下载链路 | 修复 302 下载处理 | 文件中心下载、导出文件下载、导入错误文件下载不再依赖 Axios 读取 302 `Location`；提供 JSON 签名 URL 接口或直接浏览器导航，确保大文件下载链路可用 |
+| DONE | P1 | REV-02 | 前端鉴权稳定性 | 修复 refresh token 失效循环刷新 | 刷新 token 请求使用独立 axios 实例或在拦截器中排除 `/api/auth/**`；refresh 失效时只清理登录态并跳转登录页，不重复触发刷新 |
+| DONE | P1 | REV-03 | 仓库安全与忽略规则 | 恢复 `.gitignore` 防泄露规则 | 恢复 `.DS_Store`、`deploy/*.env`、测试结果、压测结果、IDE 文件等忽略规则；删除已入库的 `docs/.DS_Store`；保留 `.env.example` 可提交 |
+| DONE | P2 | REV-04 | 前端依赖治理 | 提交前端 lock 文件 | 不再忽略 `frontend/package-lock.json`，提交 lock 文件，避免前端构建依赖版本漂移 |
+| DONE | P2 | REV-05 | 前端部署兼容 | 补齐 API CORS 或明确同源部署策略 | 若支持独立前端 origin，统一配置 `/api/auth/**`、`/api/excel/**`、`/api/tasks/**`、`/api/students/**` 跨域；若只支持同源/代理部署，则在 README 中明确 |
+| DONE | P2 | REV-06 | 前端性能 | 优化 Vite 构建 chunk 体积 | Element Plus 按需引入或配置 `manualChunks`，消除主 JS chunk 超过 500KB 的构建警告 |
 
 #### PERF-01 完成记录
 
