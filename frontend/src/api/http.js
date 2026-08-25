@@ -24,7 +24,9 @@ http.interceptors.response.use(
   async err => {
     const auth = useAuthStore()
     const status = err.response?.status
-    if (status === 401 && auth.refreshToken && !err.config._retried) {
+    // FE-03 修复：refresh 自身 401 时不再重试，直接登出
+    const isRefreshCall = err.config?.url?.includes('/api/auth/refresh')
+    if (status === 401 && auth.refreshToken && !err.config._retried && !isRefreshCall) {
       err.config._retried = true
       try {
         refreshing = refreshing || auth.doRefresh()
@@ -35,7 +37,13 @@ http.interceptors.response.use(
         refreshing = null
         auth.clear()
         router.push('/login')
+        return Promise.reject(new Error('登录已过期，请重新登录'))
       }
+    }
+    if (status === 401 && isRefreshCall) {
+      auth.clear()
+      router.push('/login')
+      return Promise.reject(new Error('登录已过期，请重新登录'))
     }
     const msg = err.response?.data?.message || err.message || '网络异常'
     return Promise.reject(new Error(msg))

@@ -68,6 +68,12 @@
 | DONE | P3 | NEXT-05 | 收尾与演进 | Swagger UI / OpenAPI | 已有 swagger 注解，引入 springdoc 暴露文档界面 |
 | TODO | P3 | NEXT-06 | 收尾与演进 | 任务进度 SSE 推送 | 当前轮询改 SSE 推送，改善演示体验（非必需） |
 | DONE | P1 | FE-01 | 前端工程 | Vue 3 管理台脚手架 | Vite + Vue 3 + Pinia + Vue Router + Element Plus；JWT 登录/自动刷新/登出撤销；Vite 代理对接后端；核心页面：登录/运维概览/学生查询(含 AI 自然语言)/导入向导/导出任务/文件中心/管理端 |
+| TODO | P1 | REV-01 | 前端下载链路 | 修复 302 下载处理 | 文件中心下载、导出文件下载、导入错误文件下载不再依赖 Axios 读取 302 `Location`；提供 JSON 签名 URL 接口或直接浏览器导航，确保大文件下载链路可用 |
+| TODO | P1 | REV-02 | 前端鉴权稳定性 | 修复 refresh token 失效循环刷新 | 刷新 token 请求使用独立 axios 实例或在拦截器中排除 `/api/auth/**`；refresh 失效时只清理登录态并跳转登录页，不重复触发刷新 |
+| TODO | P1 | REV-03 | 仓库安全与忽略规则 | 恢复 `.gitignore` 防泄露规则 | 恢复 `.DS_Store`、`deploy/*.env`、测试结果、压测结果、IDE 文件等忽略规则；删除已入库的 `docs/.DS_Store`；保留 `.env.example` 可提交 |
+| TODO | P2 | REV-04 | 前端依赖治理 | 提交前端 lock 文件 | 不再忽略 `frontend/package-lock.json`，提交 lock 文件，避免前端构建依赖版本漂移 |
+| TODO | P2 | REV-05 | 前端部署兼容 | 补齐 API CORS 或明确同源部署策略 | 若支持独立前端 origin，统一配置 `/api/auth/**`、`/api/excel/**`、`/api/tasks/**`、`/api/students/**` 跨域；若只支持同源/代理部署，则在 README 中明确 |
+| TODO | P2 | REV-06 | 前端性能 | 优化 Vite 构建 chunk 体积 | Element Plus 按需引入或配置 `manualChunks`，消除主 JS chunk 超过 500KB 的构建警告 |
 
 #### PERF-01 完成记录
 
@@ -126,6 +132,28 @@
 - **NEXT-03 撤第二实例**：easyexcel-demo-2 已撤除（释放 ~150MB），compose-multi.yml 留在服务器备用。
 - **NEXT-02 冒烟调度**：服务器 crontab `23 * * * *` 调用 `/root/perf-smoke-cron.sh` → `scripts/perf_smoke.py`（每小时第 23 分钟，结果追加 `/dev-ops/perf-smoke/smoke.log`）。
 - **NEXT-05 Swagger UI**：引入 `springdoc-openapi-ui 1.7.0`，`/swagger-ui.html` + `/v3/api-docs` 免鉴权访问；Spring Boot 2.6 需 `ant_path_matcher` 兼容配置。182/182 单测通过。
+
+### 8. Review 待办（REV-01 ~ REV-06，2026-08-25 基于 `f736b60..HEAD` 代码审查新增）
+
+来源：审查 `f736b60` 之后的提交（`81bd967`、`148770c`、`090cc4e`）发现的前端链路、鉴权、仓库安全和构建治理问题。
+
+| 编号 | 优先级依据 | 处理建议 |
+| --- | --- | --- |
+| REV-01 302 下载处理 | P1：用户点击下载可能直接失败，影响文件中心、导出结果和导入错误文件三个核心链路 | 后端新增签名 URL JSON 查询接口，或前端直接使用浏览器导航打开下载接口，避免 XHR/Axios 自动跟随 302 后丢失 `Location` |
+| REV-02 refresh 循环刷新 | P1：refresh token 过期/撤销后可能反复触发刷新请求 | auth 接口使用独立 axios 实例，或在响应拦截器中跳过 `/api/auth/login`、`/api/auth/refresh`、`/api/auth/logout` |
+| REV-03 `.gitignore` 防泄露 | P1：`deploy/*.env` 等保护规则被删除，且 `docs/.DS_Store` 已入库 | 恢复原有忽略规则，删除已提交的系统文件，保留示例配置文件可提交 |
+| REV-04 lock 文件 | P2：依赖版本漂移会导致本地、CI、服务器构建不一致 | 提交 `frontend/package-lock.json`，生产构建统一使用 `npm ci` |
+| REV-05 CORS 策略 | P2：仅 `/api/files/**` 配了 CORS，独立前端 origin 访问其他 API 可能失败 | 根据部署方式二选一：全局 API CORS，或 README 明确必须同源/Nginx/Vite proxy |
+| REV-06 chunk 体积 | P2：构建通过但 Element Plus 全量引入导致首屏 JS 偏大 | 按需引入 Element Plus，或拆分 vendor/manualChunks |
+
+**前端修复与治理记录（2026-08-24 深夜）**：
+
+- **FE-02 302 下载**：ImportWizard/Tasks/Files 三个页面的下载函数改用 `fetch` + blob 或 `window.open`（浏览器自动跟 302），不再依赖 axios 拦截 302 的 header（浏览器安全限制不可取）。
+- **FE-03 refresh 循环**：http.js 401 拦截器增加 refresh URL 自身判断——refresh 请求的 401 不再触发重试，直接 clear + 跳转登录。
+- **SEC-01 .gitignore**：恢复防泄露规则——HELP.md、.DS_Store、live-test-results*、perf-baseline/smoke-latest 等含内部地址/Token 的文件全部忽略。
+- **FE-04 lock 文件**：`frontend/package-lock.json`（62KB）纳入版本控制（从 .gitignore 移除），保证构建可重现。
+- **FE-05 CORS/部署**：采用**同源部署策略**（Vite proxy 开发期转发、生产 nginx 或 Spring Boot static 部署），前端代码中 `/api` 均为相对路径，无需跨域配置。
+- **FE-06 chunk 优化**：Vite `manualChunks` 拆分 element-plus / vue-vendor / axios 为独立 chunk，消除 500KB+ 单包警告。
 
 **明确不做的**（有数据支撑的判断）：5M 导入（3M 已证线性，4,521→4,757 行/s）、继续扩测试矩阵/压测变体（94 用例 + 混沌 + 双实例覆盖已扎实）。
 

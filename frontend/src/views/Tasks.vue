@@ -91,11 +91,27 @@ async function retry(row) {
 }
 
 async function download(row) {
+  // 302 不可靠（axios 跟随后丢 header），直接用 fetch + redirect:manual
   try {
-    const resp = await http.get(`/api/excel/export/${row.taskId}/download`, { validateStatus: () => true })
-    if (resp.status === 302 && resp.headers.location) window.open(resp.headers.location, '_blank')
-    else ElMessage.warning('获取下载地址失败')
-  } catch (e) { ElMessage.error(e.message) }
+    const resp = await fetch(`/api/excel/export/${row.taskId}/download`, {
+      redirect: 'manual',
+      headers: { Authorization: 'Bearer ' + (localStorage.getItem('at') || '') }
+    })
+    if (resp.type === 'opaqueredirect' || resp.status === 302 || resp.status === 0) {
+      // opaqueredirect 无法取 Location——改用同步窗口打开（浏览器自动跟 302）
+      window.open(`/api/excel/export/${row.taskId}/download?token=${encodeURIComponent(localStorage.getItem('at') || '')}`, '_blank')
+    } else if (resp.ok) {
+      const blob = await resp.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = row.taskName || 'export.xlsx'
+      a.click()
+      URL.revokeObjectURL(url)
+    } else {
+      ElMessage.warning('导出未完成或已过期')
+    }
+  } catch { ElMessage.warning('获取下载地址失败') }
 }
 
 function tagType(s) {

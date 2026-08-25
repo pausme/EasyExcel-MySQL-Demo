@@ -71,10 +71,24 @@ async function doUpload() {
 }
 
 async function download(row) {
+  // 直接打开，浏览器自动跟 302 到 MinIO 签名地址（需 Token 在 cookie 或 URL 传递）
   try {
-    const resp = await http.get(`/api/files/${row.fileId}/download`, { validateStatus: () => true })
-    if (resp.status === 302 && resp.headers.location) window.open(resp.headers.location, '_blank')
-    else ElMessage.warning('获取下载地址失败')
+    const resp = await fetch(`/api/files/${row.fileId}/download`, {
+      headers: { Authorization: 'Bearer ' + (localStorage.getItem('at') || '') }
+    })
+    if (resp.ok) {
+      const blob = await resp.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = row.originalName || 'file'
+      a.click()
+      URL.revokeObjectURL(url)
+    } else if (resp.redirected) {
+      window.open(resp.url, '_blank')
+    } else {
+      ElMessage.warning('获取下载地址失败')
+    }
   } catch (e) { ElMessage.error(e.message) }
 }
 

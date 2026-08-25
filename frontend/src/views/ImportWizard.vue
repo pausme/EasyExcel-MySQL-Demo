@@ -145,17 +145,8 @@ function fileForm() {
 }
 
 async function downloadErrorFile() {
-  try {
-    const resp = await http.get('/api/excel/import/' + task.taskId + '/error-file', {
-      responseType: 'blob',
-      validateStatus: () => true
-    })
-    if (resp.status === 302 || resp.status === 200) {
-      window.open(resp.headers.location || URL.createObjectURL(resp.data), '_blank')
-    }
-  } catch (e) {
-    ElMessage.error(e.message)
-  }
+  // 直接打开 URL，浏览器自动跟 302 到 MinIO 签名地址
+  window.open('/api/excel/import/' + task.taskId + '/error-file', '_blank')
 }
 
 function reset() {

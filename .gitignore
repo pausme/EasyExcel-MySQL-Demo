@@ -1,8 +1,19 @@
 target/
 .idea/
 *.iml
+HELP.md
+.DS_Store
+docs/.DS_Store
+
+# 前端
 frontend/node_modules/
 frontend/dist/
-frontend/package-lock.json
-docs/test/live-test-results.json
+
+# 测试产物（含真实地址/Token/签名 URL）
+docs/test/live-test-results*.json
 docs/test/perf-smoke-latest.json
+docs/test/perf-baseline.json
+
+# 本地环境
+*.local
+*.env
